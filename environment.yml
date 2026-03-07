@@ -1,0 +1,11 @@
+name: paleomag
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - pip
+  - pip:
+      - PySide6>=6.8,<6.11
+      - pyserial>=3.5,<4
+      - pyinstaller>=6.0,<7
+      - pyqtgraph==0.13.3
