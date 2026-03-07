@@ -61,6 +61,10 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("RapidPy Up/Down Control")
         self.resize(1040, 700)
+        self._assets_dir = Path(__file__).resolve().parent.parent / "assets"
+        self._icon_png = self._assets_dir / "updown_icon.png"
+        if self._icon_png.exists():
+            self.setWindowIcon(QtGui.QIcon(str(self._icon_png)))
         self.motor = MotorSerialClient()
         self.axis = MotorAxisConfig(name="UpDown", motor_id=3, address=3)
         self._settings = load_settings()
