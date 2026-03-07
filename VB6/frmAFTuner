@@ -1,0 +1,3833 @@
+VERSION 5.00
+Begin VB.Form frmAFTuner 
+   Caption         =   "MCC AF Tuner"
+   ClientHeight    =   8052
+   ClientLeft      =   48
+   ClientTop       =   432
+   ClientWidth     =   9732
+   DrawMode        =   1  'Blackness
+   FillColor       =   &H00FFFFFF&
+   LinkTopic       =   "Form1"
+   ScaleHeight     =   8052
+   ScaleWidth      =   9732
+   StartUpPosition =   3  'Windows Default
+   Begin VB.Frame Frame2 
+      Caption         =   "Debug"
+      Height          =   612
+      Left            =   120
+      TabIndex        =   78
+      Top             =   1800
+      Width           =   3372
+      Begin VB.CheckBox chkVerbose 
+         Caption         =   "Verbose?"
+         Height          =   252
+         Left            =   960
+         TabIndex        =   79
+         Top             =   240
+         Width           =   1212
+      End
+   End
+   Begin VB.Frame frameMaxCoilVoltages 
+      Caption         =   "Max Coil Voltages"
+      Height          =   2172
+      Left            =   3600
+      TabIndex        =   61
+      Top             =   5760
+      Width           =   6012
+      Begin VB.Frame Frame12 
+         Appearance      =   0  'Flat
+         Caption         =   "Axial"
+         ForeColor       =   &H80000008&
+         Height          =   852
+         Left            =   240
+         TabIndex        =   69
+         Top             =   240
+         Width           =   3732
+         Begin VB.TextBox txtOldMaxAxial 
+            Height          =   288
+            Left            =   600
+            TabIndex        =   71
+            Top             =   360
+            Width           =   732
+         End
+         Begin VB.TextBox txtFitMaxAxial 
+            Height          =   288
+            Left            =   2760
+            TabIndex        =   70
+            Top             =   360
+            Width           =   732
+         End
+         Begin VB.Label Label24 
+            Caption         =   "Old:"
+            Height          =   252
+            Left            =   120
+            TabIndex        =   73
+            Top             =   360
+            Width           =   372
+         End
+         Begin VB.Label Label23 
+            Caption         =   "Current Fit:"
+            Height          =   252
+            Left            =   1800
+            TabIndex        =   72
+            Top             =   360
+            Width           =   852
+         End
+      End
+      Begin VB.Frame Frame11 
+         Appearance      =   0  'Flat
+         Caption         =   "Transverse"
+         ForeColor       =   &H80000008&
+         Height          =   852
+         Left            =   240
+         TabIndex        =   64
+         Top             =   1200
+         Width           =   3732
+         Begin VB.TextBox txtOldMaxTransverse 
+            Height          =   288
+            Left            =   600
+            TabIndex        =   66
+            Top             =   360
+            Width           =   732
+         End
+         Begin VB.TextBox txtFitMaxTransverse 
+            Height          =   288
+            Left            =   2760
+            TabIndex        =   65
+            Top             =   360
+            Width           =   732
+         End
+         Begin VB.Label Label22 
+            Caption         =   "Old:"
+            Height          =   252
+            Left            =   120
+            TabIndex        =   68
+            Top             =   360
+            Width           =   372
+         End
+         Begin VB.Label Label21 
+            Caption         =   "Current Fit:"
+            Height          =   252
+            Left            =   1800
+            TabIndex        =   67
+            Top             =   360
+            Width           =   852
+         End
+      End
+      Begin VB.CommandButton cmdSaveMaxAxial 
+         Caption         =   "Save Axial"
+         Height          =   372
+         Left            =   4200
+         TabIndex        =   63
+         Top             =   480
+         Width           =   1572
+      End
+      Begin VB.CommandButton cmdSaveMaxTransverse 
+         Caption         =   "Save Transverse"
+         Height          =   372
+         Left            =   4200
+         TabIndex        =   62
+         Top             =   1440
+         Width           =   1572
+      End
+   End
+   Begin VB.CommandButton cmdToggleTest 
+      Caption         =   "Do Clipping Test"
+      Height          =   372
+      Left            =   120
+      TabIndex        =   52
+      Top             =   1440
+      Width           =   2292
+   End
+   Begin VB.Frame Frame8 
+      Caption         =   "Ramp Comm"
+      Height          =   1812
+      Left            =   7320
+      TabIndex        =   31
+      Top             =   0
+      Width           =   2292
+      Begin VB.TextBox txtRampBoardName 
+         Height          =   288
+         Left            =   240
+         TabIndex        =   38
+         Top             =   840
+         Width           =   1812
+      End
+      Begin VB.ComboBox cmbRampChan 
+         Height          =   288
+         Left            =   1200
+         TabIndex        =   33
+         Text            =   "0"
+         Top             =   1320
+         Width           =   852
+      End
+      Begin VB.ComboBox cmbRampBoard 
+         Height          =   288
+         Left            =   1440
+         TabIndex        =   32
+         Text            =   "0"
+         Top             =   360
+         Width           =   612
+      End
+      Begin VB.Label Label13 
+         Caption         =   "Channel:"
+         Height          =   252
+         Left            =   240
+         TabIndex        =   35
+         Top             =   1320
+         Width           =   732
+      End
+      Begin VB.Label Label12 
+         Caption         =   "Board #:"
+         Height          =   252
+         Left            =   240
+         TabIndex        =   34
+         Top             =   360
+         Width           =   732
+      End
+   End
+   Begin VB.Frame frameCoilResFreq 
+      Caption         =   "Resonance Frequencies"
+      Height          =   2172
+      Left            =   3600
+      TabIndex        =   29
+      Top             =   5760
+      Width           =   6012
+      Begin VB.CommandButton cmdSaveTransverseFreq 
+         Caption         =   "Save Transverse"
+         Height          =   372
+         Left            =   4200
+         TabIndex        =   51
+         Top             =   1440
+         Width           =   1572
+      End
+      Begin VB.CommandButton cmdSaveAxialFreq 
+         Caption         =   "Save Axial"
+         Height          =   372
+         Left            =   4200
+         TabIndex        =   50
+         Top             =   480
+         Width           =   1572
+      End
+      Begin VB.Frame Frame9 
+         Appearance      =   0  'Flat
+         Caption         =   "Transverse"
+         ForeColor       =   &H80000008&
+         Height          =   852
+         Left            =   240
+         TabIndex        =   41
+         Top             =   1200
+         Width           =   3732
+         Begin VB.TextBox txtFitTransverseResFreq 
+            Height          =   288
+            Left            =   2760
+            TabIndex        =   49
+            Text            =   "Text1"
+            Top             =   360
+            Width           =   732
+         End
+         Begin VB.TextBox txtOldTransverseResFreq 
+            Height          =   288
+            Left            =   600
+            TabIndex        =   47
+            Text            =   "Text1"
+            Top             =   360
+            Width           =   732
+         End
+         Begin VB.Label Label10 
+            Caption         =   "Current Fit:"
+            Height          =   252
+            Left            =   1800
+            TabIndex        =   48
+            Top             =   360
+            Width           =   852
+         End
+         Begin VB.Label Label7 
+            Caption         =   "Old:"
+            Height          =   252
+            Left            =   120
+            TabIndex        =   46
+            Top             =   360
+            Width           =   372
+         End
+      End
+      Begin VB.Frame Frame4 
+         Appearance      =   0  'Flat
+         Caption         =   "Axial"
+         ForeColor       =   &H80000008&
+         Height          =   852
+         Left            =   240
+         TabIndex        =   40
+         Top             =   240
+         Width           =   3732
+         Begin VB.TextBox txtFitAxialResFreq 
+            Height          =   288
+            Left            =   2760
+            TabIndex        =   45
+            Text            =   "Text1"
+            Top             =   360
+            Width           =   732
+         End
+         Begin VB.TextBox txtOldAxialResFreq 
+            Height          =   288
+            Left            =   600
+            TabIndex        =   43
+            Text            =   "Text1"
+            Top             =   360
+            Width           =   732
+         End
+         Begin VB.Label Label6 
+            Caption         =   "Current Fit:"
+            Height          =   252
+            Left            =   1800
+            TabIndex        =   44
+            Top             =   360
+            Width           =   852
+         End
+         Begin VB.Label Label5 
+            Caption         =   "Old:"
+            Height          =   252
+            Left            =   120
+            TabIndex        =   42
+            Top             =   360
+            Width           =   372
+         End
+      End
+   End
+   Begin VB.Frame Frame6 
+      Caption         =   "Input Comm"
+      Height          =   1812
+      Left            =   4920
+      TabIndex        =   24
+      Top             =   0
+      Width           =   2292
+      Begin VB.TextBox txtInBoardName 
+         Height          =   288
+         Left            =   240
+         TabIndex        =   37
+         Top             =   840
+         Width           =   1812
+      End
+      Begin VB.ComboBox cmbInBoard 
+         Height          =   288
+         Left            =   1200
+         TabIndex        =   26
+         Text            =   "0"
+         Top             =   360
+         Width           =   852
+      End
+      Begin VB.ComboBox cmbInChan 
+         Height          =   288
+         Left            =   1200
+         TabIndex        =   25
+         Text            =   "0"
+         Top             =   1320
+         Width           =   852
+      End
+      Begin VB.Label Label9 
+         Caption         =   "Board:"
+         Height          =   252
+         Left            =   240
+         TabIndex        =   28
+         Top             =   360
+         Width           =   732
+      End
+      Begin VB.Label Label8 
+         Caption         =   "Channel:"
+         Height          =   252
+         Left            =   240
+         TabIndex        =   27
+         Top             =   1320
+         Width           =   732
+      End
+   End
+   Begin VB.Frame Frame5 
+      Caption         =   "Output Comm"
+      Height          =   1812
+      Left            =   2520
+      TabIndex        =   19
+      Top             =   0
+      Width           =   2292
+      Begin VB.TextBox txtOutBoardName 
+         Height          =   288
+         Left            =   240
+         TabIndex        =   36
+         Top             =   840
+         Width           =   1812
+      End
+      Begin VB.ComboBox cmbOutChan 
+         Height          =   288
+         Left            =   1200
+         TabIndex        =   21
+         Text            =   "0"
+         Top             =   1320
+         Width           =   852
+      End
+      Begin VB.ComboBox cmbOutBoard 
+         Height          =   288
+         Left            =   1200
+         TabIndex        =   20
+         Text            =   "0"
+         Top             =   360
+         Width           =   852
+      End
+      Begin VB.Label Label4 
+         Caption         =   "Channel:"
+         Height          =   252
+         Left            =   240
+         TabIndex        =   23
+         Top             =   1320
+         Width           =   732
+      End
+      Begin VB.Label Label3 
+         Caption         =   "Board:"
+         Height          =   252
+         Left            =   240
+         TabIndex        =   22
+         Top             =   360
+         Width           =   732
+      End
+   End
+   Begin VB.CommandButton cmdClose 
+      Caption         =   "Close"
+      Height          =   372
+      Left            =   120
+      TabIndex        =   15
+      Top             =   960
+      Width           =   2292
+   End
+   Begin VB.Frame frameClippingTest 
+      Caption         =   "Find Max Voltage For Coil"
+      Height          =   5412
+      Left            =   120
+      TabIndex        =   14
+      Top             =   2520
+      Width           =   3372
+      Begin VB.TextBox txtRampUpTime 
+         BackColor       =   &H8000000F&
+         Height          =   288
+         Left            =   1920
+         Locked          =   -1  'True
+         TabIndex        =   76
+         Top             =   2760
+         Width           =   1212
+      End
+      Begin VB.TextBox txtNumberRampUpPts 
+         Height          =   288
+         Left            =   1920
+         TabIndex        =   74
+         Top             =   2280
+         Width           =   1212
+      End
+      Begin VB.CommandButton cmdStartAutoClipTest 
+         BackColor       =   &H0000FF00&
+         Caption         =   "Start Clipping Auto-Test"
+         Height          =   372
+         Left            =   600
+         MaskColor       =   &H00008000&
+         TabIndex        =   59
+         Top             =   3720
+         Width           =   2172
+      End
+      Begin VB.TextBox txtMaxClipAmp 
+         Height          =   288
+         Left            =   1920
+         TabIndex        =   57
+         Top             =   1800
+         Width           =   1212
+      End
+      Begin VB.TextBox txtMinClippingAmp 
+         Height          =   288
+         Left            =   1920
+         TabIndex        =   55
+         Top             =   1320
+         Width           =   1212
+      End
+      Begin VB.TextBox txtClippingSineFreq 
+         Height          =   288
+         Left            =   1920
+         TabIndex        =   54
+         Text            =   "Text4"
+         Top             =   360
+         Width           =   1212
+      End
+      Begin VB.Label Label25 
+         Caption         =   "Ramp Up Time:"
+         Height          =   252
+         Left            =   240
+         TabIndex        =   77
+         Top             =   2760
+         Width           =   1452
+      End
+      Begin VB.Label Label18 
+         Caption         =   "# Ramp Up Points:"
+         Height          =   252
+         Left            =   240
+         TabIndex        =   75
+         Top             =   2280
+         Width           =   1572
+      End
+      Begin VB.Label Label20 
+         Caption         =   "Auto Clipping Test"
+         BeginProperty Font 
+            Name            =   "MS Sans Serif"
+            Size            =   9.6
+            Charset         =   0
+            Weight          =   400
+            Underline       =   0   'False
+            Italic          =   0   'False
+            Strikethrough   =   0   'False
+         EndProperty
+         Height          =   252
+         Left            =   720
+         TabIndex        =   60
+         Top             =   960
+         Width           =   2052
+      End
+      Begin VB.Line Line2 
+         X1              =   120
+         X2              =   3240
+         Y1              =   840
+         Y2              =   840
+      End
+      Begin VB.Line Line1 
+         X1              =   120
+         X2              =   3240
+         Y1              =   4320
+         Y2              =   4320
+      End
+      Begin VB.Label Label16 
+         Caption         =   "High Scan Voltage:"
+         Height          =   372
+         Left            =   240
+         TabIndex        =   58
+         Top             =   1800
+         Width           =   1572
+      End
+      Begin VB.Label Label15 
+         Caption         =   "Low Scan Voltage:"
+         Height          =   372
+         Left            =   240
+         TabIndex        =   56
+         Top             =   1320
+         Width           =   1812
+      End
+      Begin VB.Label Label14 
+         Caption         =   "Sine Freq (Hz):"
+         Height          =   252
+         Left            =   240
+         TabIndex        =   53
+         Top             =   360
+         Width           =   1212
+      End
+   End
+   Begin VB.PictureBox picDCResponse 
+      AutoRedraw      =   -1  'True
+      BackColor       =   &H8000000E&
+      BeginProperty DataFormat 
+         Type            =   2
+         Format          =   "0.000E+00"
+         HaveTrueFalseNull=   0
+         FirstDayOfWeek  =   0
+         FirstWeekOfYear =   0
+         LCID            =   1033
+         SubFormatType   =   9
+      EndProperty
+      FontTransparent =   0   'False
+      Height          =   3732
+      Left            =   3600
+      ScaleHeight     =   10000
+      ScaleMode       =   0  'User
+      ScaleWidth      =   14500
+      TabIndex        =   13
+      Top             =   1920
+      Width           =   6012
+   End
+   Begin VB.Frame frameAFAutoTune 
+      Caption         =   "Auto-Tuner"
+      Height          =   5412
+      Left            =   120
+      TabIndex        =   3
+      Top             =   2520
+      Width           =   3372
+      Begin VB.PictureBox picBluePixel 
+         Height          =   12
+         Left            =   2280
+         Picture         =   "frmAFTuner.frx":0000
+         ScaleHeight     =   0.027
+         ScaleMode       =   0  'User
+         ScaleWidth      =   0.027
+         TabIndex        =   39
+         Top             =   240
+         Visible         =   0   'False
+         Width           =   12
+      End
+      Begin VB.TextBox txtFreqStepSize 
+         Height          =   288
+         Left            =   1800
+         TabIndex        =   6
+         Top             =   1080
+         Width           =   972
+      End
+      Begin VB.TextBox txtAmplitude 
+         Height          =   288
+         Left            =   1800
+         TabIndex        =   10
+         Top             =   2040
+         Width           =   972
+      End
+      Begin VB.TextBox txtDuration 
+         Height          =   288
+         Left            =   1800
+         TabIndex        =   7
+         Top             =   1560
+         Width           =   972
+      End
+      Begin VB.CommandButton cmdAbortAutoTune 
+         Caption         =   "Abort Auto-Tune!!"
+         Height          =   372
+         Left            =   480
+         TabIndex        =   9
+         Top             =   4920
+         Width           =   2292
+      End
+      Begin VB.CommandButton cmdAutoTuneAF 
+         Caption         =   "Start Auto-Tune"
+         Height          =   372
+         Left            =   480
+         TabIndex        =   8
+         Top             =   4440
+         Width           =   2292
+      End
+      Begin VB.TextBox txtHighFreq 
+         Height          =   288
+         Left            =   1800
+         TabIndex        =   5
+         Top             =   600
+         Width           =   972
+      End
+      Begin VB.TextBox txtLowFreq 
+         Height          =   288
+         Left            =   240
+         TabIndex        =   4
+         Top             =   600
+         Width           =   972
+      End
+      Begin VB.Label Label11 
+         Caption         =   "Freq Step Size (Hz):"
+         Height          =   252
+         Left            =   240
+         TabIndex        =   30
+         Top             =   1080
+         Width           =   1452
+      End
+      Begin VB.Label lblStatusField 
+         BorderStyle     =   1  'Fixed Single
+         Caption         =   "Status Update:"
+         Height          =   1692
+         Left            =   240
+         TabIndex        =   18
+         Top             =   2640
+         Width           =   2892
+         WordWrap        =   -1  'True
+      End
+      Begin VB.Label lblAmplitude 
+         Caption         =   "Amplitude (0 - 10 volts):"
+         Height          =   372
+         Left            =   240
+         TabIndex        =   17
+         Top             =   2040
+         Width           =   1452
+      End
+      Begin VB.Label lblScanDuration 
+         Caption         =   "Time (ms) at each Freq Step:"
+         Height          =   492
+         Left            =   240
+         TabIndex        =   16
+         Top             =   1440
+         Width           =   1332
+      End
+      Begin VB.Label lblHighFreq 
+         Caption         =   "Highest Freq(Hz):"
+         Height          =   252
+         Left            =   1800
+         TabIndex        =   12
+         Top             =   360
+         Width           =   1332
+      End
+      Begin VB.Label lblLowFreq 
+         Caption         =   "Lowest-Freq (Hz):"
+         Height          =   252
+         Left            =   240
+         TabIndex        =   11
+         Top             =   360
+         Width           =   1332
+      End
+   End
+   Begin VB.Frame Frame1 
+      Caption         =   "Coil"
+      Height          =   852
+      Left            =   120
+      TabIndex        =   0
+      Top             =   0
+      Width           =   2292
+      Begin VB.OptionButton optCoil 
+         Caption         =   "Transverse"
+         Height          =   252
+         Index           =   1
+         Left            =   120
+         TabIndex        =   2
+         Top             =   480
+         Width           =   1212
+      End
+      Begin VB.OptionButton optCoil 
+         Caption         =   "Axial"
+         Height          =   252
+         Index           =   0
+         Left            =   120
+         TabIndex        =   1
+         Top             =   240
+         Value           =   -1  'True
+         Width           =   852
+      End
+   End
+End
+Attribute VB_Name = "frmAFTuner"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = True
+Attribute VB_Exposed = False
+Dim Real!()
+Dim Imag!()
+
+Const Pi As Double = 3.14159265358979
+
+Private Sub cmbInBoard_Click()
+
+    Dim i As Long
+
+    Dim BoardNum As Long
+
+    With cmbInBoard
+    
+        BoardNum = .ItemData(.ListIndex) + 1
+    
+    End With
+    
+    cmbInChan.Clear
+        
+    With DAQBoards.Item(BoardNum).AInChannels
+        
+        Me.txtInBoardName = DAQBoards.Item(BoardNum).BoardName
+        
+        For i = 1 To .count
+            
+            cmbInChan.AddItem .Item(i).ChanName
+            cmbInChan.ItemData(cmbInChan.NewIndex) = .Item(i).ChanNum
+                
+            If i = 1 Then
+                
+                cmbInChan.ListIndex = 0
+                    
+            End If
+                
+        Next i
+        
+    End With
+
+End Sub
+
+Private Sub cmbOutBoard_Click()
+
+    Dim i As Long
+
+    Dim BoardNum As Long
+
+    With cmbOutBoard
+    
+        BoardNum = .ItemData(.ListIndex) + 1
+    
+    End With
+    
+    cmbOutChan.Clear
+        
+    With DAQBoards.Item(BoardNum).AInChannels
+        
+        Me.txtOutBoardName = DAQBoards.Item(BoardNum).BoardName
+        
+        For i = 1 To .count
+            
+            cmbOutChan.AddItem .Item(i).ChanName
+            cmbOutChan.ItemData(cmbOutChan.NewIndex) = .Item(i).ChanNum
+                
+            If i = 1 Then
+                
+                cmbOutChan.ListIndex = 0
+                    
+            End If
+                
+        Next i
+        
+    End With
+    
+End Sub
+
+Private Sub cmbRampBoard_Click()
+
+    Dim i As Long
+
+    Dim BoardNum As Long
+
+    With cmbRampBoard
+    
+        BoardNum = .ItemData(.ListIndex) + 1
+    
+    End With
+    
+    cmbRampChan.Clear
+        
+    With DAQBoards.Item(BoardNum).AOutChannels
+        
+        Me.txtRampBoardName = DAQBoards.Item(BoardNum).BoardName
+        
+        For i = 1 To .count
+            
+            cmbRampChan.AddItem .Item(i).ChanName
+            cmbRampChan.ItemData(cmbRampChan.NewIndex) = .Item(i).ChanNum
+                
+            If i = 1 Then
+                
+                cmbRampChan.ListIndex = 0
+                    
+            End If
+                
+        Next i
+        
+    End With
+    
+End Sub
+
+Private Sub cmdAutoTuneAF_Click()
+
+    'Change lblLowFreq and lblHighFreq to non-bold and black
+    lblLowFreq.ForeColor = vbBlack
+    lblHighFreq.ForeColor = vbBlack
+    lblScanDuration.ForeColor = vbBlack
+    lblAmplitude.ForeColor = vbBlack
+    
+    'Change the Form width so that the graph plot shows
+    picDCResponse.Cls
+    frmAFTuner.Refresh
+        
+    'Clear lblStatusField caption:
+    lblStatusField.ForeColor = vbBlack
+    lblStatusField.FontBold = False
+    lblStatusField.Caption = ""
+        
+    Dim i As Long
+    Dim TempD As Double
+    Dim SignalWave As Wave
+    Dim SignalChan As Channel
+    Dim MonitorWave As Wave
+    Dim MonitorChan As Channel
+    Dim UpWave As Wave
+    Dim RampChan As Channel
+    Dim DownWave As Wave
+    
+    Set SignalWave = Nothing
+    Set MonitorWave = Nothing
+    Set SignalChan = Nothing
+    Set MonitorChan = Nothing
+    Set UpWave = Nothing
+    Set RampChan = Nothing
+    Set DownWave = Nothing
+    
+    Set SignalChan = New Channel
+    Set MonitorChan = New Channel
+    Set RampChan = New Channel
+    
+    
+    If DAQBoards Is Nothing Or WaveForms Is Nothing Then
+    
+        'DAQBoards not initialized
+        Initialize_Boards
+        
+        'For good measure, initialize wave forms also
+        Initialize_Waves
+        
+    End If
+    
+    With WaveForms
+    
+        For i = 1 To .count
+        
+            If .Item(i).WaveType = AFTUNE Then
+            
+                'Use this wave form to generate the tuning wave form
+                Set SignalWave = .Item(i)
+                
+            End If
+                
+            If .Item(i).WaveType = AFMONITOR Then
+            
+                'Use this wave form as the guide for the tuning monitor wave
+                Set MonitorWave = .Item(i)
+                
+            End If
+            
+            If .Item(i).WaveType = AFRAMPUP Then
+            
+                Set UpWave = .Item(i)
+                
+            End If
+            
+            If .Item(i).WaveType = AFRAMPDOWN Then
+            
+                Set DownWave = .Item(i)
+            
+            End If
+                
+        Next i
+        
+    End With
+    
+    With DAQBoards
+    
+        For i = 1 To .count
+        
+            If .Item(i).BoardNum = cmbOutBoard.ItemData(cmbOutBoard.ListIndex) Then
+                
+                'Use this board for the AF tuning
+                Set SignalWave.BoardUsed = .Item(i)
+                
+            
+            End If
+            
+            If .Item(i).BoardNum = cmbInBoard.ItemData(cmbInBoard.ListIndex) Then
+            
+                'Use this board for the AF tuning monitoring
+                Set MonitorWave.BoardUsed = .Item(i)
+    
+            End If
+            
+            If .Item(i).BoardNum = cmbRampBoard.ItemData(cmbRampBoard.ListIndex) Then
+            
+                'Use this board for ramping up and down each freq iteration
+                Set UpWave.BoardUsed = .Item(i)
+                Set DownWave.BoardUsed = .Item(i)
+                
+            End If
+            
+        Next i
+        
+    End With
+    
+    SignalChan.ChanName = cmbOutChan.Text
+    SignalChan.ChanNum = cmbOutChan.ItemData(cmbOutChan.ListIndex)
+    MonitorChan.ChanName = cmbInChan.Text
+    MonitorChan.ChanNum = cmbInChan.ItemData(cmbInChan.ListIndex)
+    RampChan.ChanName = cmbRampChan.Text
+    RampChan.ChanNum = cmbRampChan.ItemData(cmbRampChan.ListIndex)
+    
+    With SignalWave
+    
+        Set .Chan = SignalChan
+        .PeakVoltage = 10
+        .IORate = .BoardUsed.MaxAOutRate
+        .PtsPerPeriod = 1000
+        .SineFreq = Val(txtHighFreq.Text)
+        .MinVoltage = Val(txtLowFreq.Text) 'Overloading MinVoltage property to store minimum freq in freq sweep
+        .Duration = Val(txtDuration.Text)
+        .Range.RangeType = BIP10VOLTS
+        .IOOptions = BACKGROUND + CONTINUOUS
+        
+        'Error Check Values loaded into SignalWave
+    
+        'Make sure Max Freq > Min Freq
+        If .MinVoltage > .SineFreq Then
+        
+            'Change lblLowFreq and lblHighFreq to red
+            lblLowFreq.ForeColor = vbRed
+            lblHighFreq.ForeColor = vbRed
+            
+            'Update lblStatusField with error message:
+            lblStatusField.ForeColor = vbRed
+            lblStatusField.Caption = "Frequency Bound Error:" & vbNewLine & _
+                                    "High Freq bound is smaller than Low Freq bound!"
+                                   
+            Exit Sub
+        
+        End If
+        
+        'Make sure that amplitude is between 0 & 10 volts
+        If Not 0 <= .PeakVoltage <= 10 Then
+        
+            'Change lblAmplitude to bold and red
+            lblAmplitude.ForeColor = vbRed
+            
+            'Update lblStatusField with error message:
+            lblStatusField.ForeColor = vbRed
+            lblStatusField.Caption = "Amplitude Error:" & vbNewLine & _
+                                    "Amplitude is outside 0 - 10 volts!"
+                                   
+            Exit Sub
+               
+        End If
+        
+        'Make sure freq step size is valid
+        If FreqStepSize < 0 Or FreqStepSize > (.SineFreq - .MinVoltage) Then
+        
+            'Change lblFreqStepSize
+            lblFreqStepSize.ForeColor = vbRed
+            
+            'Update lblStatusField with error message:
+            lblStatusField.ForeColor = vbRed
+            lblStatusField.Caption = "AF Tune Setup Error:" & vbNewLine & _
+                                    "Necessary freq step size: " & Trim(Str(FreqStepSize)) & _
+                                    " Hz" & vbNewLine & _
+                                    "Is larger than the freq space to be scanned." & vbNewLine & _
+                                    "Freq space = " & Trim(Str(.SineFreq - .MinVoltage)) & " (" & _
+                                    Trim(Str(.SineFreq)) & " - " & Trim(Str(.MinVoltage)) & ")" & _
+                                    vbNewLine & _
+                                    "Please change frequency scan step size."
+                                    
+            Exit Sub
+            
+        End If
+    
+        
+        'Store the Freq Step Size from the main form into a temp variable
+        FreqStepSize = Val(txtFreqStepSize.Text)
+        
+        'Calculate the duration of the total AF tuning run based on the number
+        'of frequency iterations and the intended freq at each iteration
+        'multiplied by the number of desired periods at each iteration
+        
+    End With
+    
+    With MonitorWave
+    
+        Set .Chan = MonitorChan
+        .IORate = .BoardUsed.MaxAInRate
+        .TimeStep = 1 / .IORate
+        .PtsPerPeriod = 100
+        .NumPoints = SignalWave.Duration / 1000 * .IORate
+        .IOOptions = BACKGROUND 'Do not want the code to hang
+                                             'until the input monitor scans are done
+        
+        .Range.RangeType = BIP10VOLTS
+        
+    End With
+    
+    With UpWave
+    
+        Set .Chan = RampChan
+        .PeakVoltage = Val(txtAmplitude.Text)
+        .Range.RangeType = UNI10VOLTS
+        
+        If .PeakVoltage > .Range.MaxValue Then
+        
+            .PeakVoltage = .Range.MaxValue
+            txtAmplitude.Text = Trim(Str(.PeakVoltage))
+            Me.Refresh
+            
+        End If
+        
+        .NumPoints = 1000
+        
+    End With
+    
+    With DownWave
+    
+        Set .Chan = RampChan
+        .PeakVoltage = Val(txtAmplitude.Text)
+        .Range.RangeType = UNI10VOLTS
+        
+        If .PeakVoltage > .Range.MaxValue Then
+        
+            .PeakVoltage = .Range.MaxValue
+            txtAmplitude.Text = Trim(Str(.PeakVoltage))
+            Me.Refresh
+            
+        End If
+        
+        .NumPoints = 1000
+    
+    End With
+    
+    
+        
+    doAFTune SignalWave, MonitorWave, UpWave, DownWave, FreqStepSize
+            
+    Set SignalWave = Nothing
+    Set MonitorWave = Nothing
+    Set SignalBoard = Nothing
+    Set MonitorBoard = Nothing
+    Set SignalChan = Nothing
+    Set MonitorChan = Nothing
+
+End Sub
+
+Public Sub doAFTune(SignalWave As Wave, MonitorWave As Wave, UpWave As Wave, DownWave As Wave, Optional ByVal FreqStepSize As Double = 1)
+    
+    Dim doContinue As Boolean
+    Dim SkipLabel As Boolean
+    Dim i As Long
+    Dim j As Long
+    Dim Freq As Double
+    Dim ULStats As Long
+    Dim SineArray() As Single
+    Dim UpArray() As Single
+    Dim DownArray() As Single
+    Dim gainArray(1) As Long
+    Dim MonitorArray() As Single
+    Dim FitEst() As Single
+    Dim FitRes() As Single
+    Dim FitParams(4) As Double
+    Dim RMS As Double
+    Dim ctrXposition As Long
+    Dim XInterval As Long
+    Dim AmpInterval As Double
+    Dim FreqString As String
+    Dim LabelStrArray(2) As String
+    
+    Dim MaxAmpsAtFreq() As Double
+    Dim BiggestAmp As Double
+    Dim SmallestAmp As Double
+    Dim BestFreq As Double
+    Dim RoundingPower As Integer
+    
+    Dim CurPtsPerPeriod As Double
+    Dim CurNumPoints As Double
+    
+    Dim NumSteps As Long
+    
+    Dim Status As Integer
+    Dim CurCount As Long
+    Dim CurIndex As Long
+        
+    Dim TempTime As Double
+    
+    Dim StartFreqTime As Double
+    Dim EndFreqTime As Double
+    Dim FreqInterval As Double
+        
+    'Clear old drawing
+    picDCResponse.Cls
+    
+    'Set FitLength to the # of pts per period rounded up for the lowest frequency
+    FitLength = CInt(MonitorWave.IORate / SignalWave.MinVoltage) + 1
+    
+    'Set BiggestAmp to zero
+    BiggestAmp = 0
+    
+    'Set SmallestAmp to a relatively ginormous number
+    SmallestAmp = 1000000.4161982
+        
+    'Size Monitor array, and two Sine Fit arrays to FitLength
+    ReDim MonitorArray(FitLength)
+    ReDim FitEst(FitLength)
+    ReDim FitRes(FitLength)
+    
+    'Count the number of freq steps from Minimum Freq to Max Freq for the scan
+    NumSteps = CLng((SignalWave.SineFreq - SignalWave.MinVoltage) / FreqStepSize) + 1
+    
+    'Size Max Amplitude at ech frequency array so that it has room for NumSteps number of
+    'Freq and four columns:
+    '           Col - 0: The frequency
+    '           Col - 1: The max amplitude at that freq
+    '           Col - 2: The X graph coordinate of the leftmost side of
+    '                    the bar strip for that freq
+    '           Col - 3: The X graph coordinate of the rightmost side of
+    '                    the bar strip for that freq
+    ReDim MaxAmpsAtFreq(NumSteps, 4)
+        
+    With SignalWave
+    
+        'Set Font Size
+        picDCResponse.FontSize = 10
+           
+        'Draw The Bounds of the DC Response Voltage Display Window
+        picDCResponse.Line (1950, 1000)-(1950, 8550) 'Vertical axis
+        picDCResponse.Line (1950, 8550)-(14500, 8550) 'Horizontal axis
+        
+        'Plot the units for the Y-axis
+        picDCResponse.CurrentY = 200
+        picDCResponse.CurrentX = 1950 - picDCResponse.TextWidth("Volts") / 2
+        picDCResponse.Print "Volts"
+        
+        'Plot the label + units for the X-Axis
+        picDCResponse.CurrentY = 8700 + CLng(1.5 * picDCResponse.TextWidth("0"))
+        picDCResponse.CurrentX = 7750 - picDCResponse.TextWidth("Freq (Hz)")
+        picDCResponse.Print "Freq (Hz)"
+        
+        'Calculate the amount of width each frequency has in the X-coordinate
+        'space for plotting
+        XInterval = CLng(12000 / NumSteps)
+        
+        SkipLabel = False
+        
+        'Lower font size for Freq column labels
+        picDCResponse.FontSize = 9
+        
+        'Update Status field label
+        lblStatusField = lblStatusField & vbNewLine & _
+                        "AF Tune started...."
+                        
+        'Update Status field label
+        lblStatusField = lblStatusField & vbNewLine & _
+                        "Preparing Scan...."
+                        
+        For i = 0 To NumSteps - 1
+        
+            'calculate left and right positions
+            MaxAmpsAtFreq(i, 2) = 2250 + i * XInterval  'Left position is the first possible
+            MaxAmpsAtFreq(i, 3) = 2250 + (i + 1) * XInterval
+                
+            'Plot the X axis tick marks for this freq
+            picDCResponse.Line (MaxAmpsAtFreq(i, 2), 8550)-(MaxAmpsAtFreq(i, 2), 8750)
+            picDCResponse.Line (MaxAmpsAtFreq(i, 3), 8550)-(MaxAmpsAtFreq(i, 3), 8750)
+            
+            'Plot the label for this Freq
+            'Construct Freq String
+            FreqString = Trim(Str(CLng(.MinVoltage + _
+                                        (.SineFreq - .MinVoltage) * i / (NumSteps - 1))))
+            
+            doContinue = False
+            
+            If SkipLabel = True Then
+            
+                SkipLabel = False
+                
+            Else
+                
+                 Do
+                 
+                     'Check to see if the text Width of the Freq label is greater
+                     'than the XInterval for each Freq
+                     If picDCResponse.TextWidth(FreqString) > 0.8 * XInterval Then
+                     
+                         'Not enough vertical space, lower the font size and
+                         'repeat the label size check
+                         picDCResponse.FontSize = picDCResponse.FontSize - 1
+                         
+                         If picDCResponse.FontSize <= 7.8 Then
+                         
+                             'Skip everyother label
+                             SkipLabel = True
+                             
+                             'Plot this label
+                             picDCResponse.CurrentX = CLng(XInterval / 2 _
+                                                     - picDCResponse.TextWidth(FreqString) / 2) _
+                                                    + MaxAmpsAtFreq(i, 2)
+                             picDCResponse.CurrentY = 8700
+                             picDCResponse.Print FreqString
+                             
+                             doContinue = False
+                             
+                         Else
+                         
+                            doContinue = True
+                            
+                        End If
+                         
+                     Else
+                     
+                         'There's enough room to plot the Freq label horizontally
+                         picDCResponse.CurrentX = CLng(XInterval / 2 _
+                                                         - picDCResponse.TextWidth(FreqString) / 2) _
+                                                 + MaxAmpsAtFreq(i, 2)
+                         
+                         picDCResponse.CurrentY = 8700
+                         
+                         picDCResponse.Print FreqString
+                         
+                         doContinue = False
+                     
+                     End If
+                
+                Loop Until doContinue = False
+        
+            End If
+        
+        Next i
+        
+        frmAFTuner.Refresh
+        
+    End With
+        
+        
+'---DEBUG-------------------------------------------------------------------------------
+'---------------------------------------------------------------------------------------
+'    Dim fso As New Scripting.FileSystemObject
+'    Dim SineFile As File
+'    Dim SineStream As TextStream
+'    Dim StrDate As String
+'    Dim FileName As String
+'
+'    StrDate = Format(Now, "_MM-DD-YYYY_HH_mm_SS")
+'
+'    FileName = "C:\Documents and Settings\lab\Desktop\Test MCC Board 11-16-2009\RampArrays" & _
+'                StrDate & ".csv"
+'
+'    fso.CreateTextFile (FileName)
+'    Set SineFile = fso.GetFile(FileName)
+'    Set SineStream = SineFile.OpenAsTextStream(ForWriting)
+'
+'---------------------------------------------------------------------------------------
+'---------------------------------------------------------------------------------------
+       
+'    'Now Allocate the memory buffers for the Ramp Up
+'    With UpWave
+'
+'        'First Set Ramp channel to zero volts before output the Sine Signal
+'        ULstats = .BoardUsed.AnalogOut(.Range, _
+'                                        .Chan, _
+'                                        0)
+'
+'        'Error check
+'        If ULstats <> 0 Then
+'
+'            Err.Raise ULstats, _
+'                        "doAFTune->AnalogOut", _
+'                        "Could not zero Ramp channel prior to AF Auto Tune." & _
+'                        "Board = " & .BoardUsed.BoardName & " (" & _
+'                        Trim(Str(.BoardUsed.BoardNum)) & ")" & vbNewLine & _
+'                        "Channel = " & .Chan.ChanName & " (" & _
+'                        Trim(Str(.Chan.ChanNum)) & ")"
+'
+'            Exit Sub
+'
+'        End If
+'
+''        Debug.Print "Up.NumPoints = " & Trim(Str(.NumPoints))
+'
+'        'Redimension the RampArray so that it has .Numpoints # of elements
+'        ReDim UpArray(.NumPoints)
+'
+'        'Load the Ramp points into a singles array
+'        For i = 0 To .NumPoints - 1
+'
+'            UpArray(i) = i / (.NumPoints - 1) * .PeakVoltage
+''            Debug.Print Trim(Str(i)) & ",Up = " & Trim(Str(UpArray(i)))
+'
+'        Next i
+'
+'        'Allocate the UpWave memory buffer
+'        .MemBuffer = cbWinBufAlloc(.NumPoints)
+'
+'        If .MemBuffer <= 0 Then
+'
+'            'Raise Error, memory buffer allocation didn't work
+'            Err.Raise 666, "doAFTune", "Ramp Up Windows Memory Buffer did not allocate."
+'
+'            Exit Sub
+'
+'        End If
+'
+'        'Load RampArray into the Signal Memory Buffer
+'        ULstats = cbWinBufFromEngUnits(.BoardUsed.BoardNum, _
+'                                        gainArray(0), _
+'                                        1, _
+'                                        UpArray(0), _
+'                                        .MemBuffer, _
+'                                        0, _
+'                                        .NumPoints)
+'
+'        'error check
+'        If ULstats <> 0 Then
+'
+'            Err.Raise ULstats, _
+'                        "doAFTune->cbWinBufFromEngUnits", _
+'                        "Could not load Ramp Up to Windows Memory Buffer." & _
+'                        vbNewLine & "Board = " & .BoardUsed.BoardName & " (" & _
+'                        Trim(Str(.BoardUsed.BoardNum)) & ")"
+'
+'            Exit Sub
+'
+'        End If
+'
+'
+'
+'    End With
+'
+'    'Now Allocate the memory buffers for the Ramp Down
+'    With DownWave
+'
+''        Debug.Print "Down.NumPoints = " & Trim(Str(.NumPoints))
+'
+'        'Redimension the RampArray so that it has .Numpoints # of elements
+'        ReDim DownArray(.NumPoints)
+'
+'        'Load the Ramp points into a singles array
+'        For i = 0 To .NumPoints - 1
+'
+'            DownArray(i) = .PeakVoltage * (1 - i / (.NumPoints - 1))
+''            Debug.Print Trim(Str(i)) & ",Down = " & Trim(Str(DownArray(i)))
+'
+'        Next i
+'
+'        'Allocate the UpWave memory buffer
+'        .MemBuffer = cbWinBufAlloc(.NumPoints)
+'
+'        If .MemBuffer <= 0 Then
+'
+'            'Raise Error, memory buffer allocation didn't work
+'            Err.Raise 666, "doAFTune", "Ramp Down Windows Memory Buffer did not allocate."
+'
+'            Exit Sub
+'
+'        End If
+'
+'        'Load RampArray into the Signal Memory Buffer
+'        ULstats = cbWinBufFromEngUnits(.BoardUsed.BoardNum, _
+'                                        gainArray(0), _
+'                                        1, _
+'                                        DownArray(0), _
+'                                        .MemBuffer, _
+'                                        0, _
+'                                        .NumPoints)
+'
+'        'error check
+'        If ULstats <> 0 Then
+'
+'            Err.Raise ULstats, _
+'                        "doAFTune->cbWinBufFromEngUnits", _
+'                        "Could not load Ramp Down to Windows Memory Buffer." & _
+'                        vbNewLine & "Board = " & .BoardUsed.BoardName & " (" & _
+'                        Trim(Str(.BoardUsed.BoardNum)) & ")"
+'
+'            Exit Sub
+'
+'        End If
+'
+'        ULstats = cbWinBufToEngUnits(.BoardUsed.BoardNum, _
+'                                        gainArray(0), _
+'                                        1, _
+'                                        .MemBuffer, _
+'                                        DownArray(0), _
+'                                        0, _
+'                                        .NumPoints)
+'
+'        'error check
+'        If ULstats <> 0 Then
+'
+'            Err.Raise ULstats, _
+'                        "doAFTune->cbWinBufToEngUnits", _
+'                        "Could not load Ramp Down Windows Memory Buffer to DownArray." & _
+'                        vbNewLine & "Board = " & .BoardUsed.BoardName & " (" & _
+'                        Trim(Str(.BoardUsed.BoardNum)) & ")"
+'
+'            Exit Sub
+'
+'        End If
+'
+''-------Debug---------------------------------------------------------------------------
+''---------------------------------------------------------------------------------------
+''
+''        SineStream.WriteLine "AF Ramp Arrays"
+''        SineStream.WriteLine "Num Points = " & Trim(Str(.NumPoints))
+''        SineStream.WriteBlankLines (1)
+''        SineStream.WriteLine "Pt #,Up,Down"
+''
+''        For i = 0 To .NumPoints - 1
+''
+''            SineStream.WriteLine Trim(Str(i)) & "," & _
+''                                    Trim(Str(UpArray(i))) & "," & _
+''                                    Trim(Str(DownArray(i)))
+''
+''        Next i
+''
+''        SineStream.Close
+''---------------------------------------------------------------------------------------
+''---------------------------------------------------------------------------------------
+'
+'    End With
+            
+    frmAFTuner.Refresh
+                            
+    'Counter for the Amplitudes at Freq array
+    j = 0
+    
+    'Start Freq Iteration loop
+    For Freq = SignalWave.MinVoltage To SignalWave.SineFreq Step FreqStepSize
+    
+        MaxAmpsAtFreq(j, 1) = 0
+        MaxAmpsAtFreq(j, 0) = Freq
+        
+        'Update Status field label
+        lblStatusField = Mid(lblStatusField, _
+                                1, _
+                                InStr(1, lblStatusField, "....") + 3) & _
+                         vbNewLine & vbNewLine & "Scanning at: " & Trim(Str(Freq)) & " Hz"
+                         
+        frmAFTuner.Refresh
+                         
+        With SignalWave
+        
+            'Now need to load the Sine Wave into a windows memory buffer
+            
+            'Need to adjust PtsPerPeriod so that the freq works at the
+            'max IORate of the board
+            .PtsPerPeriod = .BoardUsed.MaxAOutRate / Freq
+            .IORate = .BoardUsed.MaxAOutRate
+            
+        End With
+        
+        'Generate Sine Wave with generateWave Function
+        frmMCC_SineWave.generateWave SignalWave
+        
+        With MonitorWave
+        
+            'Allocate Monitor Signal memory buffer
+            .MemBuffer = cbWinBufAlloc(.NumPoints * 2)
+            
+            'Error Check
+            If .MemBuffer <= 0 Then
+            
+                'Raise Error, memory buffer allocation didn't work
+                Err.Raise 666, "doAFTune", "Monitor Signal Windows Memory Buffer did not allocate."
+                
+                Exit Sub
+                
+            End If
+            
+            'Calculate the number of points per each period of the signal being
+            'inputed
+            .PtsPerPeriod = .IORate / Freq
+            
+            'Change the fit length so that it contains exactly 1 period's worth
+            'of points
+            FitLength = Int(.PtsPerPeriod) * 2 + 1
+            
+            'If the size of the SineArray (and other SineFit arrays) does not equal
+            'the fit length, then all these arrays need to be resized
+            If FitLength <> UBound(MonitorArray) Then
+            
+                ReDim MonitorArray(FitLength)
+                ReDim FitEst(FitLength)
+                ReDim FitRes(FitLength)
+            
+            End If
+            
+        End With
+        
+        'Ramp Up
+        With UpWave
+        
+            For i = 0 To .NumPoints - 1
+            
+                'Catch current time
+                TempTime = timeGetTime()
+                
+                .CurrentVoltage = .PeakVoltage * i / (.NumPoints - 1)
+                .CurrentPoint = i
+                
+                'Output current Ramp Up Point
+                .BoardUsed.AnalogOut .Range, _
+                                        .Chan, _
+                                        .CurrentVoltage
+
+                                        
+                'Wait 1 millisecond
+                PauseTill TempTime + 1
+                
+            Next i
+        
+'            .IORate = Freq * 2
+'
+'            'Start the Ramp Up Analog Out Process - this will freeze the code
+'            ULstats = cbAOutScan(.BoardUsed.BoardNum, _
+'                                    .Chan.ChanNum, _
+'                                    .Chan.ChanNum, _
+'                                    .NumPoints, _
+'                                    .IORate, _
+'                                    .Range.RangeType, _
+'                                    .MemBuffer, _
+'                                    .IOOptions)
+'
+'            'Error Check
+'            If ULstats <> 0 Then
+'
+'                Err.Raise ULstats, _
+'                            "doAFTune->cbAOutScan", _
+'                            "Ramp Up Failed." & vbNewLine & vbNewLine & _
+'                            "Board = " & .BoardUsed.BoardName & " (" & _
+'                            Trim(Str(.BoardUsed.BoardNum)) & ")" & vbNewLine & _
+'                            "Channel = " & .Chan.ChanName & " (" & _
+'                            Trim(Str(.Chan.ChanNum)) & ")" & vbNewLine & _
+'                            "Sine Freq = " & Trim(Str(Freq))
+'
+'                Exit Sub
+'
+'            End If
+'
+'            'Loop until Status is zero
+'            Do
+'
+'                ULstats = cbGetStatus(.BoardUsed.BoardNum, _
+'                                        Status, _
+'                                        CurCount, _
+'                                        CurIndex, _
+'                                        AOFUNCTION)
+'
+'                'Error Check
+'                If ULstats <> 0 Then
+'
+'                    Err.Raise ULstats, _
+'                                "doAFTune->cbGetStatus", _
+'                                "Could not get Ramp Up Status During AF Auto Tune" & _
+'                                vbNewLine & vbNewLine & _
+'                                "Board = " & .BoardUsed.BoardName & " (" & _
+'                                Trim(Str(.BoardUsed.BoardNum)) & ")" & vbNewLine & _
+'                                "Channel = " & .Chan.ChanName & " (" & _
+'                                Trim(Str(.Chan.ChanNum)) & ")" & vbNewLine & _
+'                                "Sine Freq = " & Trim(Str(Freq))
+'
+'                    Exit Sub
+'
+'                End If
+'
+'            Loop Until Status = 0
+'
+'            'Also need to end the UpWave background
+'            'analog input process
+'            ULstats = cbStopBackground(.BoardUsed.BoardNum, _
+'                                        AOFUNCTION)
+'
+'            'Error Check
+'            If ULstats <> 0 Then
+'
+'                Err.Raise ULstats, _
+'                            "doAFAutoTune->cbStopBackground", _
+'                            "Could not clear Ramp Up AO process " & _
+'                            "during AF Auto Tune." & _
+'                            vbNewLine & "Board = " & .BoardUsed.BoardName & " (" & _
+'                            Trim(Str(.BoardUsed.BoardNum)) & ")" & vbNewLine & _
+'                            "Sine Frequency = " & Trim(Str(Freq))
+'
+'                Exit Sub
+'
+'            End If
+                        
+        End With
+        
+        'Now ramped up
+        'Run status loop until monitor input scan memory buffer has been used up
+                    
+        With MonitorWave
+            
+            'Start Monitor analog input scan
+            ULStats = cbAInScan(.BoardUsed.BoardNum, _
+                                .Chan.ChanNum, _
+                                .Chan.ChanNum, _
+                                .NumPoints, _
+                                .IORate, _
+                                .Range.RangeType, _
+                                .MemBuffer, _
+                                .IOOptions)
+                                
+            'Error Check
+            If ULStats <> 0 Then
+            
+                Err.Raise ULStats, _
+                            "doAFTune->cbAInScan", _
+                            "Could not start Analog Input Scan prior to AF Tuning." & _
+                            vbNewLine & "Board = " & .BoardUsed.BoardName & " (" & _
+                            Trim(Str(.BoardUsed.BoardNum)) & ")" & vbNewLine & _
+                            "Chan = " & .Chan.ChanName & " (" & Trim(Str(.Chan.ChanNum)) & ")"
+                            
+                Exit Sub
+                
+            End If
+
+            Do
+            
+                'Get Current Point in the Monitor Signal Memory Buffer
+                ULStats = cbGetStatus(.BoardUsed.BoardNum, _
+                                        Status, _
+                                        CurCount, _
+                                        CurIndex, _
+                                        AIFUNCTION)
+                                        
+                'Error Check
+                If ULStats <> 0 Then
+                
+                    Err.Raise ULStats, _
+                            "doAFTune->cbGetStatus", _
+                            "Could not get status of Monitor memory buffer during AF Tuning." & _
+                            vbNewLine & "Board = " & .BoardUsed.BoardName & " (" & _
+                            Trim(Str(.BoardUsed.BoardNum)) & ")" & vbNewLine & _
+                            "Memory Buffer # = " & Trim(Str(.MemBuffer))
+                
+                    Exit Sub
+                    
+                End If
+                
+                'As long as the Monitor Wave analog input scan hasn't finished
+                If Status = 1 Then
+                    
+                    'Background analog input process is still going
+                    
+                    'Set Current Points of MonitorWave to CurIndex from GetStatus
+                    .CurrentPoint = CurIndex
+                
+                    'If more than the required # of points in the Monitor memory buffer
+                    If .CurrentPoint > FitLength Then
+                                   
+                        'Load Gain Array with correct range
+                        gainArray(0) = .Range.RangeType
+                    
+                        'Get the last 100 points from the Monitor Signal Windows Memory Buffer
+                        ULStats = cbWinBufToEngUnits(.BoardUsed.BoardNum, _
+                                                     gainArray(0), _
+                                                     1, _
+                                                     .MemBuffer, _
+                                                     MonitorArray(0), _
+                                                     .CurrentPoint - FitLength, _
+                                                     FitLength)
+                    
+                        'Error Check
+                        If ULStats <> 0 Then
+                        
+                            Err.Raise ULStats, _
+                                    "doAFTune->cbWinBufToEngUnits", _
+                                    "Could not get last " & Trim(Str(FitLength)) & " points " & _
+                                    "from Monitor memory buffer during AF Tuning." & _
+                                    vbNewLine & "Board = " & .BoardUsed.BoardName & " (" & _
+                                    Trim(Str(.BoardUsed.BoardNum)) & ")" & vbNewLine & _
+                                    "Memory Buffer # = " & Trim(Str(.MemBuffer)) & _
+                                    vbNewLine & "Current Index = " & Trim(Str(.CurrentPoint))
+                        
+                            Exit Sub
+                            
+                        End If
+                        
+                        'On Error, Jump Past the Sine Fit Algorithm
+                        On Error GoTo SineFitError:
+                        
+                        'Now dump MonitorArray into SineFit routine
+                        SineFit MonitorArray, _
+                                .TimeStep, _
+                                Freq, _
+                                FitParams, _
+                                FitEst, _
+                                FitRes, _
+                                RMS
+                                
+                        'Now check to see if current amplitude is greater than the max amplitude
+                        'for this Freq
+                        If FitParams(1) > MaxAmpsAtFreq(j, 1) Then MaxAmpsAtFreq(j, 1) = FitParams(1)
+                        
+                        On Error GoTo 0
+AfterSineFitError:
+                        
+                    End If
+                    
+                End If
+                    
+            Loop Until Status = 0
+            
+        'End of With MonitorWave statement
+        End With
+        
+        'Now need to ramp down
+        With DownWave
+        
+            For i = 0 To .NumPoints - 1
+            
+                'Catch current time
+                TempTime = timeGetTime()
+                
+                .CurrentPoint = i
+                .CurrentVoltage = .PeakVoltage * (1 - i / (.NumPoints - 1))
+                
+                'Output current Ramp Up Point
+                .BoardUsed.AnalogOut .Range, _
+                                        .Chan, _
+                                        .CurrentVoltage
+                                        
+                'Wait 1 millisecond
+                PauseTill TempTime + 1
+                
+            Next i
+        
+'            .IORate = Freq * 2
+'
+'            'Start the Ramp Down Analog Out Process - this will freeze the code
+'            ULstats = cbAOutScan(.BoardUsed.BoardNum, _
+'                                    .Chan.ChanNum, _
+'                                    .Chan.ChanNum, _
+'                                    .NumPoints, _
+'                                    .IORate, _
+'                                    .Range.RangeType, _
+'                                    .MemBuffer, _
+'                                    .IOOptions)
+'
+'            'Error Check
+'            If ULstats <> 0 Then
+'
+'                Err.Raise ULstats, _
+'                            "doAFTune->cbAOutScan", _
+'                            "Ramp Down Failed." & vbNewLine & vbNewLine & _
+'                            "Board = " & .BoardUsed.BoardName & " (" & _
+'                            Trim(Str(.BoardUsed.BoardNum)) & ")" & vbNewLine & _
+'                            "Channel = " & .Chan.ChanName & " (" & _
+'                            Trim(Str(.Chan.ChanNum)) & ")" & vbNewLine & _
+'                            "Sine Freq = " & Trim(Str(Freq))
+'
+'                Exit Sub
+'
+'            End If
+'
+'            'Loop until Status is zero
+'            Do
+'
+'                ULstats = cbGetStatus(.BoardUsed.BoardNum, _
+'                                        Status, _
+'                                        CurCount, _
+'                                        CurIndex, _
+'                                        AOFUNCTION)
+'
+'                'Error Check
+'                If ULstats <> 0 Then
+'
+'                    Err.Raise ULstats, _
+'                                "doAFTune->cbGetStatus", _
+'                                "Could not get Ramp Up Status During AF Auto Tune" & _
+'                                vbNewLine & vbNewLine & _
+'                                "Board = " & .BoardUsed.BoardName & " (" & _
+'                                Trim(Str(.BoardUsed.BoardNum)) & ")" & vbNewLine & _
+'                                "Channel = " & .Chan.ChanName & " (" & _
+'                                Trim(Str(.Chan.ChanNum)) & ")" & vbNewLine & _
+'                                "Sine Freq = " & Trim(Str(Freq))
+'
+'                    Exit Sub
+'
+'                End If
+'
+'            Loop Until Status = 0
+'
+'            'Also need to end the DownWave background
+'            'analog input process
+'            ULstats = cbStopBackground(.BoardUsed.BoardNum, _
+'                                        AOFUNCTION)
+'
+'            'Error Check
+'            If ULstats <> 0 Then
+'
+'                Err.Raise ULstats, _
+'                            "doAFAutoTune->cbStopBackground", _
+'                            "Could not clear Ramp Down AO process " & _
+'                            "during AF Auto Tune." & _
+'                            vbNewLine & "Board = " & .BoardUsed.BoardName & " (" & _
+'                            Trim(Str(.BoardUsed.BoardNum)) & ")" & vbNewLine & _
+'                            "Sine Frequency = " & Trim(Str(Freq))
+'
+'                Exit Sub
+'
+'            End If
+            
+        End With
+        
+        'See if the current frequencies max amplitude is the biggest amongst
+        'all the frequencies yet scanned
+        If BiggestAmp < MaxAmpsAtFreq(j, 1) Then
+        
+            'Record new biggest amplitude and the corresponding new
+            'best resonance frequency
+            BiggestAmp = MaxAmpsAtFreq(j, 1)
+            BestFreq = MaxAmpsAtFreq(j, 0)
+            
+        End If
+        
+        'Now also need to get the smallest amplitude
+        If SmallestAmp > MaxAmpsAtFreq(j, 1) Then
+        
+            'Record new smallest amplitude
+            SmallestAmp = MaxAmpsAtFreq(j, 1)
+            
+        End If
+                    
+        'Stop the Signal wave and deallocate the memory buffer
+        frmMCC_SineWave.StopWave SignalWave, True
+        
+        'Stop the Signal wave and deallocate the memory buffer
+        frmMCC_SineWave.StopWave MonitorWave, True
+        
+        'Iterate j then move on to the next frequency
+        j = j + 1
+        
+    Next Freq
+        
+    'Now need to plot the results of this tuning pass to the graph plot
+    
+    'Find range of difference between Biggest and Smallest Amplitudes
+    AmpInterval = BiggestAmp - SmallestAmp
+    
+    'Need to now find the rounding factor to use to divide Amp interval into
+    'four easy to display numbers
+    'NOTE:  If BiggestAmp < Smallest Amp, the code below will cause an error
+    '       by taking the log of a negative number!!
+    RoundingPower = Int(Log(AmpInterval / 4) / Log(10))
+    
+    'Change Rounding Power so that it is now the number of places to
+    'keep to the right of the decimal point
+    If RoundingPower > 0 Then RoundingPower = 0
+    RoundingPower = -1 * RoundingPower
+    
+    'Set plot font back to ten
+    picDCResponse.FontSize = 10
+    
+    j = 0
+    
+    'Need to scale and label the Y-axis
+    For i = 8000 To 2000 Step -1500
+    
+        picDCResponse.Line (1800, i)-(1950, i)  'Draw Vertical tick mark
+        
+        FreqString = Trim(Str(Round(SmallestAmp + j * AmpInterval / 4, RoundingPower)))
+'        Debug.Print FreqString
+        j = j + 1
+        
+        'Now run loop to see how to fit the entire freq label in
+        'the space available
+        doContinue = False
+        
+        Do
+        
+            If picDCResponse.TextWidth(FreqString) > 1700 Then
+            
+                'Cut Label into two pieces at the mid-point
+                'and now check if the two pieces will fit
+                If picDCResponse.TextWidth(FreqString) > 800 Then
+                
+                    'Lower the Font size and run the loop again
+                    picDCResponse.FontSize = picDCResponse.FontSize - 1
+                    picDCResponse.FontName = picDCResponse.FontName
+                    picDCResponse.FontSize = Int(picDCResponse.FontSize)
+                    
+                    doContinue = True
+                    
+                Else
+                
+                    'Print out the two lines centered around
+                    'the tickmark
+                    'First Piece
+                    picDCResponse.CurrentX = 500
+                    picDCResponse.CurrentY = i - picDCResponse.TextHeight(FreqString)
+                    picDCResponse.Print Mid(FreqString, 1, Len(FreqString) \ 2)
+                    
+                    'Second Piece
+                    picDCResponse.CurrentX = 500
+                    picDCResponse.CurrentY = i
+                    picDCResponse.Print Mid(FreqString, Len(FreqString) \ 2 + 1)
+                    
+                    doContinue = False
+                    
+                End If
+                
+            Else
+            
+                'Freq String for label is small enough to fit in the allotted space
+                'Plot the label
+                picDCResponse.CurrentX = 1700 - picDCResponse.TextWidth(FreqString)
+                picDCResponse.CurrentY = i - picDCResponse.TextHeight(FreqString) / 2
+                
+                picDCResponse.Print FreqString
+                
+                doContinue = False
+                
+            End If
+        
+        Loop Until doContinue = False
+        
+    Next i
+    
+         
+    'Now Draw in the columns for each Freq
+    For i = 0 To NumSteps - 1
+        
+        picDCResponse.Line _
+            (CLng(MaxAmpsAtFreq(i, 2) + 0.1 * XInterval), 8550)-( _
+                CLng(MaxAmpsAtFreq(i, 3) - 0.1 * XInterval), _
+                8000 - CLng(6000 / AmpInterval * (MaxAmpsAtFreq(i, 1) - SmallestAmp))), _
+            QBColor(1), _
+            BF
+                                                                  
+    Next i
+        
+    'Update Status label
+    lblStatusField.Caption = lblStatusField.Caption & vbNewLine & vbNewLine & _
+                                "Process Done."
+                                
+    'Based on the coil tuned, change the current fit resonance freq value
+    If optCoil(0).Value = True Then
+    
+        Me.txtFitAxialResFreq = Trim(Str(BestFreq))
+        
+    Else
+    
+        Me.txtFitTransverseResFreq = Trim(Str(BestFreq))
+        
+    End If
+                                
+                                
+    Exit Sub
+    
+SineFitError:
+
+    Resume Next
+    
+    GoTo AfterSineFitError:
+        
+End Sub
+Private Function ClipTestRampUp(ByRef UpWave As Wave, _
+                                    ByRef MonitorWave As Wave, _
+                                    ByRef RMS_array() As Double, _
+                                    Optional Verbose As Boolean = False) As Long
+
+    Dim StrIntervTime
+    Dim EndIntervTime
+    
+    Dim ULStats As Long
+    Dim i As Long
+    Dim j As Long
+    Dim k As Long
+    Dim Voltage As Double
+    
+    Dim Status As Integer
+    Dim CurCount As Long
+    Dim CurIndex As Long
+    Dim FitLength As Long
+    Dim SineArray() As Single
+    Dim Sine_est() As Single
+    Dim Sine_res() As Single
+    Dim FitParams(4) As Double
+    
+    Dim RMS As Double
+    Dim gainArray(1) As Long
+    
+    Dim time, ElapsedTime
+    
+    'Set the number of points from the monitor input buffer
+    'to be fit using the SineFit sub-routine
+    FitLength = CLng(5 * MonitorWave.IORate / MonitorWave.SineFreq)
+    
+    'Redimension the necessary arrays for the Sine Fit process
+    ReDim SineArray(FitLength)
+    ReDim Sine_est(FitLength)
+    ReDim Sine_res(FitLength)
+      
+    'If user has selected for aspects of the ramp up to be recorded to file,
+    'create and open the necessary .csv file
+    If Verbose Then
+    
+        Dim fso As New Scripting.FileSystemObject
+        Dim SineFile As File
+        Dim SineStream As TextStream
+        Dim StrDate As String
+        Dim FileName As String
+    
+        StrDate = Format(Now, "_MM-DD-YYYY_HH_mm_SS")
+    
+        FileName = "C:\Documents and Settings\lab\Desktop\Test MCC Board 11-16-2009\ClipRampUp" & _
+                    StrDate & ".csv"
+    
+        fso.CreateTextFile (FileName)
+        Set SineFile = fso.GetFile(FileName)
+        Set SineStream = SineFile.OpenAsTextStream(ForWriting)
+    
+        SineStream.WriteLine "AF Ramp Up"
+        SineStream.WriteLine "Fit Length = " & Trim(Str(FitLength))
+        SineStream.WriteLine "Est Freq = " & Trim(Str(MonitorWave.SineFreq))
+        SineStream.WriteLine "Time Step = " & Trim(Str(MonitorWave.TimeStep))
+        SineStream.WriteBlankLines (1)
+        SineStream.WriteLine "Start Pt,Y-offset,Amplitude,Freq,Phase,RMS"
+    
+    End If
+    
+    'Allocate MonitorWave memory buffer
+    With MonitorWave
+    
+        .MemBuffer = cbWinBufAlloc(.NumPoints)
+        
+        If .MemBuffer = 0 Then
+        
+            Err.Raise 666, _
+                        "ClipTestRampUp->cbWinBufAlloc", _
+                        "Could Not Allocate Windows Memory buffer for the Monitor Clip Test" & _
+                        " analog input memory buffer."
+                        
+            ClipTestRampUp = 666
+            
+            Exit Function
+            
+        End If
+        
+ '       Debug.Print .MemBuffer
+        
+    End With
+                        
+    'Initial Ramp-up to Min-Voltage
+    With UpWave
+        
+        'Initialize i = 0
+        i = 0
+        
+        'Ramp up to Low Scan Voltage (UpWave.MinVoltage)
+        'prior to switching on monitoring process
+        For Voltage = 0 To UpWave.MinVoltage Step 0.002
+        
+            StrIntervTime = timeGetTime()
+        
+            'Output Voltage through UpWave board & chan
+            .BoardUsed.AnalogOut .Range, _
+                                    .Chan, _
+                                    Voltage
+                                    
+            
+            'Store current UpWave output voltage
+            UpWave.CurrentVoltage = Voltage
+                
+            'Store Current point of Ramp Up
+            UpWave.CurrentPoint = i
+                
+            'iterate i
+            i = i + 1
+                
+            'Wait 1 millisec before next ramp up increment
+            PauseTill StrIntervTime + 1
+            
+        Next Voltage
+    
+    End With
+    
+    
+    'Start monitoring the LC circuit feedback voltage
+    With MonitorWave
+    
+    
+        'Initialize Gain Array for Monitor Wave
+        gainArray(0) = .Range.RangeType
+        
+        'Start the monitor wave background analog input process
+        ULStats = cbAInScan(.BoardUsed.BoardNum, _
+                            .Chan.ChanNum, _
+                            .Chan.ChanNum, _
+                            .NumPoints, _
+                            .IORate, _
+                            .Range.RangeType, _
+                            .MemBuffer, _
+                            .IOOptions)
+        
+        'Error check
+        If ULStats <> 0 Then
+            
+        '-------Debug Code Only------------------
+                MsgBox "Could not start the monitor analog input signal background process on" & _
+                        vbNewLine & "Board: " & MonitorWave.BoardUsed.BoardName & " (" & _
+                        Trim(Str(MonitorWave.BoardUsed.BoardNum)) & ")" & _
+                        vbNewLine & vbNewLine & "Err: " & Trim(Str(ULStats)), _
+                        vbCritical, _
+                        "Monitor Wave Error"
+        '----------------------------------------
+        
+            ClipTestRampUp = ULStats
+            
+            Exit Function
+            
+        End If
+        
+    End With
+    
+    
+    'Now Ramp up from Low Scan Voltage to High Scan Voltage
+    For j = 0 To UpWave.NumPoints - 1
+        
+        'Set the start time for this interval
+            StrIntervTime = timeGetTime()
+        
+        With UpWave
+        
+            'Calculate ramp voltage to send out through the DAQ board
+            .CurrentVoltage = .MinVoltage _
+                                + (.PeakVoltage - .MinVoltage) * j / (.NumPoints - 1)
+               
+            'Store current point
+            .CurrentPoint = i
+            
+            'Iterate i
+            i = i + 1
+            
+            'Debug.Print Trim(Str(.CurrentPoint)) & ", " & Trim(Str(.CurrentVoltage)) & " Volts"
+                    
+            
+            'Set the end time for this interval
+            EndIntervTime = StrIntervTime + UpWave.TimeStep * 1000
+                        
+            'Output the DAQ Board counts
+            .BoardUsed.AnalogOut .Range, _
+                                    .Chan, _
+                                    .CurrentVoltage
+            
+         
+        End With
+'-----------------------------------------------------------------------------------------------
+'       Monitor RMS of the sine fit versus the input monitor signal
+'-----------------------------------------------------------------------------------------------
+        
+        time = timeGetTime()
+        
+        With MonitorWave
+        
+            'Need certain # of points from the Monitor memory buffer, going to try and get
+            'them without checking if there are enough.
+            ULStats = cbGetStatus(.BoardUsed.BoardNum, _
+                                    Status, _
+                                    CurCount, _
+                                    CurIndex, _
+                                    AIFUNCTION)
+                                
+            'Error Check
+            If ULStats <> 0 Then
+            
+                'Error Msg
+                MsgBox "Could not get status of Monitor Analog input memory buffer." & _
+                        vbNewLine & "Mem Buffer = " & Trim(Str(.MemBuffer)) & _
+                        vbNewLine & "Board = " * .BoardUsed.BoardName & "(" & _
+                        Trim(Str(.BoardUsed.BoardNum)) & ")", , _
+                        "Unknown Ramp Status"
+                        
+                ClipTestRampUp = 666
+                        
+                Exit Function
+                
+            End If
+            
+            .CurrentPoint = CurIndex
+           
+            If .CurrentPoint > FitLength Then
+            
+                'Memory Buffer has at least 100 points in it, can get those points
+                'and dump them into SineArray()
+                ULStats = cbWinBufToEngUnits(.BoardUsed.BoardNum, _
+                                            gainArray(0), _
+                                            1, _
+                                            .MemBuffer, _
+                                            SineArray(0), _
+                                            .CurrentPoint - FitLength, _
+                                            FitLength) ' * 2)
+                                            
+                
+                'Error Check
+                If ULStats <> 0 Then
+                
+                    'Error Msg
+                    MsgBox "Could not get points from Monitor Analog input memory buffer " & _
+                            "for the sine fit." & _
+                            vbNewLine & "Mem Buffer = " & Trim(Str(.MemBuffer)) & _
+                            vbNewLine & "Board = " * .BoardUsed.BoardName & "(" & _
+                            Trim(Str(.BoardUsed.BoardNum)) & ")", , _
+                            "Failed Memory Read"
+                                            
+                    ClipTestRampUp = 666
+                            
+                    Exit Function
+                            
+                End If
+                
+                                            
+                'Error trapping
+                On Error GoTo SineFitError:
+                
+                'Set Time Step
+                MonitorWave.TimeStep = 1 / (.IORate)
+                
+                If Verbose Then
+
+                    SineStream.WriteBlankLines (1)
+                    SineStream.WriteLine "From: " & Trim(Str(CurIndex - FitLength))
+                    SineStream.WriteLine "To: " & Trim(Str(CurIndex))
+
+                    For k = 0 To FitLength - 1
+
+                        SineStream.WriteLine Trim(Str(k)) & "," & Trim(Str(SineArray(k)))
+
+                    Next k
+
+                    SineStream.WriteBlankLines (1)
+
+                End If
+
+                   
+                'Now have 5 periods worth of points, can dump them into the Sine Fit program
+                SineFit SineArray(), _
+                        .TimeStep, _
+                        .SineFreq, _
+                        FitParams(), _
+                        Sine_est(), _
+                        Sine_res(), _
+                        RMS
+                        'SineStream
+                
+                On Error GoTo 0
+                
+                'If Verbose setting is true, record the fit parameters to file
+                If Verbose Then
+
+                    SineStream.WriteLine Trim(Str(.CurrentPoint - FitLength)) & "," & _
+                                        Trim(Str(FitParams(0))) & "," & _
+                                        Trim(Str(FitParams(1))) & "," & _
+                                        Trim(Str(FitParams(2))) & "," & _
+                                        Trim(Str(FitParams(3))) & "," & _
+                                        Trim(Str(RMS))
+                                                        
+                End If
+                
+            End If
+        
+        End With
+        
+        ElapsedTime = timeGetTime() - time
+  '      Debug.Print ElapsedTime
+                
+        'Store the amplitude and RMS value to the RMS Array
+        RMS_array(j, 0) = FitParams(1)
+        RMS_array(j, 1) = RMS
+        
+'        Debug.Print "No Error"
+        
+AfterSineFitError:
+           
+'        Debug.Print j
+           
+        'Pause until the end of the interval time between points
+        PauseTill EndIntervTime
+        
+    Next j
+    
+    'We've gone all the way through the RampUp loop
+    'We're done!
+    
+    'If Verbose is true, then need to close the output file now
+    If Verbose Then
+    
+        SineStream.Close
+        
+    End If
+        
+    
+    ClipTestRampUp = 0
+    
+    Exit Function
+
+SineFitError:
+
+    'Return program flow to normal
+    Resume Next
+
+    'If Sine Fit algorithm crashes, set RMS value to -10
+    'this will cause a noticable blip in the final plot
+    RMS_array(j) = -10
+
+    GoTo AfterSineFitError:
+
+End Function
+Private Function ClipTestRampDown(ByRef DownWave As Wave, _
+                                    ByRef MonitorWave As Wave, _
+                                    ByRef RMS_array() As Double, _
+                                    Optional Verbose As Boolean = False) As Long
+
+    Dim StrIntervTime
+    Dim EndIntervTime
+    
+    Dim ULStats As Long
+    Dim i As Long
+    Dim j As Long
+    Dim k As Long
+    Dim Voltage As Double
+    
+    Dim Status As Integer
+    Dim CurCount As Long
+    Dim CurIndex As Long
+    Dim FitLength As Long
+    Dim SineArray() As Single
+    Dim Sine_est() As Single
+    Dim Sine_res() As Single
+    Dim FitParams(4) As Double
+    
+    Dim RMS As Double
+    Dim gainArray(1) As Long
+    
+    Dim time, ElapsedTime
+    
+    'Set the number of points from the monitor input buffer
+    'to be fit using the SineFit sub-routine
+    FitLength = CLng(5 * MonitorWave.IORate / MonitorWave.SineFreq)
+    
+    'Redimension the necessary arrays for the Sine Fit process
+    ReDim SineArray(FitLength)
+    ReDim Sine_est(FitLength)
+    ReDim Sine_res(FitLength)
+      
+    'If user has selected for aspects of the ramp up to be recorded to file,
+    'create and open the necessary .csv file
+    If Verbose Then
+    
+        Dim fso As New Scripting.FileSystemObject
+        Dim SineFile As File
+        Dim SineStream As TextStream
+        Dim StrDate As String
+        Dim FileName As String
+    
+        StrDate = Format(Now, "_MM-DD-YYYY_HH_mm_SS")
+    
+        FileName = "C:\Documents and Settings\lab\Desktop\Test MCC Board 11-16-2009\ClipRampDown" & _
+                    StrDate & ".csv"
+    
+        fso.CreateTextFile (FileName)
+        Set SineFile = fso.GetFile(FileName)
+        Set SineStream = SineFile.OpenAsTextStream(ForWriting)
+    
+        SineStream.WriteLine "AF Ramp Up"
+        SineStream.WriteLine "Fit Length = " & Trim(Str(FitLength))
+        SineStream.WriteBlankLines (1)
+        SineStream.WriteLine "Start Pt,Y-offset,Amplitude,Freq,Phase,RMS"
+    
+    End If
+    
+    'Ramp Down from High Scan Voltage to Low Scan Voltage
+    'Note - this loop is running backwards, j is decreasing
+    'This enables a degree of sublime laziness in comparing
+    'the RMS values between the up and down ramps
+    'and enables me not to have to change most of the code
+    For j = DownWave.NumPoints - 1 To 0 Step -1
+        
+        With DownWave
+        
+            'Calculate ramp voltage to send out through the DAQ board
+            .CurrentVoltage = .MinVoltage _
+                                + (.PeakVoltage - .MinVoltage) * j / (.NumPoints - 1)
+               
+            'Store current point
+            .CurrentPoint = i
+            
+            'Iterate i
+            i = i + 1
+            
+            'Debug.Print Trim(Str(.CurrentPoint)) & ", " & Trim(Str(.CurrentVoltage)) & " Volts"
+                    
+            'Set the start time for this interval
+            StrIntervTime = timeGetTime()
+            
+            'Set the end time for this interval
+            EndIntervTime = StrIntervTime + DownWave.TimeStep * 1000
+            
+            'Output the DAQ Board counts
+            .BoardUsed.AnalogOut .Range, _
+                                    .Chan, _
+                                    .CurrentVoltage
+            
+         
+        End With
+'-----------------------------------------------------------------------------------------------
+'       Monitor RMS of the sine fit versus the input monitor signal
+'-----------------------------------------------------------------------------------------------
+        
+        time = timeGetTime()
+        
+        With MonitorWave
+        
+            'Need certain # of points from the Monitor memory buffer, going to try and get
+            'them without checking if there are enough.
+            ULStats = cbGetStatus(.BoardUsed.BoardNum, _
+                                    Status, _
+                                    CurCount, _
+                                    CurIndex, _
+                                    AIFUNCTION)
+                                
+            'Error Check
+            If ULStats <> 0 Then
+            
+                'Error Msg
+                MsgBox "Could not get status of Monitor Analog input memory buffer." & _
+                        vbNewLine & "Mem Buffer = " & Trim(Str(.MemBuffer)) & _
+                        vbNewLine & "Board = " * .BoardUsed.BoardName & "(" & _
+                        Trim(Str(.BoardUsed.BoardNum)) & ")", , _
+                        "Unknown Ramp Status"
+                        
+                ClipTestRampDown = 666
+                        
+                Exit Function
+                
+            End If
+            
+            .CurrentPoint = CurIndex
+            
+            If .CurrentPoint > FitLength Then
+            
+                gainArray(0) = .Range.RangeType
+            
+                'Memory Buffer has at least 100 points in it, can get those points
+                'and dump them into SineArray()
+                ULStats = cbWinBufToEngUnits(.BoardUsed.BoardNum, _
+                                            gainArray(0), _
+                                            1, _
+                                            .MemBuffer, _
+                                            SineArray(0), _
+                                            .CurrentPoint - FitLength, _
+                                            FitLength) ' * 2)
+                                            
+                
+                'Error Check
+                If ULStats <> 0 Then
+                
+                    'Error Msg
+                    MsgBox "Could not get points from Monitor Analog input memory buffer " & _
+                            "for the sine fit." & _
+                            vbNewLine & "Mem Buffer = " & Trim(Str(.MemBuffer)) & _
+                            vbNewLine & "Board = " * .BoardUsed.BoardName & "(" & _
+                            Trim(Str(.BoardUsed.BoardNum)) & ")", , _
+                            "Failed Memory Read"
+                                            
+                    ClipTestRampDown = 666
+                            
+                    Exit Function
+                            
+                End If
+                
+                                            
+                'Error trapping
+                On Error GoTo SineFitError:
+                
+                'Set Time Step
+                MonitorWave.TimeStep = 1 / (.IORate)
+                
+'                If Verbose Then
+'
+'                    SineStream.WriteBlankLines (1)
+'                    SineStream.WriteLine "From: " & Trim(Str(CurIndex - FitLength))
+'                    SineStream.WriteLine "To: " & Trim(Str(CurIndex))
+'                    SineStream.WriteLine "Time Step = " & Trim(Str(TimeStep))
+'                    SineStream.WriteLine "Est Freq = " & Trim(Str(EstFreq))
+'
+'                    For k = 0 To FitLength - 1
+'
+'                        SineStream.WriteLine Trim(Str(k)) & "," & Trim(Str(SineArray(k)))
+'
+'                    Next k
+'
+'                    SineStream.WriteBlankLines (1)
+'                    SineStream.WriteLine "Start Pt,Y-offset,Amplitude,Freq,Phase"
+'
+'                End If
+                   
+                'Now have 100 points, can dump them into the Sine Fit program
+                SineFit SineArray(), _
+                        .TimeStep, _
+                        .SineFreq, _
+                        FitParams(), _
+                        Sine_est(), _
+                        Sine_res(), _
+                        RMS
+                        'SineStream
+                
+                On Error GoTo 0
+                
+                'If Verbose setting is true, record the fit parameters to file
+                If Verbose Then
+
+                    SineStream.WriteLine Trim(Str(.CurrentPoint - FitLength)) & "," & _
+                                        Trim(Str(FitParams(0))) & "," & _
+                                        Trim(Str(FitParams(1))) & "," & _
+                                        Trim(Str(FitParams(2))) & "," & _
+                                        Trim(Str(FitParams(3))) & "," & _
+                                        Trim(Str(RMS))
+                                                        
+                End If
+                
+            End If
+        
+        End With
+        
+        ElapsedTime = timeGetTime() - time
+  '      Debug.Print ElapsedTime
+           
+AfterSineFitError:
+           
+        'Now Compare the RMS values for this point between the Ramp Up
+        'and Ramp Down processes.  The current voltage at this j during the Ramp Down
+        'should be the same voltage as that at this value of j during the Ramp up
+        
+        'If the RMS value from the Ramp Up is -10
+        'the Ramp down RMS is NOT -10, then keep only the good Ramp Down value
+        If RMS_array(j, 1) = -10 And RMS <> -10 Then
+            
+            'Store just this RMS value and this amplitude
+            RMS_array(j, 0) = FitParams(1)
+            RMS_array(j, 1) = RMS
+            
+        ElseIf RMS_array(j, 1) = -10 And RMS = -10 Then
+        
+            'Both RMS values are crap - at both points sinefit failed
+            'Write -10 value to this element of the array.
+            'Write -10 as the amplitude as well so that this point will
+            'be ignored
+            RMS_array(j, 1) = -10
+            RMS_array(j, 0) = -10
+            
+        Else
+        
+            'Both RMS values are good, average them together
+            RMS_array(j, 1) = (RMS_array(j, 1) + RMS) / 2
+            RMS_array(j, 0) = (RMS_array(j, 0) + FitParams(1)) / 2
+            
+            
+        End If
+        
+        'Pause until the end of the interval time between points
+        PauseTill EndIntervTime
+        
+    Next j
+    
+    'We've gone all the way through the RampUp loop
+    'We're done!
+    
+    'If Verbose is true, then need to close the output file now
+    If Verbose Then
+    
+        SineStream.Close
+        
+    End If
+        
+        
+    With DownWave
+                
+        'Ramp Dowm from Low Scan Voltage (DownWave.MinVoltage)
+        'prior to end the auto clip test process
+        For Voltage = DownWave.MinVoltage To 0 Step -0.002
+        
+            StrIntervTime = timeGetTime()
+        
+            'Output Voltage through UpWave board & chan
+            .BoardUsed.AnalogOut .Range, _
+                                    .Chan, _
+                                    Voltage
+                                    
+            
+            'Store current UpWave output voltage
+            DownWave.CurrentVoltage = Voltage
+                
+            'Store Current point of Ramp Up
+            DownWave.CurrentPoint = i
+                
+            'iterate i
+            i = i + 1
+                
+            'Wait 1 millisec before next ramp up increment
+            PauseTill StrIntervTime + 1
+            
+        Next Voltage
+    
+    End With
+    
+    ClipTestRampDown = 0
+    
+    Exit Function
+
+SineFitError:
+
+    'Return program flow to normal
+    Resume Next
+
+    'If Sine Fit algorithm crashes, set RMS value to -10
+    'this will cause a noticable blip in the final plot
+    RMS = -10
+
+    GoTo AfterSineFitError:
+
+End Function
+
+Private Sub PlotAutoClipTestResults(ByRef RMS_array() As Double, _
+                                    ByVal StartVoltage As Double, _
+                                    ByVal HighVoltage As Double, _
+                                    ByVal TimeStep As Double, _
+                                    ByVal NumPoints As Double)
+                                    
+    Dim i As Long
+    Dim j As Long
+    Dim MaxRMS As Double
+    Dim MinRMS As Double
+    Dim MaxAmp As Double
+    Dim MinAmp As Double
+    Dim AmpInterval As Double
+    Dim RMSInterval As Double
+    Dim VoltRange As Double
+    Dim RoundingPower As Long
+    Dim LabelString As String
+    Dim doContinue As Boolean
+    Dim SkipLabel As Boolean
+    Dim CurX As Long
+    Dim CurY As Long
+    Dim PrevX As Long
+    Dim PrevY As Long
+                                    
+    'Draw in Axes and Unit Labels
+                                
+    'Set Font Size
+    picDCResponse.FontSize = 10
+    
+    'Clear Picture Box
+    picDCResponse.Cls
+       
+    'Draw The Bounds of the DC Response Voltage Display Window
+    picDCResponse.Line (1950, 1000)-(1950, 8000) 'Vertical axis - RMS
+    picDCResponse.Line (13000, 1000)-(13000, 8000) 'Vertical axis - Monitor Voltage
+    picDCResponse.Line (1950, 8000)-(13000, 8000) 'Horizontal axis
+    
+    'Plot the units for the Y-axis
+    picDCResponse.CurrentY = 200
+    picDCResponse.CurrentX = 1950 - picDCResponse.TextWidth("RMS") / 2
+    picDCResponse.Print "RMS"
+    
+    'Plot the units for the Y-axis
+    picDCResponse.CurrentY = 200
+    picDCResponse.CurrentX = 13000 - picDCResponse.TextWidth("Monitor") / 2
+    picDCResponse.Print "Monitor"
+    picDCResponse.CurrentY = 200 + 0.8 * picDCResponse.TextHeight("Monitor")
+    picDCResponse.CurrentX = 13000 - picDCResponse.TextWidth("Voltage") / 2
+    picDCResponse.Print "Voltage"
+            
+    'Plot the label + units for the X-Axis
+    picDCResponse.CurrentY = 8700 + CLng(1.5 * picDCResponse.TextWidth("0"))
+    picDCResponse.CurrentX = 7750 - picDCResponse.TextWidth("Ramp Output Voltage")
+    picDCResponse.Print "Ramp Output Voltage"
+    
+    'Initialize max and min RMS holder variables
+    MaxRMS = RMS_array(0, 1)
+    MinRMS = RMS_array(0, 1)
+    MaxAmp = RMS_array(0, 0)
+    MinAmp = RMS_array(0, 0)
+    
+    'Need to find Max and Min RMS now
+    For i = 0 To NumPoints - 1
+    
+        If MaxRMS < RMS_array(i, 1) Then MaxRMS = RMS_array(i, 1)
+        If MinRMS > RMS_array(i, 1) And RMS_array(i, 1) > 0 Then MinRMS = RMS_array(i, 1)
+    
+        If MaxAmp < RMS_array(i, 0) Then MaxAmp = RMS_array(i, 0)
+        If MinAmp > RMS_array(i, 0) And RMS_array(i, 0) > 0 Then MinAmp = RMS_array(i, 0)
+    
+    Next i
+        
+    'Now can scale and label the y-axis for RMS
+    'Find range of difference between Biggest and Smallest Amplitudes
+    RMSInterval = MaxRMS - MinRMS
+    
+    'Need to now find the rounding factor to use to divide Amp interval into
+    'four easy to display numbers
+    'NOTE:  If BiggestAmp < Smallest Amp, the code below will cause an error
+    '       by taking the log of a negative number!!
+    RoundingPower = Int(Log(RMSInterval / 4) / Log(10))
+    
+    'Change Rounding Power so that it is now the number of places to
+    'keep to the right of the decimal point
+    If RoundingPower > 0 Then RoundingPower = 0
+    RoundingPower = -1 * RoundingPower
+    
+    'Initialize j to zero
+    j = 0
+    
+    'Need to scale and label the Y-axis
+    For i = 8000 To 2000 Step -1500
+    
+        picDCResponse.Line (1800, i)-(1950, i)  'Draw Vertical tick mark
+        
+        LabelString = Trim(Str(Round(MinRMS + j * RMSInterval / 4, RoundingPower)))
+'        Debug.Print LabelString
+        j = j + 1
+        
+        'Now run loop to see how to fit the entire freq label in
+        'the space available
+        doContinue = False
+        
+        Do
+        
+            If picDCResponse.TextWidth(LabelString) > 1700 Then
+            
+                'Cut Label into two pieces at the mid-point
+                'and now check if the two pieces will fit
+                If picDCResponse.TextWidth(LabelString) > 800 Then
+                
+                    'Lower the Font size and run the loop again
+                    picDCResponse.FontSize = picDCResponse.FontSize - 1
+                    picDCResponse.FontName = picDCResponse.FontName
+                    picDCResponse.FontSize = Int(picDCResponse.FontSize)
+                    
+                    doContinue = True
+                    
+                Else
+                
+                    'Print out the two lines centered around
+                    'the tickmark
+                    'First Piece
+                    picDCResponse.CurrentX = 500
+                    picDCResponse.CurrentY = i - picDCResponse.TextHeight(LabelString)
+                    picDCResponse.Print Mid(LabelString, 1, Len(LabelString) \ 2)
+                    
+                    'Second Piece
+                    picDCResponse.CurrentX = 500
+                    picDCResponse.CurrentY = i
+                    picDCResponse.Print Mid(LabelString, Len(LabelString) \ 2 + 1)
+                    
+                    doContinue = False
+                    
+                End If
+                
+            Else
+            
+                'Freq String for label is small enough to fit in the allotted space
+                'Plot the label
+                picDCResponse.CurrentX = 1700 - picDCResponse.TextWidth(LabelString)
+                picDCResponse.CurrentY = i - picDCResponse.TextHeight(LabelString) / 2
+                
+                picDCResponse.Print LabelString
+                
+                doContinue = False
+                
+            End If
+        
+        Loop Until doContinue = False
+        
+    Next i
+    
+    
+    'Now can scale and label the y-axis for Monitor Voltage
+    'Find range of difference between Biggest and Smallest Amplitudes
+    'Debug.Print MaxAmp
+    AmpInterval = MaxAmp - MinAmp
+    
+    'Need to now find the rounding factor to use to divide Amp interval into
+    'four easy to display numbers
+    'NOTE:  If BiggestAmp < Smallest Amp, the code below will cause an error
+    '       by taking the log of a negative number!!
+    RoundingPower = Int(Log(AmpInterval / 4) / Log(10))
+    
+    'Change Rounding Power so that it is now the number of places to
+    'keep to the right of the decimal point
+    If RoundingPower > 0 Then RoundingPower = 0
+    RoundingPower = -1 * RoundingPower
+    
+    'Initialize j to zero
+    j = 0
+    
+    'Need to scale and label the Y-axis
+    For i = 8000 To 2000 Step -1500
+    
+        picDCResponse.Line (13000, i)-(13150, i)  'Draw Vertical tick mark
+        
+        LabelString = Trim(Str(Round(MinAmp + j * AmpInterval / 4, RoundingPower)))
+'        Debug.Print LabelString
+        j = j + 1
+        
+        'Now run loop to see how to fit the entire freq label in
+        'the space available
+        doContinue = False
+        
+        Do
+        
+            If picDCResponse.TextWidth(LabelString) > 1700 Then
+            
+                'Cut Label into two pieces at the mid-point
+                'and now check if the two pieces will fit
+                If picDCResponse.TextWidth(LabelString) > 800 Then
+                
+                    'Lower the Font size and run the loop again
+                    picDCResponse.FontSize = picDCResponse.FontSize - 1
+                    picDCResponse.FontName = picDCResponse.FontName
+                    picDCResponse.FontSize = Int(picDCResponse.FontSize)
+                    
+                    doContinue = True
+                    
+                Else
+                
+                    'Print out the two lines centered around
+                    'the tickmark
+                    'First Piece
+                    picDCResponse.CurrentX = 13200
+                    picDCResponse.CurrentY = i - picDCResponse.TextHeight(LabelString)
+                    picDCResponse.Print Mid(LabelString, 1, Len(LabelString) \ 2)
+                    
+                    'Second Piece
+                    picDCResponse.CurrentX = 13200
+                    picDCResponse.CurrentY = i
+                    picDCResponse.Print Mid(LabelString, Len(LabelString) \ 2 + 1)
+                    
+                    doContinue = False
+                    
+                End If
+                
+            Else
+            
+                'Freq String for label is small enough to fit in the allotted space
+                'Plot the label
+                picDCResponse.CurrentX = 13200
+                picDCResponse.CurrentY = i - picDCResponse.TextHeight(LabelString) / 2
+                
+                picDCResponse.Print LabelString
+                
+                doContinue = False
+                
+            End If
+        
+        Loop Until doContinue = False
+        
+    Next i
+    
+    'Now Plot X-axis labels and tick marks
+    
+    'Figure out the range of voltages that were swept through
+    VoltRange = HighVoltage - StartVoltage
+    
+    'Need to now find the rounding factor to use to divide Amp interval into
+    'four easy to display numbers
+    'NOTE:  If BiggestAmp < Smallest Amp, the code below will cause an error
+    '       by taking the log of a negative number!!
+    RoundingPower = Int(Log(VoltRange / 10) / Log(10))
+    
+    'Change Rounding Power so that it is now the number of places to
+    'keep to the right of the decimal point
+    If RoundingPower > 0 Then RoundingPower = 0
+    RoundingPower = -1 * RoundingPower
+    
+    'Initialize j to zero
+    j = 0
+    
+    'Initialize font to size 9
+    picDCResponse.FontSize = 9
+    
+    For i = 1950 To 13000 Step 1105
+    
+        picDCResponse.Line (i, 8000)-(i, 8200)  'Draw Vertical tick mark
+        
+        LabelString = Trim(Str(Round(StartVoltage + j * VoltRange / 10, RoundingPower)))
+'       Debug.Print LabelString
+        j = j + 1
+        
+        doContinue = False
+        
+        If SkipLabel = True Then
+        
+            SkipLabel = False
+            
+        Else
+            
+            Do
+             
+                'Check to see if the text Width of the Freq label is greater
+                'than the XInterval for each Freq
+                If picDCResponse.TextWidth(LabelString) > 0.8 * 1225 Then
+                 
+                    'Not enough vertical space, lower the font size and
+                    'repeat the label size check
+                    picDCResponse.FontSize = picDCResponse.FontSize - 1
+                     
+                    If picDCResponse.FontSize <= 7.8 Then
+                     
+                        'Skip everyother label
+                        SkipLabel = True
+                         
+                        'Plot this label
+                        picDCResponse.CurrentX = i - CLng(picDCResponse.TextWidth(LabelString) / 2)
+                        picDCResponse.CurrentY = 8300
+                        picDCResponse.Print LabelString
+                         
+                        doContinue = False
+                         
+                    Else
+                     
+                        doContinue = True
+                        
+                    End If
+                     
+                Else
+                 
+                     'There's enough room to plot the Freq label horizontally
+                     picDCResponse.CurrentX = i - CLng(picDCResponse.TextWidth(LabelString) / 2)
+                     picDCResponse.CurrentY = 8300
+                     
+                     picDCResponse.Print LabelString
+                     
+                     doContinue = False
+                 
+                 End If
+            
+            Loop Until doContinue = False
+    
+        End If
+    
+    Next i
+    
+    'Set the line draw width larger
+    picDCResponse.DrawWidth = 1
+    
+    'Now Plot the RMS VS Ramp Input Voltages
+    For i = 1 To NumPoints - 1
+    
+        'Translate this point in the RMS_Array into an x-coordinate
+        CurX = CLng(1950 + ((HighVoltage - StartVoltage) * i / (NumPoints - 1)) _
+                            * 11050 / VoltRange)
+                            
+        'Translate previous point in the RMS_Array into an x-coordinate
+        PrevX = CLng(1950 + ((HighVoltage - StartVoltage) * (i - 1) / (NumPoints - 1)) _
+                            * 11050 / VoltRange)
+        
+        
+        'Translate Cur RMS value into a Y-co0rdinate
+        CurY = CLng(8000 - (RMS_array(i, 1) - MinRMS) * 6000 / RMSInterval)
+        
+        'Translate Previous RMS value into a Y-co0rdinate
+        PrevY = CLng(8000 - (RMS_array(i - 1, 1) - MinRMS) * 6000 / RMSInterval)
+        
+        
+        picDCResponse.Line (PrevX, PrevY)-(CurX, CurY), QBColor(1)
+        
+    Next i
+    
+    
+    'Now Plot the Monitor Voltage VS Ramp input Voltage
+    For i = 1 To NumPoints - 1
+    
+        'Translate this point in the RMS_Array into an x-coordinate
+        CurX = CLng(1950 + ((HighVoltage - StartVoltage) * i / (NumPoints - 1)) _
+                            * 11050 / VoltRange)
+                            
+        'Translate previous point in the RMS_Array into an x-coordinate
+        PrevX = CLng(1950 + ((HighVoltage - StartVoltage) * (i - 1) / (NumPoints - 1)) _
+                            * 11050 / VoltRange)
+        
+        
+        'Translate Cur RMS value into a Y-co0rdinate
+        CurY = CLng(8000 - (RMS_array(i, 0) - MinAmp) * 6000 / AmpInterval)
+        
+        'Translate Previous RMS value into a Y-co0rdinate
+        PrevY = CLng(8000 - (RMS_array(i - 1, 0) - MinAmp) * 6000 / AmpInterval)
+        
+        
+        picDCResponse.Line (PrevX, PrevY)-(CurX, CurY), QBColor(4)
+        
+    Next i
+    
+    'Return Draw Width to 1
+    picDCResponse.DrawWidth = 1
+    
+End Sub
+Private Sub cmdClose_Click()
+
+    Me.Hide
+    frmMCC_SineWave.Show
+            
+End Sub
+
+Private Sub cmdSaveAxialFreq_Click()
+
+    If Val(Me.txtFitAxialResFreq) > 0 Then
+    
+        'Overwrite old Axial resonance frequency value
+        'with that of the new fit result
+        Me.txtOldAxialResFreq = Me.txtFitAxialResFreq
+        
+    End If
+
+End Sub
+
+Private Sub cmdSaveMaxAxial_Click()
+
+    If Val(Me.txtFitMaxAxial) > 0 Then
+    
+        'Overwrite old Axial resonance frequency value
+        'with that of the new fit result
+        Me.txtOldMaxAxial = Me.txtFitMaxAxial
+        
+    End If
+
+End Sub
+
+Private Sub cmdSaveMaxTransverse_Click()
+
+    If Val(Me.txtFitMaxTransverse) > 0 Then
+    
+        'Overwrite old Axial resonance frequency value
+        'with that of the new fit result
+        Me.txtOldMaxTransverse = Me.txtFitMaxTransverse
+        
+    End If
+
+End Sub
+
+Private Sub cmdSaveTransverseFreq_Click()
+
+    If Val(Me.txtFitTransverseResFreq) > 0 Then
+    
+        'Overwrite old Axial resonance frequency value
+        'with that of the new fit result
+        Me.txtOldTransverseResFreq = Me.txtFitTransverseResFreq
+        
+    End If
+
+End Sub
+
+Private Sub cmdStartAutoClipTest_Click()
+
+    Dim RampChan As Channel
+    Dim MonitorChan As Channel
+    Dim SineChan As Channel
+    Dim UpWave As Wave
+    Dim DownWave As Wave
+    Dim SignalWave As Wave
+    Dim MonitorWave As Wave
+    Dim Verbose As Boolean
+    
+    Dim AFMonitorArray() As Single
+    Dim MaxAmp As Double
+    Dim gainArray(1) As Long
+    
+    'Check to see if user has switched verbose debugging on
+    If chkVerbose.Value = Checked Then
+    
+        Verbose = True
+        
+    Else
+    
+        Verbose = False
+        
+    End If
+    
+    Dim RMS_array() As Double
+        
+    Dim i As Long
+    
+    'Clear old plot
+    picDCResponse.Cls
+    picDCResponse.CurrentX = 3000
+    picDCResponse.CurrentY = 4000
+    picDCResponse.FontSize = 12
+    picDCResponse.Print "Running Clipping Test..."
+    frmAFTuner.Refresh
+    
+    'Do some input quality checks on the user parameters for the clipping auto-tune
+    If Val(Me.txtMinClippingAmp) >= Val(Me.txtMaxClipAmp) Then
+    
+        MsgBox "Scan start voltage for auto-clipping test is greater than or equal to " & _
+                "the Scan max voltage." & vbNewLine & _
+                "Auto Clipping test execution has been stopped."
+                
+        Exit Sub
+        
+    End If
+    
+    'Force Ramp up value to at least 10 if it is below this
+    If Val(Me.txtNumberRampUpPts) <= 10 Then
+    
+        Me.txtNumberRampUpPts = 10
+        txtNumberRampUpPts_Change
+        
+    End If
+    
+    'Check for crazy Sine freq values
+    If Val(Me.txtClippingSineFreq) <= 0 Then
+    
+        MsgBox "Bad Sine Freq to use for Auto-Cliping test.  " & _
+                "Sine Freq must be greater than zero." & vbNewLine & _
+                "Auto Clipping test execution has been stopped."
+                
+        Exit Sub
+        
+    End If
+    
+    
+    'Make sure the global board and wave collections are
+    'initialized
+    If DAQBoards Is Nothing Or WaveForms Is Nothing Then
+    
+        'DAQBoards not initialized
+        Initialize_Boards
+        
+        'For good measure, initialize wave forms also
+        Initialize_Waves
+        
+    End If
+    
+    'Run Through waves loaded into WaveForms
+    'and set the four Wave objects to the appropriate
+    'pre-existing wave
+    For i = 1 To WaveForms.count
+    
+        With WaveForms
+        
+            If .Item(i).WaveType = AFRAMPUP Then
+                
+                Set UpWave = .Item(i)
+                
+            End If
+            
+            If .Item(i).WaveType = AFRAMPDOWN Then
+            
+                Set DownWave = .Item(i)
+                
+            End If
+            
+            If .Item(i).WaveType = AFMONITOR Then
+            
+                Set MonitorWave = .Item(i)
+            
+            End If
+            
+            If .Item(i).WaveType = SINEWAVE Then
+            
+                Set SignalWave = .Item(i)
+                
+            End If
+            
+        End With
+        
+    Next i
+    
+    'Now set the boards to the appropriate boards from the
+    'global DAQBoards collection
+    With DAQBoards
+    
+        For i = 1 To .count
+        
+            If .Item(i).BoardNum = cmbOutBoard.ItemData(cmbOutBoard.ListIndex) Then
+                
+                'Use this board for the AF tuning
+                Set SignalWave.BoardUsed = New Board
+                Set SignalWave.BoardUsed = .Item(i)
+                
+            
+            End If
+            
+            If .Item(i).BoardNum = cmbInBoard.ItemData(cmbInBoard.ListIndex) Then
+            
+                'Use this board for the AF tuning monitoring
+                Set MonitorWave.BoardUsed = .Item(i)
+    
+            End If
+            
+            If .Item(i).BoardNum = cmbRampBoard.ItemData(cmbRampBoard.ListIndex) Then
+            
+                'Use this board for ramping up and down each freq iteration
+                Set UpWave.BoardUsed = .Item(i)
+                Set DownWave.BoardUsed = .Item(i)
+                
+            End If
+            
+        Next i
+        
+    End With
+    
+    Set RampChan = New Channel
+    Set MonitorChan = New Channel
+    Set SineChan = New Channel
+    
+    SineChan.ChanName = cmbOutChan.Text
+    SineChan.ChanNum = cmbOutChan.ItemData(cmbOutChan.ListIndex)
+    MonitorChan.ChanName = cmbInChan.Text
+    MonitorChan.ChanNum = cmbInChan.ItemData(cmbInChan.ListIndex)
+    RampChan.ChanName = cmbRampChan.Text
+    RampChan.ChanNum = cmbRampChan.ItemData(cmbRampChan.ListIndex)
+
+    With SignalWave
+    
+        Set .Chan = SineChan
+        .BufferAlloc = False
+        .Duration = 1000    'Duration is time in milliseconds
+        .IOOptions = BACKGROUND + CONTINUOUS
+        .SineFreq = Val(Me.txtClippingSineFreq)
+        .IORate = .BoardUsed.MaxAOutRate
+        .PtsPerPeriod = .IORate / .SineFreq
+         
+        .NumPoints = .Duration / 1000 * .IORate  '# of points = Time(s) * IOrate(Hz)
+                                                 'Duration is in millisecons, hence the 1/1000
+        .PeakVoltage = 10   'Set to max amplitude from the Sine Wave generator board
+        .Range.RangeType = BIP10VOLTS
+        .TimeStep = 1 / .IORate
+    
+    End With
+    
+    With UpWave
+    
+        Set .Chan = RampChan
+        .NumPoints = Val(Me.txtNumberRampUpPts)
+        .TimeStep = 0.05                'Monitored ramp up time step defaulted to 50 ms
+                                        'to give enough time for LC circuit amplitude
+                                        'to adjust, 512 points to be read in from the
+                                        'board to the windows memory buffer, and then
+                                        '20 millisecs to run a SineFit on 500 points
+        .PeakVoltage = Val(Me.txtMaxClipAmp)
+        .Range.RangeType = UNI10VOLTS
+        .MinVoltage = Val(Me.txtMinClippingAmp)
+        
+        If .PeakVoltage > .Range.MaxValue Then
+        
+            .PeakVoltage = .Range.MaxValue
+            Me.txtMaxClipAmp = Trim(Str(.PeakVoltage))
+            
+        End If
+        
+        If .MinVoltage < .Range.MinValue Or .MinVoltage > .Range.MaxValue Then
+        
+            .MinVoltage = .Range.MinValue
+            Me.txtMinClippingAmp = Trim(Str(.MinVoltage))
+            
+        End If
+        
+        Me.Refresh
+        
+        .Duration = .NumPoints * .TimeStep * 1000       'Duration is in milliseconds
+        
+    End With
+    
+    
+    With DownWave
+    
+        Set .Chan = RampChan
+        .TimeStep = 0.05                'Ramp Down time step defaulted to 50 ms
+                                        'for the same reasons as the upwave
+        .PeakVoltage = Val(Me.txtMaxClipAmp)
+        .Range.RangeType = UNI10VOLTS
+        .MinVoltage = Val(Me.txtMinClippingAmp)
+        
+        If .PeakVoltage > .Range.MaxValue Then
+        
+            .PeakVoltage = .Range.MaxValue
+            Me.txtMaxClipAmp = Trim(Str(.PeakVoltage))
+            
+        End If
+        
+        If .MinVoltage < .Range.MinValue Or .MinVoltage > .Range.MaxValue Then
+        
+            .MinVoltage = .Range.MinValue
+            Me.txtMinClippingAmp = Trim(Str(.MinVoltage))
+            
+        End If
+        
+        Me.Refresh
+        
+        .NumPoints = UpWave.NumPoints
+        .Duration = .NumPoints * .TimeStep * 1000       'Duration is in milliseconds
+        
+    End With
+        
+    
+    With MonitorWave
+    
+        Set .Chan = MonitorChan
+        
+        .BufferAlloc = False
+        'To make sure the monitor background process goes on long enough,
+        'set it's duration to twice that of the up and down ramp
+        .Duration = (UpWave.Duration + DownWave.Duration) * 2
+        
+        .IORate = .BoardUsed.MaxAInRate
+        .SineFreq = SignalWave.SineFreq
+        .PtsPerPeriod = .IORate / .SineFreq
+        
+        .NumPoints = .Duration / 1000 * .IORate     'Duration is in ms, therefore the 1/1000 factor
+        
+'        Debug.Print .NumPoints
+        
+        .Range.RangeType = BIP10VOLTS
+        .TimeStep = 1 / .IORate
+        .IOOptions = BACKGROUND
+        
+    End With
+            
+            
+    'Now generate sine wave signal
+    frmMCC_SineWave.generateWave SignalWave
+            
+    'ReDimension the RMS_Array()
+    ReDim RMS_array(UpWave.NumPoints, 2)
+            
+    'Now Start Ramp-up
+    ULStats = ClipTestRampUp(UpWave, _
+                                MonitorWave, _
+                                RMS_array(), _
+                                Verbose)
+                                    
+    'Error Check
+    If ULStats <> 0 Then
+    
+        Err.Raise ULStats, _
+                    "cmdStartAutoClipTest->ClipTestRampUp", _
+                    "Ramp Up during AF coil clipping test failed."
+                    
+        Exit Sub
+    
+    End If
+    
+    'Now Start Ramp-Down
+    ULStats = ClipTestRampDown(DownWave, _
+                                MonitorWave, _
+                                RMS_array(), _
+                                Verbose)
+                                
+    'Error Check
+    If ULStats <> 0 Then
+    
+        Err.Raise ULStats, _
+                    "cmdStartAutoClipTest->ClipTestRampDown", _
+                    "Ramp Down during AF coil clipping test failed."
+                    
+        Exit Sub
+    
+    End If
+    
+    'If user has selected to switch on Verbose debugging, then
+    'write the whole AF waveform to file and the abs amplitudes to file as well
+    If Verbose Then
+    
+        'Now, load the Monitor Wave memory buffer into an array for writing to file
+        With MonitorWave
+    
+            'Get the current point in the monitor wave input memory buffer
+            ULStat = cbGetStatus(.BoardUsed.BoardNum, _
+                                    Status, _
+                                    CurCount, _
+                                    CurIndex, _
+                                    AIFUNCTION)
+                                    
+            'Error Check
+            If ULStat <> 0 Then
+            
+                'Bug User
+                MsgBox "Unable to get last point from AF monitor signal background analog input process." & _
+                        vbNewLine & "Board: " & .BoardUsed.BoardName & " (" & _
+                        Trim(Str(.BoardUsed.BoardNum)) & ")" & _
+                        vbNewLine & vbNewLine & "Err: " & Trim(Str(ULStat))
+                
+                Exit Sub
+                
+            End If
+                                    
+                                    
+            'Set Current Point to CurIndex
+            .CurrentPoint = CurIndex
+    
+            'Redimension the monitor wave data-storage array so that we can dump the windows
+            'memory buffer into it
+            ReDim AFMonitorArray(.CurrentPoint + 1)
+    
+            gainArray(0) = .Range.RangeType
+    
+            'Dump the windows memory buffer into the array above
+            ULStats = cbWinBufToEngUnits(.BoardUsed.BoardNum, _
+                                            gainArray(0), _
+                                            1, _
+                                            .MemBuffer, _
+                                            AFMonitorArray(0), _
+                                            .StartPoint, _
+                                            .CurrentPoint + 1)
+    
+            'Error Check
+            If ULStats <> 0 Then
+    
+                'Just bug the user real fast about this and end the function
+                MsgBox "Unable to load AF Monitor signal from Windows Memory Buffer to " & _
+                        "data array for processing.  No Data processing on the AF waveform " & _
+                        "will be done." & vbNewLine & vbNewLine & _
+                        "Err: " & Trim(Str(ULStats)), , _
+                        "Windows Memory Error."
+    
+                Exit Sub
+    
+            End If
+            
+        End With
+            
+        'Now write the AFMonitorArray to a file
+    
+        'Put together the test file name with date and time stamp
+        Dim StrDate As String
+        Dim DirPath As String
+        
+        
+        DirPath = "C:\Documents and Settings\lab\Desktop\Test MCC Board 11-16-2009\"
+        StrDate = Format(Now, "MM-DD-YYYY_HH-MM-SS")
+        
+        Open DirPath & "AFRamp_" & StrDate & ".csv" For Output As #1
+        Open DirPath & "AFRamp_Amp_" & StrDate & ".csv" For Output As #2
+            
+        Print #1, "Pt #,Raw Values"
+        Print #2, "Pt #,Raw Values"
+            
+        'Till next period counter
+        j = 49
+            
+        'Place holders for max amplitudes of two channels
+        MaxAmp = 0
+        
+        For i = 0 To UBound(AFMonitorArray) - 1 'Step 2
+        
+            'Write only valid points to file.
+            If AFMonitorArray(i) <> -10 Then
+                'And Abs(AFMonitorArray(I)) < MonitorWave.PeakVoltage * 5 Then
+                
+                'Write all data points line by line to file
+                Print #1, Trim(Str(i)) & "," & _
+                            Trim(Str(AFMonitorArray(i)))
+                            
+                If MaxAmp < Abs(AFMonitorArray(i)) Then MaxAmp = Abs(AFMonitorArray(i))
+                         
+                'Decrement j
+                j = j - 1
+                
+                If j = 0 Then
+                
+                    'We've reached the end of one half of the period\
+                    Print #2, Trim(Str(i)) & "," & _
+                                Trim(Str(MaxAmp))
+                                
+                    'Reset j and Max placeholders
+                    With MonitorWave
+                    
+                        j = CLng(.IORate / (.SineFreq * 2))
+                    
+                    End With
+                    MaxAmp = 0
+                    
+                End If
+                    
+            End If
+        
+        Next i
+        
+        Close #1
+        Close #2
+                
+    End If
+    
+    'Deallocate MonitorWave Memory Buffer
+    With MonitorWave
+    
+        ULStats = cbWinBufFree(.MemBuffer)
+        
+        If ULStats <> 0 Then
+        
+            Err.Raise ULStats, _
+                        "cmbStartAutoClipTest->cbWinBufFree", _
+                        "Could not deallocate Monitor analog input Windows Memory Buffer."
+                        
+        End If
+        
+    End With
+    
+    'Stop and Deallocate SignalWave process and Memory Buffer
+    frmMCC_SineWave.StopWave SignalWave, True
+    
+'------Debug Only---------------------------------------------------
+
+    On Error GoTo EndProgram:
+    
+    'Now need to plot the results
+    PlotAutoClipTestResults RMS_array(), _
+                            UpWave.MinVoltage, _
+                            UpWave.PeakVoltage, _
+                            UpWave.TimeStep, _
+                            UpWave.NumPoints
+                            
+    On Error GoTo 0
+    
+    Exit Sub
+    
+EndProgram:
+
+    Resume Next
+        
+End Sub
+
+Private Sub cmdToggleTest_Click()
+
+    If cmdToggleTest.Caption = "Do Clipping Test" Then
+    
+        'Change Toggle Test button value
+        cmdToggleTest.Caption = "Do AF Auto-Tune"
+    
+        'Set Values of fields for Clipping Test
+        Me.txtMinClippingAmp = 0
+        Me.txtMaxClipAmp = 10
+        
+        'Based on coil selected, load appropriate Res freq value
+        If optCoil(0).Value = True Then
+        
+            'Axial Coil is selected
+            Me.txtClippingSineFreq = Me.txtOldAxialResFreq
+            
+        Else
+        
+            'Transverse Coil is selected
+            Me.txtClippingSineFreq = Me.txtOldTransverseResFreq
+            
+        End If
+        
+        'Set Button Values
+        Me.cmdStartAutoClipTest.Value = False
+        Me.cmdStartAutoClipTest.Caption = "Start Clipping Auto-Test"
+            
+        'Swap Out which frames are visible
+        Me.frameClippingTest.Visible = True
+        Me.frameAFAutoTune.Visible = False
+        Me.frameMaxCoilVoltages.Visible = True
+        Me.frameCoilResFreq.Visible = False
+        
+    Else
+
+        'Change Toggle Button back to Do Clipping Test
+        cmdToggleTest.Caption = "Do Clipping Test"
+        
+        'Swap Out which frames are visible
+        Me.frameAFAutoTune.Visible = True
+        Me.frameClippingTest.Visible = False
+        Me.frameCoilResFreq.Visible = True
+        Me.frameMaxCoilVoltages.Visible = False
+        
+    End If
+
+End Sub
+
+Private Sub Form_Load()
+    
+    'Set the Form Width
+    Me.Width = 9828
+    
+    'Set Toggle Test to Do Clipping Path
+    cmdToggleTest.Caption = "Do Clipping Test"
+    
+    'Set Visible Frames to AF Auto-Tune frames
+    Me.frameAFAutoTune.Visible = True
+    Me.frameClippingTest.Visible = False
+    Me.frameCoilResFreq.Visible = True
+    Me.frameMaxCoilVoltages.Visible = False
+    
+    'Default fit result values for Clipping and Auto-tune tests
+    'to blank values
+    Me.txtFitMaxAxial = ""
+    Me.txtFitMaxTransverse = ""
+    Me.txtFitAxialResFreq = ""
+    Me.txtFitTransverseResFreq = ""
+    Me.txtOldAxialResFreq = "918"
+    Me.txtOldTransverseResFreq = "324"
+    
+    'Clear the Picture Box plot
+    picDCResponse.Cls
+
+        
+    'Preset Auto-tune run paramters
+    Me.txtAmplitude.Text = 1
+    Me.txtHighFreq.Text = 1000
+    Me.txtLowFreq.Text = 600
+    Me.txtFreqStepSize.Text = 50
+    Me.txtDuration.Text = 1000
+    
+    'Preset all labels (except status field) to non-bold and black font color
+    lblLowFreq.ForeColor = vbBlack
+    lblHighFreq.ForeColor = vbBlack
+    lblScanDuration.ForeColor = vbBlack
+    lblAmplitude.ForeColor = vbBlack
+    
+    lblLowFreq.FontBold = False
+    lblHighFreq.FontBold = False
+    lblScanDuration.FontBold = False
+    lblAmplitude.FontBold = False
+    
+    'Preset text in status field label to empty string
+    lblStatusField.Caption = ""
+    
+    'Default Radio Coil Selector buttons to Axial coil
+    optCoil_Click 0
+    
+    'If the WaveForms or DAQBoards collections are empty, then
+    'initialize them
+    If WaveForms Is Nothing Or DAQBoards Is Nothing Then
+    
+        Initialize_Boards
+        Initialize_Waves
+        
+    End If
+    
+    'Lock Board Name text boxes - these are not for user editing
+    txtInBoardName.locked = True
+    txtOutBoardName.locked = True
+    txtRampBoardName.locked = True
+    
+    'Clear cmb controls
+    cmbInBoard.Clear
+    cmbOutBoard.Clear
+    cmbRampBoard.Clear
+    cmbInChan.Clear
+    cmbOutChan.Clear
+    cmbRampChan.Clear
+    
+    'Run through each of the boards loaded into DAQBoards and add the appropriate boards
+    'to the cmbInBoard,cmbOutBoard, and cmbRampBoard controls
+    With DAQBoards
+    
+        For i = 1 To .count
+        
+            With .Item(i)
+        
+                If InStr(1, .BoardFunction, SIGNALGENERATOR) > 0 Then
+                
+                    'If SIGNALGENERATOR is one of board's functions, .BoardFunction will be odd
+                    cmbOutBoard.AddItem (Trim(Str(.BoardNum)))
+                    cmbOutBoard.ItemData(cmbOutBoard.NewIndex) = .BoardNum
+                                        
+                End If
+                
+                If InStr(1, .BoardFunction, AFRAMP) > 0 Then
+                
+                    cmbRampBoard.AddItem (Trim(Str(.BoardNum)))
+                    cmbRampBoard.ItemData(cmbRampBoard.NewIndex) = .BoardNum
+                    
+                End If
+                
+                If InStr(1, .BoardFunction, MONITOR) > 0 Then
+                
+                    'MONITOR is one of board's functions at .BoardFunction values greater than 8
+                    'a .BoardFunction value > 14 is not valid
+                    cmbInBoard.AddItem (Trim(Str(.BoardNum)))
+                    cmbInBoard.ItemData(cmbInBoard.NewIndex) = .BoardNum
+                                        
+                End If
+                
+            End With
+        
+        Next i
+    
+    End With
+    
+    'Load the proper values into the cmb boxes for the boards
+    'and the cmb boxes for chans using the cmbBoard click() event subroutines
+    cmbInBoard.ListIndex = 0
+    cmbOutBoard.ListIndex = 0
+    cmbRampBoard.ListIndex = 0
+    cmbInBoard_Click
+    cmbOutBoard_Click
+    cmbRampBoard_Click
+    
+    cmbOutChan.ListIndex = 0
+    cmbInChan.ListIndex = 1
+    cmbRampChan.ListIndex = 1
+    
+    'Plot default Axes on the results Picture plot for the tuning sweep
+    picDCResponse.AutoRedraw = True
+    
+End Sub
+
+
+
+Private Sub optCoil_Click(Index As Integer)
+    
+    Dim TTLBoard As Board
+    Dim i As Long
+    
+    Set TTLBoard = Nothing
+    
+    'Search through boards until find the first AFRELAYCONTROL board
+    For i = 1 To DAQBoards.count
+    
+        'If the board number matches the digital out
+        If InStr(1, DAQBoards(i).BoardFunction, AFRELAYCONTROL) > 0 Then
+        
+            Set TTLBoard = DAQBoards(i)
+            
+            i = DAQBoards.count + 1
+            
+        End If
+        
+    Next i
+
+    'Make sure only one coil is selected at a time
+    If Index = 0 Then optCoil(1) = Not optCoil(0)
+    If Index = 1 Then optCoil(0) = Not optCoil(1)
+    
+   
+    'If Axial coil is selected
+    If optCoil(0) Then
+    
+        'Set Transverse Coil port, FIRSTPORTB, to zero
+        frmMCC_SineWave.DigitalOutput TTLBoard.BoardNum, FIRSTPORTB, 0
+        
+        'Set Axial Coil port, FIRSTPORTC, to 1 volts
+        frmMCC_SineWave.DigitalOutput TTLBoard.BoardNum, FIRSTPORTC, 1
+        
+        'Set value of Clipping Sine Freq text box
+        Me.txtClippingSineFreq = Me.txtOldAxialResFreq
+        
+    End If
+    
+    'If Transverse coil is selected
+    If optCoil(1) Then
+    
+        'Set Axial Coil port, FIRSTPORTC, to zero
+        frmMCC_SineWave.DigitalOutput TTLBoard.BoardNum, FIRSTPORTC, 0
+        
+        'Set Transverse Coil port, FIRSTPORTB, to 1 volts
+        frmMCC_SineWave.DigitalOutput TTLBoard.BoardNum, FIRSTPORTB, 1
+        
+        'Set value of Clipping Sine Freq text box
+        Me.txtClippingSineFreq = Me.txtOldTransverseResFreq
+        
+    End If
+    
+End Sub
+
+Private Sub scrlVoltage_Scroll()
+
+    lblVoltagePercentage.Caption = "Voltage Output:  " & Trim(Str(scrlVoltage.Value)) & " Volts%"
+
+End Sub
+Private Sub scrlVoltage_Change()
+
+    lblVoltagePercentage.Caption = "Voltage Output:  " & Trim(Str(scrlVoltage.Value)) & " Volts"
+
+End Sub
+
+
+
+Private Sub txtNumberRampUpPts_Change()
+
+    Me.txtRampUpTime = Trim(Str(Val(Me.txtNumberRampUpPts) * 0.05))
+
+End Sub
+
+Private Sub txtDuration_LostFocus()
+
+    Dim Temp As Double
+    
+    Temp = Val(txtDuration)
+    
+    Temp = Round(Temp / 100, 0)
+    
+    Temp = Temp * 100
+    
+    txtDuration = Trim(Str(Temp))
+
+End Sub
+
+Private Sub txtPtsPerPeriod_LostFocus()
+
+    Dim Temp As Double
+    
+    Temp = Val(txtDuration)
+    
+    Temp = Round(Temp / 100, 0)
+    
+    Temp = Temp * 100
+    
+    txtPtsPerPeriod = Trim(Str(Temp))
+    
+End Sub

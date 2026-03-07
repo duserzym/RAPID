@@ -1,0 +1,561 @@
+'<ADbasic Header, Headerversion 001.001>
+' Process_Number                 = 1
+' Initial_Processdelay           = 1000
+' Eventsource                    = Timer
+' Control_long_Delays_for_Stop   = No
+' Priority                       = High
+' Version                        = 1
+' ADbasic_Version                = 5.0.6
+' Optimize                       = Yes
+' Optimize_Level                 = 2
+' Info_Last_Save                 = SHOEMAKER  SHOEMAKER\lab
+'<Header End>
+#include .\ADWL16.inc
+#include .\globals.inc
+
+'0.03 * process rate in Hz * ec (10/3 * 1e-9) = 1 / (rate in Hz) = Time step
+'Therefore: 0.03 = conversion constant between process delay and desired 
+'           process rate in Hz
+#define pd AFRAMP_PD
+#define ec 25 * 1E-9 ' execution cycle 25 ns
+
+'Ramp Output Declarations
+
+'counter for the two local data arrays for saving
+'the AF ramp output levels to external memory
+'data arrays
+DIM stepup, stepdown as FLOAT   'Sine amplitude increment & decrement variables
+Dim OrigStepUp as float 
+DIM pdc as Long                'peak delay count
+Dim periodwindow as long         'Period of one osc. in output points - rounded to highest integer
+Dim periodcount as long
+Dim tc as float
+Dim acval as float
+Dim firstcycle as long
+Dim firstrampdown as long
+Dim PeriodMaxAvg as float
+Dim TempF as float
+Dim TempF2 as float
+Dim MaxCounter as long  
+Dim PointCounter as long
+Dim peak_delay as float
+Dim SlowDownWindow as float 
+
+init:
+  
+  'Check to make sure non-sensical pd doesn't make it into
+  'the processdelay variable
+  if (pd < 800) then
+    
+    pd = 800
+    
+  endif
+  
+  ''Check the output port assignment for wacky values
+  'if ((PORT_SINEOUT > 2) or (PORT_SINEOUT < 1)) then
+  '  
+  '  PORT_SINEOUT = 1
+  '  
+  'endif
+  '
+  ''Check the input port assignment
+  'if ((((((((PORT_ACCUR <> 1) and (PORT_ACCUR <> 3)) and (PORT_ACCUR <> 5)) and (PORT_ACCUR <> 7)) and (PORT_ACCUR <> 9)) and (PORT_ACCUR <> 11)) and (PORT_ACCUR <> 13)) and (PORT_ACCUR <> 15)) then
+  '      
+  '  PORT_ACCUR = 1
+  '
+  'endif
+
+  'Process settings
+  processdelay = pd
+
+  ' time constant = process delay in seconds
+  tc = processdelay * ec
+  
+  par_25 = processdelay
+  
+  'Ramp output initializations
+  
+  'Set ADWIN-light-16 board to fast binary mode
+  L16_mode(1)
+
+  'Set the multiplexer / channel selector
+  selectcase PORT_ACCUR
+  
+    case 1
+      
+      Set_Mux(000b)
+      
+    case 3
+      
+      Set_Mux(001b)
+      
+    case 5
+      
+      Set_Mux(010b)
+      
+    case 7
+      
+      Set_Mux(011b)
+      
+    case 9
+      
+      Set_Mux(100b)
+      
+    case 11
+      
+      Set_Mux(101b)
+      
+    case 13
+      
+      Set_Mux(110b)
+      
+    case 15
+      
+      Set_Mux(111b)
+      
+  endselect
+  
+  
+  Par_20 = PORT_ACCUR
+  
+  'start AF Ramp cycle
+  ACPHASE = ACPHASE_START
+
+  ACOUT_TIMESTEP = tc 
+
+  'Ramp Initialization
+
+  'Calculate the Peak delay time
+  peak_delay = PEAKDELAY_PERIODS / FREQ
+    
+  'Check to see if AC_AMPL_LIMIT and PEAKVOLTAGE
+  'and smaller than MAX_RAMPVOLTAGE and MAX_PEAKVOLTAGE
+  if (AC_AMPL_LIMIT > MAX_RAMPVOLTAGE) then
+    
+    'Reset AC_AMPL_LIMIT to MAX_RAMPVOLTAGE
+    AC_AMPL_LIMIT = MAX_RAMPVOLTAGE
+    
+  endif
+  
+  if (PEAKVOLTAGE > MAX_PEAKVOLTAGE) then
+    
+    'reset PEAKVOLTAGE to MAX_PEAKVOLTAGE
+    PEAKVOLTAGE = MAX_PEAKVOLTAGE
+    
+  endif
+  
+  'Initialize OutCount and Incount to zero
+  OUTCOUNT = 1
+  INCOUNT = 1
+  
+  'Initialize RAMPMAX, OUTMAX to zero
+  RAMPMAX = 0
+  OUTMAX = 0
+  
+  'Set local freq to FREQMIN global parameter
+  freq = FREQ
+  
+  'Calculate nsamples = 1 period in output points / process cycles - float
+  NSAMPLES = 1 / (freq * tc)
+  
+  ''If this is an AF Tuning run, need to calculate the step size for nsamples
+  'if (RAMPMODE = AFTUNE) then
+  '
+  '  'Need to step Freq from Min Freq to Max Freq based on the amount
+  '  'of peak delay time and the time-step of the process (tc)
+  '  'Total freq range = FreqMax - FreqMin, notice sign is preserved
+  '  'in case FreqMin > FreqMax.
+  '  'Freq / sec = Freq Range / Peak Delay Time
+  '  'Freq_step = Freq / sec * time-step
+  '  
+  '  'Since dividing by peak delay, if peak delay is zero, freq_step = 0
+  '  if (PEAK_DELAY = 0) then 
+  '    
+  '    freq_step = 0
+  '  
+  '  else
+  '    
+  '    freq_step = ((FREQMAX - FREQMIN) / PEAK_DELAY) * tc
+  '  
+  '    Fpar_11 = freq_step
+  '    
+  '  endif
+  '  
+  'endif
+  
+  'Calculate something, but as an integer + 1
+  periodwindow = nsamples + 1
+  
+  'Initialize period counter = 1
+  periodcount = 1
+  
+  'Initialize first cycle to true
+  firstcycle = TRUE 
+  
+  'Set MAXALLOWEDDATAPTS = NUMMONITORPTS constant
+  MAXALLOWEDDATAPTS = NUMMONITORPTS
+  
+  'Initialize PeriodMaxAvg = 0
+  PeriodMaxAvg = 0
+  
+  'Initialize MaxCounter = 0
+  MaxCounter = 0  
+  
+  'Initialize PointCounter = 0
+  PointCounter = 0
+  
+  'Set firstrampdown status flag to TRUE
+  firstrampdown = TRUE
+  
+  'Set the value of the size of the slow-down window
+  SlowDownWindow = 0.1 * PEAKVOLTAGE
+  
+  'Make sure SlowDownWindow isn't too small
+  if (SlowDownWindow < 0.01) then
+    
+    SlowDownWindow = 0.01
+    
+  endif
+  
+  if (SlowDownWindow > PEAKVOLTAGE) then
+    
+    SlowDownWindow = PEAKVOLTAGE
+    
+  endif
+        
+        
+event:
+  
+  'Don't do anything the first cycle to give
+  'the multiplexer time to settle
+  if (firstcycle = TRUE) then
+    
+    'Do nothing, set firstcycle = false
+    firstcycle = FALSE
+    
+  else
+    
+    'Do ramp process, this is not the first cycle
+  
+    'Start A/D process
+    'Read in ADWIN board counts value on ADC AC analog input port, 
+    'subtract MAX15BIT to change the resulting range from 0 - 65534 
+    'to -32768 to +32767, which mirrors the +/- 10 volt range of the board
+  
+    'Ramp Output Event
+  
+    'Use ACPHASE to select the correct sine-wave amplitude for the current AC output point
+    SELECTCASE ACPHASE 
+   
+        'calculate output amplitude depending on phase
+    
+      CASE ACPHASE_START
+      
+        'Start out with Sine analog output amplitude at zero
+        SINEAMP = 0
+      
+        'voltage steps for the Ramp Up
+        stepup = SLOPE_UP * tc
+        OrigStepUp = stepup
+        
+        'start AF Ramp cycle with Ramp Up phase
+        ACPHASE = ACPHASE_RAMP_UP
+    
+      CASE ACPHASE_RAMP_UP
+    
+        'Increment sine analog output amplitude
+        SINEAMP = SINEAMP + stepup
+                  
+        'if we exceed the limit of output voltage, ramp down immediately
+        IF ((SINEAMP >= AC_AMPL_LIMIT) and (RAMPMODE < CLIPTEST)) THEN
+        
+          'If we've hit the AC_AMPL_LIMIT, and the monitor voltage still
+          'isn't reached, check to see how far from the PEAKVOLTAGE
+          'the monitor voltage is.
+          'I.e. - can the monitor voltage be reached without
+          'surpassing the MAX_RAMPVOLTAGE ?
+          
+          'Compare percentage of current monitor voltage to peak voltage
+          'to percentage of AC_AMPL_LIMIT to MAX_RAMPVOLTAGE
+          'Current monitor amplitude = RAMPMAX
+          'Current ramp voltage = SINEAMP
+          
+          'Check to see if the user has selected for the code to hang at the
+          'peak for a set amount of time
+                   
+          if ((RAMPMAX > PeriodMaxAvg) or ((RAMPMAX / PEAKVOLTAGE) > (AC_AMPL_LIMIT / MAX_RAMPVOLTAGE))) then
+            
+            'If this is true, then it is possible to reach the peakvoltage
+            ACPHASE = ACPHASE_OVERRAMP
+            
+          ELSE
+            
+            RAMPUPLASTPT = INCOUNT - 1
+            RAMPDOWNFIRSTPT = INCOUNT
+            peak_delay = 0
+            ACPHASE = ACPHASE_PEAK_REACHED
+            
+          ENDIF
+        
+        endif
+              
+        'If we're doing a clip test, or an AF tuning run then we want to 
+        'dwell for a time specified by the external GUI code at the 
+        'Peak AC ramp voltage.
+        '
+        '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        '  WARNING: This is a bit of code, if you put in the wrong value
+        '           for the PEAK_DELAY parameter and you have a high value for
+        '           AC_AMPL_LIMIT, that could melt your AF coils!
+        '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        if ((SINEAMP >= AC_AMPL_LIMIT) and (RAMPMODE >= CLIPTEST)) then
+        
+          RAMPUPLASTPT = INCOUNT - 1
+          ACPHASE = ACPHASE_PEAK_REACHED
+        
+        endif
+          
+      CASE ACPHASE_OVERRAMP
+          
+        'Increment sine analog output amplitude
+        SINEAMP = SINEAMP + stepup
+        
+        'We've ramped up as high as possible, end the ramp up
+        IF ((RAMPMAX < (PeriodMaxAvg * 1.25)) or (SINEAMP >= MAX_RAMPVOLTAGE)) THEN
+            
+          RAMPUPLASTPT = INCOUNT - 1
+          RAMPDOWNFIRSTPT = INCOUNT
+          peak_delay = 0
+          ACPHASE = ACPHASE_PEAK_REACHED
+            
+        ENDIF
+                    
+      CASE ACPHASE_RAMP_DOWN
+        
+        'Determine if this is the first Ramp Down
+        'pass through.  If so, need to calculate
+        'the step-down voltage
+        
+        'Decrement sine analog output amplitude
+        SINEAMP = SINEAMP - stepdown
+        
+        ' if amplitude reaches zero -> we are done
+        IF (SINEAMP <= 0) THEN 
+      
+          'Set pdc = 0, to start counting the number of
+          'periods after the ramp down input has ~reached 
+          'zero
+          pdc = 0
+          
+          ACPHASE = ACPHASE_RAMP_ENDING
+      
+          'Set SineAmp = 0
+          SINEAMP = 0
+        
+        ENDIF
+              
+      CASE ACPHASE_RAMP_ENDING
+        
+        'Wait for Par_3 to get within 5 16-bit counts of zero
+        'then wait 50 ms
+        Inc pdc
+        
+        'Now check to see if 10 periods have elapsed
+        'since the input went ~ zero
+        if (pdc * tc >= (20 / freq)) then
+          
+          ACPHASE = ACPHASE_DONE
+          
+        endif
+                
+      CASE ACPHASE_PEAK_REACHED
+      
+        'Set count of loops at peak = 0
+        pdc = 0
+        
+        'Calculate RAMP DOWN slope
+        if (RAMPDOWN_MODE = RAMPDOWN_PERIOD) then
+        
+          'Using the Ramp down number of periods and the max output
+          'voltage reached in the RAMP UP and Peak phases to compute
+          'SLOPE_DOWN
+          SLOPE_DOWN = OUTMAX / (NUMPERIODS / FREQ)
+          
+        endif
+                          
+        'Calculate stepdown from the SLOPE_DOWN input
+        stepdown = SLOPE_DOWN * tc
+              
+        'Set AF Ramp phase to peak delay
+        ACPHASE = ACPHASE_PEAK_DELAY
+      
+      CASE ACPHASE_PEAK_DELAY 
+        'keep at peak amplitude for specified peak delay time
+      
+        'increment count for peak delay by +1
+        Inc pdc 
+      
+        '    'If this is a tuning test, need to start varying
+        '    'Freq from Min freq to Max Freq
+        '    if (RAMPMODE = AFTUNE) then
+        '      
+        '      'increment the freq
+        '      freq = freq + freq_step
+        '
+        '      'recalculate nsamples
+        '      NSAMPLES = 1 / (freq * tc)
+        '          
+        '    endif
+       
+        'If the amount of time we've hung at the peak is greater
+        'than or equal to the peak delay time inputed by the external
+        'code, then switch phase of AF Ramp to Ramp down
+        IF (pdc * tc >= peak_delay) THEN
+          
+          RAMPDOWNFIRSTPT = INCOUNT
+          ACPHASE = ACPHASE_RAMP_DOWN
+        
+        ENDIF 
+    
+        'Ramp Done!
+      CASE ACPHASE_DONE 
+      
+        END
+      
+    ENDSELECT 
+
+    PAR_2 = SIN(OUTCOUNT / NSAMPLES * 2 * PI) * (SINEAMP / LSB) + MAX15BIT
+  
+    'Save maximum sine output for each half period
+    acval = (PAR_2 - MAX15BIT) * LSB
+    if (OUTMAX < absf(acval)) then OUTMAX = absf(acval)
+  
+    'Newly calculated sine value outputed through the DAC-OUT port
+    DAC(PORT_SINEOUT, PAR_2)
+  
+    'Ramp Input event
+
+'''Read from the A/D channel
+    'Start_Conv(1)
+    '
+    ''Wait for end of read
+    'Wait_eoc(1)
+  
+    PAR_3 = ADC(PORT_ACCUR)
+      
+    ACVOLT = (PAR_3 - MAX15BIT) * LSB
+
+    'Increment Point Counter
+    Inc PointCounter
+        
+    if (RAMPMAX < absf(ACVOLT)) then 
+    
+      'Store Max  
+      RAMPMAX = absf(ACVOLT)
+      
+    endif
+
+    if (PointCounter > periodwindow) then
+
+      'Increment PeriodMax counter
+      Inc MaxCounter
+  
+      'Update PeriodMax average
+      if (MaxCounter > 1) then
+    
+        TempF = (MaxCounter - 1) / MaxCounter
+        TempF2 = PeriodMaxAvg * TempF
+        TempF = RAMPMAX / MaxCounter
+        PeriodMaxAvg = TempF2 + TempF
+    
+      else
+    
+        PeriodMaxAvg = RAMPMAX
+    
+      endif
+  
+      FPar_9 = PeriodMaxAvg
+        
+      'Reset period counter and period max
+      PointCounter = 0   
+  
+    endif
+        
+    'Check to see if period-count = period window
+    if ((periodcount >= periodwindow) and (ACPHASE < ACPHASE_PEAK_REACHED)) then
+  
+      'Reset Period count to 0
+      periodcount = 0
+  
+      'Check amplitude VS monitor peak amplitude, if this is not a clip-test or
+      'an AF tuning run
+      if (RAMPMODE < CLIPTEST) then
+    
+        'If the max amplitude is within 1% or 0.001 volts of the final voltage
+        'set ACPHASE = ACPHASE_PEAK_REACHED
+        if (RAMPMAX >= (PEAKVOLTAGE - (NOISELEVEL * LSB))) then
+        
+          RAMPUPLASTPT = INCOUNT
+          ACPHASE = ACPHASE_PEAK_REACHED
+
+          'Check to see if we're within the slowdownwindow
+          
+        endif
+        
+        if (RAMPMAX >= (PEAKVOLTAGE - SlowDownWindow)) then
+        
+          stepup = OrigStepUp * (absf(PEAKVOLTAGE - RAMPMAX) / SlowDownWindow * 0.9 + 0.1)
+          
+        endif
+        
+          
+      endif
+              
+    endif
+  
+    'If doing AF Ramp in Debug mode or clipping test, then need to also load the local arrays
+    'for saving in the savedata.bas process
+    if ((RAMPMODE > AFRAMP_MONITORED) and (ACPHASE < ACPHASE_DONE)) then
+
+      IF (INCOUNT <= NUMMONITORPTS) THEN
+
+        'if ((RAMPMODE = AFTUNE) and (ACPHASE <> ACPHASE_PEAK_DELAY)) then 
+        '
+        '  'Decrement Incount and Outcount if this is true, 
+        '  'Don't save any data
+        '  Dec INCOUNT
+        '  Dec OUTCOUNT
+        '
+        'else
+          
+        'Save Input data point to external data array
+        AFRAMPDATA[INCOUNT] = PAR_3
+        AFRAMPOUTPUT[OUTCOUNT] = PAR_2
+          
+        'endif
+        
+          
+      ENDIF
+
+    endif
+   
+    'Increment INCOUNT & periodcount +1
+    Inc OUTCOUNT
+    Inc INCOUNT
+    Inc periodcount
+    
+  endif
+  
+finish:
+  'Set output voltage an AC sine-wave analog output port to 0V
+  if (PORT_SINEOUT = 1) then
+  
+    DAC(1, MAX15BIT)
+  
+  else 
+    
+    Dac(2, Max15Bit)
+    
+  endif

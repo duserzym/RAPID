@@ -1,0 +1,1721 @@
+VERSION 5.00
+Object = "{F9043C88-F6F2-101A-A3C9-08002B2F49FB}#1.2#0"; "comdlg32.ocx"
+Begin VB.Form frmADWIN_AF 
+   Caption         =   "ADWIN AF Ramp"
+   ClientHeight    =   6564
+   ClientLeft      =   168
+   ClientTop       =   552
+   ClientWidth     =   6960
+   ControlBox      =   0   'False
+   LinkTopic       =   "Form1"
+   MDIChild        =   -1  'True
+   ScaleHeight     =   6564
+   ScaleWidth      =   6960
+   Begin VB.PictureBox picAFRamp 
+      BackColor       =   &H80000009&
+      Height          =   2652
+      Left            =   3360
+      ScaleHeight     =   2000
+      ScaleMode       =   0  'User
+      ScaleWidth      =   3000
+      TabIndex        =   32
+      Top             =   240
+      Width           =   3492
+   End
+   Begin VB.Frame Frame2 
+      Caption         =   "Shiny Buttons"
+      Height          =   2772
+      Left            =   3360
+      TabIndex        =   27
+      Top             =   3000
+      Width           =   3492
+      Begin VB.CommandButton cmdOpenDAQComm 
+         Caption         =   "Open DAQ Comm Control"
+         Height          =   372
+         Left            =   480
+         TabIndex        =   33
+         Top             =   2280
+         Width           =   2532
+      End
+      Begin VB.CommandButton cmdStartAFTuner 
+         BackColor       =   &H00FF80FF&
+         Caption         =   "Tune AF Coils"
+         Height          =   372
+         Left            =   480
+         MaskColor       =   &H00C000C0&
+         TabIndex        =   31
+         Top             =   840
+         Width           =   2532
+      End
+      Begin VB.CommandButton cmdTestGaussMeter 
+         Caption         =   "908A Gaussmeter Control"
+         Height          =   372
+         Left            =   480
+         TabIndex        =   30
+         Top             =   1800
+         Width           =   2532
+      End
+      Begin VB.CommandButton cmdCalibrate 
+         Caption         =   "Calibrate AF Coils"
+         Height          =   372
+         Left            =   480
+         TabIndex        =   29
+         Top             =   1320
+         Width           =   2532
+      End
+      Begin VB.CommandButton cmdChangeFileSaveSettings 
+         Caption         =   "AF Data File Save Settings"
+         Height          =   372
+         Left            =   480
+         TabIndex        =   28
+         Top             =   360
+         Width           =   2532
+      End
+   End
+   Begin VB.Frame Frame1 
+      Caption         =   "AF Ramp Mode"
+      Height          =   732
+      Left            =   120
+      TabIndex        =   24
+      Top             =   840
+      Width           =   3132
+      Begin VB.CheckBox checkVerbose 
+         Caption         =   "Debug Mode?"
+         Height          =   372
+         Left            =   1800
+         TabIndex        =   26
+         Top             =   240
+         Width           =   1212
+      End
+      Begin VB.CheckBox checkClippingTest 
+         Caption         =   "Unmonitored Ramp"
+         Height          =   372
+         Left            =   240
+         TabIndex        =   25
+         Top             =   240
+         Width           =   1212
+      End
+   End
+   Begin VB.Frame Frame7 
+      Caption         =   "Active Coil"
+      Height          =   612
+      Left            =   120
+      TabIndex        =   16
+      Top             =   120
+      Width           =   3132
+      Begin VB.OptionButton optCoil 
+         Caption         =   "Transverse"
+         Height          =   192
+         Index           =   1
+         Left            =   1680
+         TabIndex        =   1
+         Top             =   240
+         Width           =   1212
+      End
+      Begin VB.OptionButton optCoil 
+         Caption         =   "Axial"
+         Height          =   192
+         Index           =   0
+         Left            =   240
+         TabIndex        =   0
+         Top             =   240
+         Width           =   732
+      End
+   End
+   Begin VB.Frame Frame4 
+      Caption         =   "ADWIN AF Ramp"
+      Height          =   4812
+      Left            =   120
+      TabIndex        =   10
+      Top             =   1680
+      Width           =   3132
+      Begin VB.ComboBox cmbFieldUnits 
+         Height          =   288
+         Left            =   480
+         TabIndex        =   22
+         Text            =   "G"
+         Top             =   1800
+         Width           =   852
+      End
+      Begin VB.TextBox txtPeakField 
+         Height          =   285
+         Left            =   1920
+         TabIndex        =   20
+         Top             =   1800
+         Width           =   972
+      End
+      Begin VB.TextBox txtFreq 
+         Height          =   285
+         Left            =   1920
+         TabIndex        =   18
+         Top             =   360
+         Width           =   972
+      End
+      Begin MSComDlg.CommonDialog cdlgTestSineFit 
+         Left            =   2880
+         Top             =   5160
+         _ExtentX        =   677
+         _ExtentY        =   677
+         _Version        =   393216
+      End
+      Begin VB.TextBox txtMonitorTrigVolt 
+         Height          =   285
+         Left            =   1920
+         TabIndex        =   3
+         Top             =   2280
+         Width           =   972
+      End
+      Begin VB.TextBox txtRampRate 
+         Height          =   285
+         Left            =   1920
+         TabIndex        =   5
+         Top             =   1080
+         Width           =   972
+      End
+      Begin VB.TextBox txtRampDownDuration 
+         Height          =   285
+         Left            =   1920
+         TabIndex        =   7
+         Top             =   3720
+         Width           =   972
+      End
+      Begin VB.TextBox txtRampUpDuration 
+         Height          =   285
+         Left            =   1920
+         TabIndex        =   6
+         Top             =   3240
+         Width           =   972
+      End
+      Begin VB.CommandButton cmdStartRamp 
+         BackColor       =   &H00FFFFC0&
+         Caption         =   "Start Ramp"
+         Height          =   372
+         Left            =   360
+         TabIndex        =   8
+         Top             =   4200
+         Width           =   2295
+      End
+      Begin VB.TextBox txtRampPeakDuration 
+         Height          =   285
+         Left            =   1920
+         TabIndex        =   4
+         Top             =   720
+         Width           =   972
+      End
+      Begin VB.TextBox txtRampPeakVoltage 
+         Height          =   285
+         Left            =   1920
+         TabIndex        =   2
+         Top             =   2640
+         Width           =   972
+      End
+      Begin VB.Label Label2 
+         Caption         =   "Units:"
+         Height          =   252
+         Left            =   480
+         TabIndex        =   23
+         Top             =   1560
+         Width           =   852
+      End
+      Begin VB.Label Label1 
+         Caption         =   "Peak Field:"
+         Height          =   252
+         Left            =   1920
+         TabIndex        =   21
+         Top             =   1560
+         Width           =   852
+      End
+      Begin VB.Label Label9 
+         Caption         =   "Sine Freq. (Hz):"
+         Height          =   252
+         Left            =   240
+         TabIndex        =   19
+         Top             =   360
+         Width           =   1572
+      End
+      Begin VB.Label Label33 
+         Caption         =   "Peak Monitor Voltage:"
+         Height          =   252
+         Left            =   240
+         TabIndex        =   17
+         Top             =   2280
+         Width           =   1812
+      End
+      Begin VB.Label Label23 
+         Caption         =   "Ramp IO Rate (Hz):"
+         Height          =   252
+         Left            =   240
+         TabIndex        =   15
+         Top             =   1080
+         Width           =   1932
+      End
+      Begin VB.Label Label22 
+         Caption         =   "Ramp Down Dur. (ms):"
+         Height          =   372
+         Left            =   240
+         TabIndex        =   14
+         Top             =   3600
+         Width           =   1572
+      End
+      Begin VB.Label Label21 
+         Caption         =   "Ramp Up Duration (ms):"
+         Height          =   492
+         Left            =   240
+         TabIndex        =   13
+         Top             =   3120
+         Width           =   1452
+      End
+      Begin VB.Label Label20 
+         Caption         =   "Time at Peak (ms):"
+         Height          =   252
+         Left            =   240
+         TabIndex        =   12
+         Top             =   720
+         Width           =   1932
+      End
+      Begin VB.Label Label19 
+         Caption         =   "Peak Ramp Voltage:"
+         Height          =   252
+         Left            =   240
+         TabIndex        =   11
+         Top             =   2640
+         Width           =   1572
+      End
+   End
+   Begin VB.CommandButton cmdClose 
+      BackColor       =   &H008080FF&
+      Caption         =   "Close"
+      Default         =   -1  'True
+      BeginProperty Font 
+         Name            =   "MS Sans Serif"
+         Size            =   9.6
+         Charset         =   0
+         Weight          =   400
+         Underline       =   0   'False
+         Italic          =   0   'False
+         Strikethrough   =   0   'False
+      EndProperty
+      Height          =   612
+      Left            =   3600
+      MaskColor       =   &H000000C0&
+      TabIndex        =   9
+      Top             =   5880
+      Width           =   3012
+   End
+   Begin VB.Menu mnuLines 
+      Caption         =   "Lines"
+      NegotiatePosition=   3  'Right
+      Visible         =   0   'False
+      Begin VB.Menu mnuDigiCheck 
+         Caption         =   "DigiCheck"
+      End
+      Begin VB.Menu mnuClearBit 
+         Caption         =   "Clear Bit"
+      End
+      Begin VB.Menu mnuSetBit 
+         Caption         =   "Set Bit"
+      End
+   End
+End
+Attribute VB_Name = "frmADWIN_AF"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = True
+Attribute VB_Exposed = False
+Public NOCOMM_MODE As Boolean
+
+Private Sub cmdCalibrate_Click()
+
+    frmCalibrateAF.Show
+        
+End Sub
+
+Private Sub cmdChangeFileSaveSettings_Click()
+
+    frmFileSave.Show
+
+End Sub
+Public Function DoRampADWIN(ByRef UpWave As Wave, _
+                       ByRef DownWave As Wave, _
+                       ByRef MonitorWave As Wave, _
+                       ByRef AF_Data() As Double, _
+                       Optional ByVal HangeTime As Long = 0, _
+                       Optional ByVal RampMode As Long = 1) As Long
+                       
+    Dim ReturnVal As Long
+    Dim ProcessFile As String
+    Dim ProcessName As String
+    
+    Dim i As Long
+    Dim N As Long
+    Dim TempDataIn() As Long
+    Dim TempDataOut() As Long
+        
+    'Boot the ADWIN board if it isn't already
+    If ADWIN.ADWIN_BootBoard(MonitorWave.BoardUsed) = False Then
+    
+        'Test to see if the Boot was successful
+        DoRampADWIN = -1
+        
+        Exit Function
+        
+    End If
+    
+    'Now clear all the process on the ADWIN board
+    ReturnVal = ADWIN.ClearAll_Processes
+    
+    'Otherwise, the board is booted and ready to go
+    
+    'The the BIN filename for the process to load next
+    ProcessFile = "sineout.T91"
+    ProcessName = "AF Ramp"
+        
+    'Load the 1st process, the AF Ramp output
+    ReturnVal = ADWIN.Load_Process(ADWIN.BinFolderPath & ProcessFile)
+    
+    'ReturnVal of 1 = OK, ReturnVal <> 1 = Error occurred
+    If ReturnVal <> 1 Then
+    
+        Err.Raise ReturnVal, _
+                  "DoRampADWIN->ADWIN.Load_Process", _
+                  "Unable to load " & ProcessName & " process." & _
+                  vbNewLine & vbNewLine & _
+                  "Bin File = " & ProcessFile & vbNewLine & _
+                  "ADWIN Dev No. = " & Trim(Str(ADWIN.GetDeviceNo))
+                                    
+        DoRampADWIN = ReturnVal
+        
+    End If
+    
+'----------------------------------------------------------------------------------------------'
+'----------------------------------------------------------------------------------------------'
+    
+    'Now need to load all of the parameters for the processes
+    
+'----------------------------------------------------------------------------------------------'
+'----------------------------------------------------------------------------------------------'
+'
+'   Load Float Parameters first - must be passed in as Single data-type
+'
+'----------------------------------------------------------------------------------------------'
+'
+'   #define SLOPE_UP    FPAR_31 ' volts / second
+'   #define SLOPE_DOWN  FPAR_32 ' volts / second
+'   #define PEAKVOLTAGE FPAR_33 ' volts
+'   #define PEAK_DELAY  FPAR_34 ' seconds
+'   #define FREQMIN        FPAR_35 ' frequency of DAC sine wave field in Hz
+'   #define FREQMAX        FPAR_36
+'   #define AC_AMPL_LIMIT   FPAR_37
+'----------------------------------------------------------------------------------------------'
+
+    'Need to calculate the Slope Up and the Slope Down from the Peak monitor voltage
+    'and the Ramp Up & Down durations
+    
+    UpWave.Slope = UpWave.PeakVoltage / UpWave.Duration * 1000
+    DownWave.Slope = DownWave.PeakVoltage / DownWave.Duration * 1000
+    
+    ADWIN.Set_Fpar 31, CSng(UpWave.Slope)
+    ADWIN.Set_Fpar 32, CSng(DownWave.Slope)
+    
+    'Set the peak monitor voltage
+    ADWIN.Set_Fpar 33, CSng(MonitorWave.PeakVoltage)
+    
+    'Set the hange time at peak
+    ADWIN.Set_Fpar 34, CSng(HangeTime / 1000)
+    
+    'Set the Min & sine Wave freq,
+    ADWIN.Set_Fpar 35, CSng(MonitorWave.SineFreqMin)
+    
+    'Set the Ramp Up absolute voltage peak limit
+    ADWIN.Set_Fpar 36, CSng(UpWave.PeakVoltage)
+    
+'----------------------------------------------------------------------------------------------'
+'
+'   Load the Long-type parameters next
+'
+'----------------------------------------------------------------------------------------------'
+'
+'    '--------------------------------------------------------------------------------
+'    'Modifications for different styles of Ramp cycle needed by the Visual Basic
+'    'GUI to do:
+'    ' 1 - Normal, Monitored AF RAMP, without external storage of Ramp data
+'    ' 2 - Debug mode, Monitored AF RAMP, with external storage of Ramp data
+'    '     this mode will also be used to do Field Calibration of the AF Ramp in tandem
+'    '     with a computer controlled Hirst 908A Guassmeter & Axial or Transverse Hall-probes
+'    ' 3 - Clipping test, unmonitored AF RAMP, with external storage of Ramp data
+'    ' 4 - AF Tuning run, unmonitored AF Ramp, with freq varying from min to max freq with
+'    '     external storage of data
+'    '--------------------------------------------------------------------------------
+'    #define RAMPMODE PAR_31
+'
+'    '--------------------------------------------------------------------------------
+'    'Modified values of three ports to be setable by passing in a parameter
+'    'from the external GUI program.
+'    '--------------------------------------------------------------------------------
+'    #define PORT_SINEOUT PAR_32  '(March 2010, I Hilburn - creating global const to store the DAC-OUT port number for the sine wave output)
+'    #define PORT_ACCUR PAR_33
+'
+'    '--------------------------------------------------------------------------------
+'    'Speed in process cycle delay at which to run the AF Ramp IO process
+'    '--------------------------------------------------------------------------------
+'    #define AFRAMP_PD PAR_34
+'
+'    '--------------------------------------------------------------------------------
+'    'Distance in 16-bit integer counts that max input value gets within the target
+'    'peak before the ramp up process finishes
+'    '--------------------------------------------------------------------------------
+'    #define NOISELEVEL PAR_35
+'----------------------------------------------------------------------------------------------'
+    
+    'Set the RampMode Parameter
+    ADWIN.Set_Par 31, RampMode
+                  
+    'Set the AF Ramp DAC output port parameter
+    ADWIN.Set_Par 32, 1
+    
+    'Set the AF monitor ADC input port parameter
+    ADWIN.Set_Par 33, 1
+      
+    'Set the AF ramp rate - with conversion of Hz to ADWIN Process delay with a 25 ns processor
+    'cycling time
+    ADWIN.Set_Par 34, CLng(1000000# / UpWave.IORate * 40)
+    
+    'Set the AF Noise level
+    ADWIN.Set_Par 35, CLng(NoiseLevel * (2 ^ 16) / Abs(UpWave.Range.MaxValue - UpWave.Range.MinValue))
+    
+    'All the necessary parameters have been set now
+    
+'----------------------------------------------------------------------------------------------'
+'----------------------------------------------------------------------------------------------'
+
+    'Start the Ramp process
+    ADWIN.Start_Process 1
+    
+    'Set Monitor Wave Duration
+    MonitorWave.Duration = UpWave.Duration + DownWave.Duration + PeakHangeTime + 200
+    
+    'Wait for the duration of the Ramp cycle + 200 ms
+    PauseTill timeGetTime() + MonitorWave.Duration
+            
+    'Now Get the basic parameters that we need to know about the AF Ramp
+    'whether or not we're in debug or clipping mode
+   
+   'Get the final point of the DAC output (OUTCOUNT)
+    DownWave.CurrentPoint = ADWIN.Get_Par(5)
+    
+    'Get the point # of the last ADC input point from the INCOUNT parameter
+    MonitorWave.CurrentPoint = ADWIN.Get_Par(6)
+
+    'Get the point # of the last DAC output point from the Ramp Up process
+    UpWave.CurrentPoint = ADWIN.Get_Par(7)
+    
+    'Get the first point # of the DAC output Ramp Down process
+    DownWave.StartPoint = ADWIN.Get_Par(8)
+    
+    'Get the max input voltage reached
+    MonitorWave.CurrentVoltage = ADWIN.Get_Fpar(4)
+    
+    'Get the max output voltage reached
+    UpWave.CurrentVoltage = ADWIN.Get_Fpar(5)
+    
+    'Get the Ramp process Time steps from the ADWIN board - ACOUT_TIMESTEP
+    UpWave.TimeStep = ADWIN.Get_Fpar(6)
+    MonitorWave.TimeStep = UpWave.TimeStep
+    
+    'Get the actual used points per period from the ADWIN board - NSAMPLES
+    MonitorWave.PtsPerPeriod = ADWIN.Get_Fpar(7)
+    
+    'Store the Slope Up and Slope Down in the UpWave.Slope and DownWave.Slope
+    UpWave.Slope = ADWIN.Get_Fpar(31)
+    DownWave.Slope = ADWIN.Get_Fpar(32)
+    
+'    'Plot the AF Ramp Results in the picture box on the form
+'    PlotAFResults MonitorWave, _
+'                  UpWave, _
+'                  DownWave
+    
+    'Now need to retrieve the Ramp Data, if Verbose = True
+    If RampMode > 1 Then
+    
+        'Pause for half the duration of the last ramp cycle for Ramp Data arrays
+        'to become available
+        PauseTill timeGetTime() + MonitorWave.Duration \ 2
+        
+        'Set N = the maximum # of data points that can be stored by
+        'the ADWIN code = MAXALLOWEDDATAPTS
+        N = ADWIN.Get_Par(11)
+
+'---------------------------------------------------------------------------------------------'
+'
+'   April 29, 2010
+'   I Hilburn
+'
+'   This code is now obsolete, could cause some problems downstream if this function
+'   is called during an AF Tune, Auto-clip test, or Auto-calibrate run
+'
+'---------------------------------------------------------------------------------------------'
+'        'If the INCOUNT or RAmp up count, or Ramp Down start count are
+'        'larger than N, then then these values need to be altered
+'        'No data has been stored by the ADWIN board for ramp points with INCOUNT > N
+'        If N < MonitorWave.CurrentPoint Then MonitorWave.CurrentPoint = N
+'        If N < UpWave.CurrentPoint Then
+'
+'            UpWave.CurrentPoint = N
+'            DownWave.StartPoint = -1
+'
+'        ElseIf N < DownWave.StartPoint Then
+'
+'            DownWave.StartPoint = -1
+'
+'        End If
+'---------------------------------------------------------------------------------------------'
+                
+        'Redimension the Temp & AF_Data arrays so that they are the
+        'Same size as the number of INCOUNT points
+        ReDim AF_Data(MonitorWave.CurrentPoint, 2)
+        ReDim TempDataIn(MonitorWave.CurrentPoint + 1)
+        ReDim TempDataOut(MonitorWave.CurrentPoint + 1)
+        
+        'No get the data from the LONG valued ADWIN external memory data arrays
+        'loaded into TempDataIn and TempDataOut
+        ADWIN.GetData_Long 31, 1, MonitorWave.CurrentPoint, TempDataIn
+        ADWIN.GetData_Long 32, 1, MonitorWave.CurrentPoint, TempDataOut
+        
+        For i = 1 To MonitorWave.CurrentPoint
+        
+            AF_Data(i - 1, 0) = UpWave.Range.ADWIN_RangeConverter(, TempDataIn(i))
+            AF_Data(i - 1, 1) = UpWave.Range.ADWIN_RangeConverter(, TempDataOut(i))
+            
+        Next i
+                                           
+    End If
+        
+    'Clear all processes on the ADWIN board
+    ReturnVal = ADWIN.ClearAll_Processes
+        
+    DoRampADWIN = 0
+    
+End Function
+Public Sub DoSineFitAnalysis _
+    (ByRef AFMonitor() As Double, _
+     ByRef SineFit_Data() As Double, _
+     ByRef MonitorWave As Wave, _
+     ByRef UpWave As Wave, _
+     ByRef DownWave As Wave, _
+     Optional ByVal PtsBetweenFit As Long = 4000)
+
+    Dim i As Long
+    Dim j As Long
+    Dim N As Long
+    Dim NumSineFits As Long
+    Dim FitLength
+        
+    Dim BadFit As Boolean
+        
+    Dim SineData() As Double
+    Dim Sine_Fit() As Double
+    Dim Sine_Res() As Double
+    Dim FitParams(4) As Double
+    Dim RMS As Double
+    Dim TempD As Double
+    Dim TempD2 As Double
+    Dim MaxAmpIn As Double
+    Dim MaxAmpOut As Double
+    
+'    Dim fso As FileSystemObject
+'    Dim SineStream As TextStream
+    
+    'Find number of AF monitor input points, and then calculate the number of SineFits
+    'to do from that
+    NumSineFits = MonitorWave.CurrentPoint \ PtsBetweenFit
+    
+    'Set N = number of elements in AFMonitor
+    N = UBound(AFMonitor, 1)
+    
+    'Redimension the SineFit_Data array
+    ReDim SineFit_Data(NumSineFits, 10)
+    
+    'Calculate how many points per sine fit from the period of the sine wave + the timestep
+    FitLength = (CLng(1 / (MonitorWave.SineFreqMin * MonitorWave.TimeStep)) + 1) * 2
+    
+    'Re-adjust fit-length if it's greater than the number of points between fits - no overlapping
+    'fit windows!
+    If FitLength > PtsBetweenFit Then FitLength = PtsBetweenFit
+    
+    If NumSineFits = 1 And MonitorWave.CurrentPoint < FitLength Then
+    
+        For j = 0 To 9
+        
+            SineFit_Data(0, j) = -1
+            
+        Next j
+    
+        Exit Sub
+        
+    End If
+    
+    'Redimension the Sine Fit function arrays based on FitLength
+    ReDim SineData(FitLength)
+    ReDim Sine_Fit(FitLength)
+    ReDim Sine_est(FitLength)
+    
+''-------------------------------------------------------------------------------------'
+''-------------------------------------------------------------------------------------'
+''
+''       Debug code only
+''
+''-------------------------------------------------------------------------------------'
+'
+'    Set fso = New FileSystemObject
+'    Set SineStream = fso.CreateTextFile("C:\Documents and Settings\lab\" & _
+'                                        "Desktop\Test MCC Board 11-16-2009\" & _
+'                                        "ADWIN Ramp Data\SineDebug_" & _
+'                                        Format(Now, "MM-DD-YY_HH-MM-SS") & ".csv")
+''-------------------------------------------------------------------------------------'
+''-------------------------------------------------------------------------------------'
+                                        
+    'Loop through the number of sine fits
+    For i = 0 To NumSineFits - 1
+    
+        'Reset MaxAmpIn = 0
+        MaxAmpIn = 0
+        MaxAmpOut = 0
+    
+        'Load the correct number of points into the SineData array
+        For j = 0 To FitLength - 1
+        
+            If PtsBetweenFit * i + j > N - 1 Then
+            
+                'Code is trying to reach beyond the end of the AFMonitor array
+                'end for loop
+                
+                'Reset the number of sine-fits - there were too many specified
+                NumSineFits = i
+                                
+                'Resize the Sine Fit array one element smaller
+                ReDim Preserve SineFit_Data(NumSineFits, 10)
+            
+                'End the sine-fit analysis now - we're out of data points
+                Exit Sub
+                
+            End If
+        
+            'Set AF Monitor = TempD local variable
+            TempD = AFMonitor(PtsBetweenFit * i + j, 0)
+            TempD2 = AFMonitor(PtsBetweenFit * i + j, 1)
+            
+            'Snatch the correct point from the input data array
+            SineData(j) = TempD
+            
+'            Debug.Print SineData(j)
+            
+            'Find Max IO Voltages during fit period
+            If MaxAmpIn < Abs(TempD) Then MaxAmpIn = Abs(TempD)
+            If MaxAmpOut < Abs(TempD2) Then MaxAmpOut = Abs(TempD2)
+            
+        Next j
+        
+        'Turn on error handling
+        On Error Resume Next
+        
+            'Do the Sine fit
+            SineFit SineData, _
+                    MonitorWave.TimeStep, _
+                    MonitorWave.SineFreqMin, _
+                    FitParams, _
+                    Sine_Fit, _
+                    Sine_Res, _
+                    RMS ',
+                    'SineStream
+                    
+            'Check for errors
+            If Err.number <> 0 Then
+            
+                'Sine fit failed, check for inversion error
+                'Toggle Fit Error Status Flag
+                BadFit = True
+                
+            Else
+            
+                BadFit = False
+                
+            End If
+        
+        'Return error flow to normal
+        On Error GoTo 0
+        
+        If BadFit = True Then
+        
+            SineFit_Data(i, 0) = PtsBetweenFit * i
+            SineFit_Data(i, 1) = MonitorWave.TimeStep * PtsBetweenFit * i
+            SineFit_Data(i, 2) = MaxAmpIn
+            SineFit_Data(i, 3) = -1
+            SineFit_Data(i, 4) = MonitorWave.SineFreqMin
+            SineFit_Data(i, 5) = -1
+            SineFit_Data(i, 6) = -1
+            SineFit_Data(i, 7) = -1
+            SineFit_Data(i, 8) = -1
+            SineFit_Data(i, 9) = MaxAmpOut
+            
+        Else
+        
+            SineFit_Data(i, 0) = PtsBetweenFit * i
+            SineFit_Data(i, 1) = MonitorWave.TimeStep * PtsBetweenFit * i
+            SineFit_Data(i, 2) = MaxAmpIn
+            SineFit_Data(i, 3) = FitParams(1)
+            SineFit_Data(i, 4) = MonitorWave.SineFreqMin
+            SineFit_Data(i, 5) = FitParams(2)
+            SineFit_Data(i, 6) = FitParams(0)
+            SineFit_Data(i, 7) = FitParams(3)
+            SineFit_Data(i, 8) = RMS
+            SineFit_Data(i, 9) = MaxAmpOut
+            
+        End If
+        
+        DoEvents
+        
+    Next i
+
+End Sub
+Private Sub PlotAFResults(ByRef MonitorWave As Wave, _
+                          ByRef UpWave As Wave, _
+                          ByRef DownWave As Wave)
+                          
+    Dim i As Long
+    Dim j As Long
+    Dim N As Long
+    
+    Dim RoundingPower As Long
+    Dim LabelString As String
+    Dim YLabel As String
+    Dim doContinue As Boolean
+    Dim SkipLabel As Boolean
+    Dim CurX As Long
+    Dim CurY As Long
+    Dim PrevX As Long
+    Dim PrevY As Long
+    Dim TempD As Double
+                       
+    'Get number of sine-fits to plot
+    N = UBound(SineFit_Data, 1)
+                       
+    'Draw in Axes and Unit Labels
+                                
+    'Set Font Size
+    picAFRamp.FontSize = 8
+    
+    'Clear Picture Box
+    picAFRamp.Cls
+       
+    'Draw The Bounds of the DC Response Voltage Display Window
+    picAFRamp.Line (650, 500)-(650, 1500) 'Vertical axis - Field or Monitor Voltage
+    picAFRamp.Line (650, 500)-(3000, 500) 'Horizontal axis - Time (ms)
+    
+    'Determine the Units (Field + Unit or Voltage) for the Y-axis
+    If (optCoil(0).Value = True And AxialCoilCal = True) Or _
+       (optCoil(1).Value = True And TransCoilCal = True) _
+    Then
+    
+        YLabel = "Field (" & _
+                 Trim(Me.cmbFieldUnits.ItemData(cmbFieldUnits.ListIndex)) & _
+                 ")"
+                 
+    Else
+    
+        YLabel = "Volts"
+        
+    End If
+    
+    'Plot the units for the Y-axis
+    picAFRamp.CurrentY = 100
+    picAFRamp.CurrentX = 200
+    picAFRamp.Print YLabel
+    
+    'Plot the label + units for the X-Axis
+    picAFRamp.CurrentY = 100 + 1.5 * picAFRamp.TextWidth("0")
+    picAFRamp.CurrentX = 1500 - picAFRamp.TextWidth("Ramp Output Voltage") / 2
+    picAFRamp.Print "Time (s)"
+        
+    'Now can scale and label the y-axis for RMS
+    'Find range of difference between Biggest and Smallest Amplitudes
+    RMSInterval = MaxRMS - MinRMS
+    
+    'If RMS Interval < 0, swap min and max RMS
+    If RMSInterval < 0 Then
+    
+        TempD = MaxRMS
+        MaxRMS = MinRMS
+        MinRMS = TempD
+        RMSInterval = -1 * RMSInterval
+        
+    ElseIf RMSInterval = 0 Then
+    
+        RMSInterval = 0.0001
+        
+    End If
+        
+    'Need to now find the rounding factor to use to divide Amp interval into
+    'four easy to display numbers
+    'NOTE:  If BiggestAmp < Smallest Amp, the code below will cause an error
+    '       by taking the log of a negative number!!
+    RoundingPower = Int(Log(RMSInterval / 4) / Log(10))
+    
+    'Change Rounding Power so that it is now the number of places to
+    'keep to the right of the decimal point
+    If RoundingPower > 0 Then RoundingPower = 0
+    RoundingPower = -1 * RoundingPower
+    
+    'Need to keep track of how different from the rounded label,
+    'the true max value is
+    MaxValueMinusLabel_RMS = MaxRMS - Round(MaxRMS, RoundingPower)
+    MinValueMinusLabel_RMS = MinRMS - Round(MinRMS, RoundingPower)
+    
+    'Initialize j to zero
+    j = 0
+    
+    'Need to scale and label the Y-axis
+    For i = 8000 To 2000 Step -1500
+    
+        picAFRamp.Line (1800, i)-(1950, i)  'Draw Vertical tick mark
+        
+        LabelString = Trim(Str(Round(MinRMS + j * RMSInterval / 4, RoundingPower)))
+'        Debug.Print LabelString
+        j = j + 1
+        
+        'Now run loop to see how to fit the entire freq label in
+        'the space available
+        doContinue = False
+        
+        Do
+        
+            If picAFRamp.TextWidth(LabelString) > 1700 Then
+            
+                'Cut Label into two pieces at the mid-point
+                'and now check if the two pieces will fit
+                If picAFRamp.TextWidth(LabelString) > 800 Then
+                
+                    'Lower the Font size and run the loop again
+                    picAFRamp.FontSize = picAFRamp.FontSize - 1
+                    picAFRamp.FontName = picAFRamp.FontName
+                    picAFRamp.FontSize = Int(picAFRamp.FontSize)
+                    
+                    doContinue = True
+                    
+                Else
+                
+                    'Print out the two lines centered around
+                    'the tickmark
+                    'First Piece
+                    picAFRamp.CurrentX = 500
+                    picAFRamp.CurrentY = i - picAFRamp.TextHeight(LabelString)
+                    picAFRamp.Print Mid(LabelString, 1, Len(LabelString) \ 2)
+                    
+                    'Second Piece
+                    picAFRamp.CurrentX = 500
+                    picAFRamp.CurrentY = i
+                    picAFRamp.Print Mid(LabelString, Len(LabelString) \ 2 + 1)
+                    
+                    doContinue = False
+                    
+                End If
+                
+            Else
+            
+                'Freq String for label is small enough to fit in the allotted space
+                'Plot the label
+                picAFRamp.CurrentX = 1700 - picAFRamp.TextWidth(LabelString)
+                picAFRamp.CurrentY = i - picAFRamp.TextHeight(LabelString) / 2
+                
+                picAFRamp.Print LabelString
+                
+                doContinue = False
+                
+            End If
+        
+        Loop Until doContinue = False
+        
+    Next i
+    
+    
+    'Now can scale and label the y-axis for Monitor Voltage
+    'Find range of difference between Biggest and Smallest Amplitudes
+    'Debug.Print MaxAmp
+    AmpInterval = MaxAmp
+    
+    If AmpInterval < 0 Then
+    
+        MaxAmp = -1 * MaxAmp
+        AmpInterval = -1 * AmpInterval
+        
+    ElseIf AmpInterval = 0 Then
+    
+        AmpInterval = 0.0001
+        
+    End If
+    
+    'Need to now find the rounding factor to use to divide Amp interval into
+    'four easy to display numbers
+    'NOTE:  If BiggestAmp < Smallest Amp, the code below will cause an error
+    '       by taking the log of a negative number!!
+    RoundingPower = Int(Log(AmpInterval / 4) / Log(10))
+    
+    'Change Rounding Power so that it is now the number of places to
+    'keep to the right of the decimal point
+    If RoundingPower > 0 Then RoundingPower = 0
+    RoundingPower = -1 * RoundingPower
+    
+    'Need to keep track of how different from the rounded label,
+    'the true max value is
+    MaxValueMinusLabel_Amp = MaxAmp - Round(MaxAmp, RoundingPower)
+        
+    'Initialize j to zero
+    j = 0
+    
+    'Need to scale and label the Y-axis
+    For i = 8000 To 2000 Step -1500
+    
+        picAFRamp.Line (13000, i)-(13150, i)  'Draw Vertical tick mark
+        
+        LabelString = Trim(Str(Round(j * AmpInterval / 4, RoundingPower)))
+'        Debug.Print LabelString
+        j = j + 1
+        
+        'Now run loop to see how to fit the entire freq label in
+        'the space available
+        doContinue = False
+        
+        Do
+        
+            If picAFRamp.TextWidth(LabelString) > 1700 Then
+            
+                'Cut Label into two pieces at the mid-point
+                'and now check if the two pieces will fit
+                If picAFRamp.TextWidth(LabelString) > 800 Then
+                
+                    'Lower the Font size and run the loop again
+                    picAFRamp.FontSize = picAFRamp.FontSize - 1
+                    picAFRamp.FontName = picAFRamp.FontName
+                    picAFRamp.FontSize = Int(picAFRamp.FontSize)
+                    
+                    doContinue = True
+                    
+                Else
+                
+                    'Print out the two lines centered around
+                    'the tickmark
+                    'First Piece
+                    picAFRamp.CurrentX = 13200
+                    picAFRamp.CurrentY = i - picAFRamp.TextHeight(LabelString)
+                    picAFRamp.Print Mid(LabelString, 1, Len(LabelString) \ 2)
+                    
+                    'Second Piece
+                    picAFRamp.CurrentX = 13200
+                    picAFRamp.CurrentY = i
+                    picAFRamp.Print Mid(LabelString, Len(LabelString) \ 2 + 1)
+                    
+                    doContinue = False
+                    
+                End If
+                
+            Else
+            
+                'Freq String for label is small enough to fit in the allotted space
+                'Plot the label
+                picAFRamp.CurrentX = 13200
+                picAFRamp.CurrentY = i - picAFRamp.TextHeight(LabelString) / 2
+                
+                picAFRamp.Print LabelString
+                
+                doContinue = False
+                
+            End If
+        
+        Loop Until doContinue = False
+        
+    Next i
+    
+    'Now Plot X-axis labels and tick marks
+    
+    'Figure out the range of voltages that were swept through
+    VoltRange = HighVoltage - StartVoltage
+    
+    'if VoltRange is negative, need to swap High & Start voltages
+    If VoltRange < 0 Then
+    
+        TempD = HighVoltage
+        HighVoltage = StartVoltage
+        StartVoltage = TempD
+        VoltRange = -1 * VoltRange
+    
+    ElseIf VoltRange = 0 Then
+    
+        VoltRange = 0.0001
+        
+    End If
+        
+    'Need to now find the rounding factor to use to divide Amp interval into
+    'four easy to display numbers
+    'NOTE:  If BiggestAmp < Smallest Amp, the code below will cause an error
+    '       by taking the log of a negative number!!
+    RoundingPower = Int(Log(VoltRange / 10) / Log(10))
+    
+    'Change Rounding Power so that it is now the number of places to
+    'keep to the right of the decimal point
+    If RoundingPower > 0 Then RoundingPower = 0
+    RoundingPower = -1 * RoundingPower
+    
+    'Initialize j to zero
+    j = 0
+    
+    'Initialize font to size 9
+    picAFRamp.FontSize = 9
+    
+    For i = 1950 To 13000 Step 1105
+    
+        picAFRamp.Line (i, 8000)-(i, 8200)  'Draw Vertical tick mark
+        
+        LabelString = Trim(Str(Round(StartVoltage + j * VoltRange / 10, RoundingPower)))
+'       Debug.Print LabelString
+        j = j + 1
+        
+        doContinue = False
+        
+        If SkipLabel = True Then
+        
+            SkipLabel = False
+            
+        Else
+            
+            Do
+             
+                'Check to see if the text Width of the Freq label is greater
+                'than the XInterval for each Freq
+                If picAFRamp.TextWidth(LabelString) > 0.8 * 1225 Then
+                 
+                    'Not enough vertical space, lower the font size and
+                    'repeat the label size check
+                    picAFRamp.FontSize = picAFRamp.FontSize - 1
+                     
+                    If picAFRamp.FontSize <= 7.8 Then
+                     
+                        'Skip everyother label
+                        SkipLabel = True
+                         
+                        'Plot this label
+                        picAFRamp.CurrentX = i - CLng(picAFRamp.TextWidth(LabelString) / 2)
+                        picAFRamp.CurrentY = 8300
+                        picAFRamp.Print LabelString
+                         
+                        doContinue = False
+                         
+                    Else
+                     
+                        doContinue = True
+                        
+                    End If
+                     
+                Else
+                 
+                     'There's enough room to plot the Freq label horizontally
+                     picAFRamp.CurrentX = i - CLng(picAFRamp.TextWidth(LabelString) / 2)
+                     picAFRamp.CurrentY = 8300
+                     
+                     picAFRamp.Print LabelString
+                     
+                     doContinue = False
+                 
+                 End If
+            
+            Loop Until doContinue = False
+    
+        End If
+    
+    Next i
+    
+    'Set the line draw width larger
+    picAFRamp.DrawWidth = 1
+    
+    'Now Plot the RMS VS Ramp Input Voltages
+    For i = 1 To N - 1
+    
+        If SineFit_Data(i - 1, 9) >= StartVoltage Then
+        
+            'Translate this point in the SineFit_Data into an x-coordinate
+            CurX = CLng(1950 + (SineFit_Data(i, 9) - StartVoltage) _
+                                 * 11050 / VoltRange)
+                                
+            'Translate previous point in the SineFit_Data into an x-coordinate
+            PrevX = CLng(1950 + (SineFit_Data(i - 1, 9) - StartVoltage) _
+                                 * 11050 / VoltRange)
+            
+            'Translate Cur RMS value into a Y-co0rdinate
+            CurY = CLng(8000 - (SineFit_Data(i, 8) - MinRMS + MinValueMinusLabel_RMS) * 6000 / RMSInterval)
+            
+            'Translate Previous RMS value into a Y-co0rdinate
+            PrevY = CLng(8000 - (SineFit_Data(i - 1, 8) - MinRMS + MinValueMinusLabel_RMS) * 6000 / RMSInterval)
+            
+            'Now check to see if we're in the Ramp Up or Ramp down phase of the data
+            If SineFit_Data(i, 0) < PeakPoint Then
+            
+                picAFRamp.DrawStyle = 0
+                
+            Else
+            
+                picAFRamp.DrawStyle = 2
+                
+            End If
+        
+            picAFRamp.Line (PrevX, PrevY)-(CurX, CurY), QBColor(1)
+        
+            'Translate this point in the SineFit_Data into an x-coordinate
+            CurX = CLng(1950 + (SineFit_Data(i, 9) - StartVoltage) _
+                                 * 11050 / VoltRange)
+                                
+            'Translate previous point in the SineFit_Data into an x-coordinate
+            PrevX = CLng(1950 + (SineFit_Data(i - 1, 9) - StartVoltage) _
+                                 * 11050 / VoltRange)
+            
+            'Translate Cur RMS value into a Y-co0rdinate
+            CurY = CLng(8000 - (SineFit_Data(i, 3)) * 6000 / AmpInterval)
+            
+            'Translate Previous RMS value into a Y-co0rdinate
+            PrevY = CLng(8000 - (SineFit_Data(i - 1, 3)) * 6000 / AmpInterval)
+            
+            picAFRamp.Line (PrevX, PrevY)-(CurX, CurY), QBColor(13)
+                        
+        End If
+        
+    Next i
+    
+    'Return Draw Width to 1
+    picAFRamp.DrawWidth = 1
+    
+    'Return DrawStyle to 0
+    picAFRamp.DrawStyle = 0
+    
+                          
+End Sub
+
+Private Sub cmdOpenDAQComm_Click()
+
+    frmDAQ_Comm.Show
+    
+End Sub
+
+Private Sub cmdStartAFTuner_Click()
+    
+    Me.Hide
+    frmAFTuner.Show
+            
+End Sub
+
+Public Sub cmdStartRamp_Click()
+
+    Dim Verbose As Boolean
+    Dim ClippingTest As Boolean
+        
+    Set UpWave = Nothing
+    Set DownWave = Nothing
+    Set MonitorWave = Nothing
+    
+    Dim AF_Data() As Double
+    Dim SineFit_Data() As Double
+    
+    Dim RampMode As Long
+    
+    Dim RampAgain As Boolean
+    Dim ReRampCounter As Long
+    
+    Dim FolderName As String
+    Dim CurTime
+    
+    If WaveForms Is Nothing Or WaveForms.Count = 0 Then
+    
+        'CRAP!
+        MsgBox "Bad Ramp Wave info!" & vbNewLine & _
+                "Garbage values must have been dumped into the Ramp Wave object." & _
+                vbNewLine & "Code will end right now!"
+        
+        End
+    
+    End If
+    
+    Set MonitorWave = WaveForms("AFMONITOR")
+    Set UpWave = WaveForms("AFRAMPUP")
+    Set DownWave = WaveForms("AFRAMPDOWN")
+    
+    If val(txtRampPeakDuration) < 0 Then
+    
+        'Reset bad peak hold time to zero seconds
+        txtRampPeakDuration = "0"
+        
+    End If
+    
+    With UpWave
+    
+        .Duration = val(txtRampUpDuration)
+        .IORate = val(txtRampRate)
+        .TimeStep = 1 / .IORate
+
+        .Range.MaxValue = 10
+        .Range.MinValue = -10
+        .PeakVoltage = val(txtRampPeakVoltage)
+        
+        If .PeakVoltage > .Range.MaxValue Then
+        
+            .PeakVoltage = .Range.MaxValue
+            txtRampPeakVoltage = Trim(Str(.PeakVoltage))
+            
+        End If
+        
+    End With
+    
+    With DownWave
+    
+        .Duration = val(txtRampDownDuration)
+        .IORate = UpWave.IORate
+        .TimeStep = UpWave.TimeStep
+        
+        .IOOptions = UpWave.IOOptions
+        
+        Set .Range = UpWave.Range
+        .PeakVoltage = UpWave.PeakVoltage
+        
+        If .PeakVoltage > .Range.MaxValue Then
+        
+            .PeakVoltage = .Range.MaxValue
+            txtRampPeakVoltage.text = Trim(Str(.PeakVoltage))
+            
+        End If
+        
+    End With
+    
+    With MonitorWave
+        
+        .Duration = (UpWave.Duration + DownWave.Duration) + val(txtRampPeakDuration.text) + 100
+    
+        'Record the sine freq that the user has selected on the
+        'main page as the sine freq that the monitor is trying to match
+        .SineFreqMin = val(txtFreq)
+        .SineFreqMax = .SineFreqMin
+        
+        'Now see if 100 pts per period resolution is below the max analog
+        'in rate for the board associated with this wave
+        .IORate = UpWave.IORate
+        
+        .PeakVoltage = val(txtMonitorTrigVolt)
+        .Range.MaxValue = 10
+        .Range.MinValue = -10
+        
+        If .PeakVoltage > .Range.MaxValue Then
+        
+            .PeakVoltage = .Range.MaxValue
+            txtMonitorTrigVolt.text = Trim(Str(.PeakVoltage))
+            
+        End If
+        
+    End With
+    
+    'Now check to make sure we aren't bumping into the max voltage range for the
+    'selected coil
+    If optCoil(0).Value = True Then
+    
+        'Check to see if we're set above the max allowed monitor voltage
+        If MonitorWave.PeakVoltage > AxialMaxMonVoltage Then
+        
+            MonitorWave.PeakVoltage = AxialMaxMonVoltage
+                   
+        End If
+    
+        'Check to see if we're set above the max allowed ramp voltage
+        If UpWave.PeakVoltage > AxialMaxRampVoltage Then
+        
+            UpWave.PeakVoltage = AxialMaxRampVoltage
+                   
+        End If
+    
+    ElseIf optCoil(1).Value = True Then
+    
+        'Check to see if we're set above the max allowed monitor voltage
+        If MonitorWave.PeakVoltage > TransMaxMonVoltage Then
+        
+            MonitorWave.PeakVoltage = TransMaxMonVoltage
+            
+        End If
+    
+        'Check to see if we're set above the max allowed ramp voltage
+        If UpWave.PeakVoltage > TransMaxRampVoltage Then
+        
+            UpWave.PeakVoltage = TransMaxRampVoltage
+            
+        End If
+    
+    Else
+    
+        'No Coil selected
+        'Prompt user
+        MsgBox "No AF coil selected.  Please select a coil.", , _
+               "No Coil Selected"
+               
+    End If
+    
+    'Now check to see if user has clicked the Verbose? checkbox
+    If checkVerbose = Checked Then
+    
+        RampMode = 2
+        Verbose = True
+        
+    Else
+    
+        RampMode = 1
+        
+    End If
+    
+    'Now see if this is an unmonitored ramp cycle for a clipping test
+    If checkClippingTest.Value = Checked Then
+    
+        RampMode = 3
+        ClippingTest = True
+        
+    End If
+
+'---------------------------------------------'
+'---------------------------------------------'
+'   New Code mod
+'   April 13, 2010
+'   Isaac Hilburn
+'
+'   New Function call to do the ramp using
+'   the ADWIN board
+'---------------------------------------------'
+
+    'Set RampAgain = False as default
+    RampAgain = False
+    
+    'Initialize Re-ramp counter to zero
+    ReRampCounter = 0
+    
+    Do
+    
+        'Do the AF Ramp cycle
+        DoRampADWIN UpWave, _
+                    DownWave, _
+                    MonitorWave, _
+                    AF_Data, _
+                    val(txtRampPeakDuration), _
+                    RampMode
+                                        
+        'Is this a clipping test or a monitored ramp?
+        If RampMode < 3 And MonitorWave.CurrentVoltage < (MonitorWave.PeakVoltage - NoiseLevel) Then
+        
+            'This is a monitored ramp, if the target monitor peak voltage was not reached
+            'need to ramp again with a higher ramp voltage
+            
+            'Increase the Ramp (UpWave) peak voltage by the ratio of the highest reached
+            'monitor voltage and the desired monitor voltage * 1.5
+            '1st - store old Ramp peak voltage
+            TempD = UpWave.PeakVoltage
+            
+            'Now set new voltage
+            UpWave.PeakVoltage = TempD * _
+                                 (MonitorWave.PeakVoltage / MonitorWave.CurrentVoltage) * _
+                                 1.5
+                                 
+            'Now write the new peak voltage to the form window
+            Me.txtRampPeakVoltage = Format(UpWave.PeakVoltage, "0.0##")
+                                 
+            'Set RampAgain = True
+            RampAgain = True
+            
+            'Increment re-ramp counter
+            ReRampCounter = ReRampCounter + 1
+                                 
+        Else
+        
+            'Otherwise, don't ramp again
+            RampAgain = False
+            
+        End If
+            
+        'Check to make sure this new voltage does not exceed the maximum allowed Ramp Voltage
+        If optCoil(0).Value = True Then
+        
+            TempD = AxialMaxRampVoltage
+            
+        Else
+        
+            TempD = TransMaxRampVoltage
+            
+        End If
+        
+        If UpWave.PeakVoltage > TempD And ReRampCounter > -1 Then
+        
+            'Set Peak Ramp Voltage to the max allowed for this coil
+            UpWave.PeakVoltage = TempD
+        
+            'Set re-ramp counter to -2
+            ReRampCounter = -2
+        
+        ElseIf UpWave.PeakVoltage > TempD And ReRampCounter <= -1 Then
+        
+            'Set RampAgain = False, max voltage ramp has already been attempted
+            RampAgain = False
+            
+        End If
+        
+        'If Re-ramp counter gets above system threshold, throw an error
+        If ReRampCounter > ReRampThreshold Then
+        
+            Err.Raise 616, _
+                      "AF Ramp", _
+                      "Number of attempted ramps exceeds system threshold limit." & _
+                      vbNewLine & vbNewLine & _
+                      "Parameters:" & vbNewLine & _
+                      vbTab & "Peak Field = " & Trim(Me.txtPeakField) & _
+                      Trim(Me.cmbFieldUnits.ItemData(cmbFieldUnits.ListIndex)) & _
+                      vbNewLine & vbTab & "Mon. Peak Volt. = " & Trim(Me.txtMonitorTrigVolt) & _
+                      " V" & vbNewLine & vbTab & _
+                      "Ramp Peak Volt. = " & Trim(Me.txtRampPeakVoltage) & " V" & _
+                      vbNewLine & vbTab & "Number of Ramp Attempts = " & _
+                      Trim(Str(ReRampCounter)) & _
+                      vbNewLine & vbTab & "Max Allowed = " & Trim(Str(ReRampThreshold))
+        
+            Exit Sub
+            
+        End If
+        
+    Loop Until RampAgain = False
+                
+    'Now need to analyse the resulting sine fit data, if
+    'user has selected Verbose or ClippingTest ramp modes
+    If Verbose = True Or ClippingTest = True Then
+    
+        'Do sine fits on the monitor input data
+        DoSineFitAnalysis AF_Data, _
+                          SineFit_Data, _
+                          MonitorWave, _
+                          UpWave, _
+                          DownWave, _
+                          500
+        
+        'Get the current time
+        CurTime = Now
+        
+        'Set the Local Data folder name
+        'Check the Ramp Mode
+        If ClippingTest = True Then
+        
+            FolderName = CoilString & " Clip " & Trim(Str(UpWave.PeakVoltage)) & "V "
+            
+        Else
+        
+            FolderName = CoilString & " Ramp " & Trim(Str(MonitorWave.PeakVoltage)) & "V "
+            
+        End If
+        
+        FolderName = FolderName & " - " & Format(CurTime, "MM-DD-YY, HH MM SS") & "/"
+
+                 
+        'Now Call the Ramp data save function
+        frmFileSave.MultiRampFileSave_ADWIN AF_Data, _
+                                            UpWave.TimeStep, _
+                                            65000, _
+                                            FolderName, _
+                                            CurTime, _
+                                            SineFit_Data, _
+                                            False, _
+                                            True, _
+                                            CLng(MonitorWave.PtsPerPeriod) + 1
+                                            
+    End If
+                
+'---------------------------------------------'
+    
+End Sub
+
+Private Sub cmdTestGaussMeter_Click()
+
+    frm908AGaussmeter.Show
+
+End Sub
+
+Private Sub cmdClose_Click()
+    Me.Hide
+    Form_Unload 1
+    
+    End
+End Sub
+
+Private Sub Form_Load()
+
+    'In final version of this code added to the VB Paleomag program
+    'These initialization functions will be called
+    'In the login phase of the program and will pull their
+    'Values from the paleomag.ini file
+
+    'Set the AF System to ADWIN
+    AFSystem = "ADWIN"
+    
+    'Set the ADWIN Bin Folder Path
+    ADWIN.BinFolderPath = "C:\Documents and Settings\lab\Desktop\" & _
+                          "Test MCC Board 11-16-2009\Test MCC Board\ADwin\"
+   
+    'Set Interval at which Timer operates to 1 micro-s
+    timeBeginPeriod 1
+    
+    'Initialize Boards & Channels
+    Initialize_Boards
+        
+    'Initialize Waves
+    Initialize_Waves
+    
+'----------------------------------------------------------------------------------------'
+    'TEMPORARY CODE - Set globals
+    AxialResFreq = 919.5
+    TransResFreq = 324
+    AxialMaxMonVoltage = 7.9
+    AxialMaxRampVoltage = 2
+    TransMaxMonVoltage = 3.9
+    TransMaxRampVoltage = 2.5
+    ReRampThreshold = 5
+    NoiseLevel = 10 * (20 / 2 ^ 16)
+'----------------------------------------------------------------------------------------'
+    
+    'Set all the TTL relays to the closed position
+    optCoil_Click -1
+    
+    'Set Un-monitored /clipping test check-box to unchecked.
+    '(Clipping test = unmonitored ramp cycle)
+    Me.checkClippingTest.Value = Unchecked
+   
+    'Set Debug (AF Data save) mode to off
+    Me.checkVerbose.Value = Unchecked
+   
+    'Just for now, store values that are testing in user controls so can test code faster
+    If Me.optCoil(0).Value = True Then
+    
+        Me.txtFreq = "919.5"
+        
+    ElseIf Me.optCoil(1).Value = True Then
+    
+        Me.txtFreq = "324"
+        
+    Else
+    
+        Me.txtFreq = ""
+        
+    End If
+    
+    Me.txtRampUpDuration = "1000"
+    Me.txtRampDownDuration = "1000"
+    Me.txtRampRate = "50000"
+    Me.txtRampPeakVoltage = "0.3"
+    Me.txtMonitorTrigVolt = "1"
+    Me.txtPeakField = ""
+        
+End Sub
+
+Private Sub Form_Unload(Cancel As Integer)
+
+    Dim i As Long
+    Dim j As Long
+
+    'Return Timer to normal ~15 ms accuracy
+    timeEndPeriod 1
+    
+    'If the AFSystem is ADWIN, then open all the relays
+    optCoil_Click -2
+
+End Sub
+
+Public Sub optCoil_Click(Index As Integer)
+    
+    Dim TTLBoard As Board
+    Dim DataValue As Integer
+    Dim ReturnVal As Long
+    Dim i, N As Long
+    Dim MemBuffer As Long
+    Dim DataArray() As Double
+    Dim TempArray() As Integer
+    Dim Status As Integer
+    Dim CurCount, CurIndex As Long
+    
+    Dim ReturnArray(16) As Long
+        
+    Dim CRange As Range
+    Dim TempD As Double
+    Dim TempI As Integer
+    Dim Temp2_I As Integer
+    
+    Set TTLBoard = Nothing
+    
+    If AFSystem = "ADWIN" Then
+    
+        'Set the TTL Board = the ADWIN light board
+        Set TTLBoard = DAQBoards("ADWIN-light-16")
+        
+        'Make sure only one coil is selected at a time
+        If Index = 0 Then optCoil(1) = Not optCoil(0)
+        If Index = 1 Then optCoil(0) = Not optCoil(1)
+        
+        If Index = -1 Then
+        
+            'This is the call to open all of the TTL relays
+            TTLBoard.DigitalOut_ADWIN 0
+            
+            Me.txtFreq = ""
+            
+            Exit Sub
+            
+        End If
+        
+        If Index = -2 Then
+        
+            'This is the call to close all of the TTL relays
+            'This switches the 5V power supply to the relays off
+            'so that they don't over-heat
+            TTLBoard.DigitalOut_ADWIN 63
+                        
+            Me.txtFreq = ""
+            
+            Exit Sub
+            
+        End If
+             
+        'If Axial coil is selected
+        If optCoil(0).Value = True Then
+        
+            'Close the Axial relay, open all the other relays
+            TTLBoard.DigitalOut AFAxialRelay.ChanNum, _
+                                True, _
+                                True
+            
+            CoilString = "Axial"
+            Me.txtFreq = "919.5"
+            
+        ElseIf optCoil(1).Value = True Then
+    
+            'Close the Transverse relay, open all the other relays
+            TTLBoard.DigitalOut AFTransRelay.ChanNum, _
+                                True, _
+                                True
+            
+            CoilString = "Transverse"
+            Me.txtFreq = "324"
+            
+        End If
+        
+    End If
+    
+End Sub
+
+Private Sub txtFreq_Change()
+
+    If val(txtFreq) <> 0 Then
+        Me.txtRampPeakDuration = Trim(Str(1 / val(txtFreq) * 100000))
+    End If
+    
+End Sub
+
+
+

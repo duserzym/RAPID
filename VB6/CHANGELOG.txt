@@ -1,0 +1,185 @@
+PALEOMAGNETIC MAGNETOMETER CONTROL SYSTEM
+Copyright (C) 2010 by the California Institute of Technology
+Released under the GNU General Public License
+
+Developers: Robert Kopp (Caltech), Scott Bogue (Occidental College),
+Laurent Carporzen (MIT), Isaac Hilburn (Caltech)
+
+===
+
+CHANGE LOG
+
+version 2.3.9, 27 January 2010: Fixed some bugs related to the presence of several sam files in the registry.
+(LC)
+
+version 2.3.8, 10 January 2010: Fixed the constant rotation drift which was due to a integer rounding of the
+angle instead of using the motor units. Open SAM file now opens a visualization window, in which you can open
+with a text editor the samples and SAM files. Added new step types in the Rock Mag Routine: X gives the option
+of measuring only the susceptibility; UAF measures the sample after each axis demag; GRM AF will measure after
+each demag along Y, Z, X, Y, Z to check for gyromagnetic remanent magnetization following Stephenson 1993.
+Added a monopole survey while user logout, an email will be send to a rapid.consortium@gmail.com when login.
+Added in the Manual Measurement a Slow option where all the up/down speed are reduced to the slowest speed.
+Slow down to the lowest up/down speed until it reaches the AF to prevent breaking the rod. (LC)
+
+version 2.3.6, 17 March 2008: Added in the Settings (in Magnetometer tab) the number of seconds the system
+waits for the numbers to settle before taking a SQUID measurement (Read delay). Also, the IRM & ARM acquisition
+board MCC parameters have been add in the Settings (in Modules tab). The RMG files are created for all the
+measurements and possess new columns (Dec, Inc, CSD, remarks, etc.). In Set Rock Mag Routine, a line could be
+edited (its values appear in the manual Set Step line) with a right click on its #. New buttons in the AF
+Degausser window: we can add a delay between each axis ramp in order to cool down them (or the sample) during
+high AF levels; new buttons allow manual AFs (amplitude and sample height as inputs), this also able three axis
+high levels AF. The calibration of the rod altitudes should now work on all systems (+ or - altitudes and/or
+UpDownMotor1cm) and could correct the negative sample heights to a uniform convention of positive heights for
+the entire consortium. (LC)
+
+version 2.3.5, 11 December 2007: Some minor changes, including the new Vacuum code. (LC)
+
+version 2.3.4, 22 October 2007: Added new plots during the measurement, the possibility to rescan N times since
+the measurement is good, a verification of SQUID jumps by comparing the zeros, a calibration of the rod
+altitudes, try to have a Halt button which really stop the measurement, date and time stamps on specimen files,
+correction of the VRM to be able to pass midnight, icons. (LC) 
+
+version 2.3.3, 29 March 2007: Changed order of commands in frmAF.ExecuteRamp so that
+the axis election follows the amplitude setting, per Scott's suggestion. Added
+checks for stuck homing switch. (RK)
+
+version 2.3.2, 29 March 2007: Cleaned up files in directory (RK).
+
+version 2.3.1, 27 February 2007: Changed frmVacuum to add delays between carriage returns
+and commands sent to vacuum controller. This should make the code compatible with Chris
+Baumgartner's new controllers (RK).
+
+version 2.3.0, 12 February 2007: Relabeled Paleomag 2007 and gave new minor number. Added new
+notification functions: log files for error messages, date stamps on specimen and UP files, and
+axis and amplitude information for AF errors. Removed code for INI-format UP files. (RK)
+
+version 2.2.97, 2 December 2006: Added option to perform an AF Max step on holder before
+each holder measurement. (RK)
+
+version 2.2.96, 21 November 2006: Fixed usage of SampleNameCurrent and added SampleStepCurrent so that
+email notifications correctly identify current sample and step. (RK)
+
+version 2.2.95, 16 October 2006: Added quick and dirty single measurement VRM routine
+(accessible through diagnostics menu). (RK)
+
+version 2.2.94, 5 October 2006: Added ability to import rockmag routines from .RMG files. (RK)
+
+version 2.2.93, 21 June 2006: Removed all references to Break property. Exported Microsoft Word
+version of manual to make help file. (Ugly, I know, but at least it's there.) (RK)
+
+version 2.2.92, 20 June 2006: Tracked down age-old problem with Edgeport boxes hanging on Win2k
+machine -- stems from use of the MSComm Break property. (RK)
+
+version 2.2.91, 18 June 2006: Added default storage for the AF/Rockmag routine, per Scott's request
+for better defaults. Fixed tab order for Rockmag "The Works." Fixed handling of file path to allow
+use of SAM files from network shares. (RK)
+
+version 2.2.90, 17 June 2006: Implemented text-file based UP files, in an attempt to eliminate
+the 64 KB limit of INI files. Rebranded as Paleomag 2006. (RK)
+
+version 2.2.37, 17 June 2006: Per Scott's request, removed Caltech-specific branding.
+Logo file can now be specified by the LogoFile parameter in the Program section of the INI file.
+Also licensed under GPL. Moved susceptibility scale from FrmSettings to frmMagnetometerControl,
+per Joe's request. Relabeled non-critical AF errors as "alerts." Removed non-functional
+range box from frmMagnetometerControl. Added "Open Sample File" button to manual tab of frmMagnetometerControl.
+(RK)
+
+version 2.2.36, 17 May 2006: Update Sample.ReadSpec and Sample.WriteData so as to handle
+cases with missing spec files without fatal divide-by-zero errors. (RK)
+
+version 2.2.35, 14 May 2006: If PollAF does not return status zero, also checks
+to see if target amplitude is set to zero. This eliminates hangs for when the unit
+has reset. Also, if turning motor does not hit targets, rotates back to original position before
+trying again. (RK)
+
+version 2.2.34, 23 April 2006: -FormAF checks to see if the field is at zero after failing to get DONE msg in
+90 secs.  If so, it alerts you but presses on.  Along with the fiddling of the
+delays etc., we are getting NO AF hangs anymore.
+-the sample class mod: fixes a bug where (for example) nums that round to 10.0
+but fail the >=10 test get incorrectly formatted in the data file.  Now writes
+all decs as xxx.x w/ leading zeroes and incs as [ ]xx.x or -xx.x with leading
+zeros, so data files look a bit different. (SB)
+ 
+
+version 2.2.33, 3 April 2006: added a test in pollAF that checks the status of the AF after it times out (SB).
+
+version 2.2.32, 21 March 2006: Modified frmAF.GetResponse to extend delay from 0.01 to 0.05 s (SB).
+Fixed the info line in rmg so that it doesn't screw up MATLAB. (RK)
+
+version 2.2.31, 17 March 2006: Modified frmAF.GetResponse so as to stop relying on 3 second timeouts
+to end receive. (SB)
+
+version 2.2.30, 13 March 2006: Added instrument & date information lines to rockmag data files. (REK)
+
+version 2.2.29, 9 March 2006: In frmAF.pollAFUnit, changed to searching for "DON" rather than
+"DONE" in attempt to fix problem Scott & Tim were having with AF errors. (REK)
+
+version 2.2.28, 8 March 2006: Added a CSD threshold to the auto-remeasure in Measure_ReadSample. (REK)
+
+version 2.2.27, 7 March 2006: Fixed frmSampleIndexRegistry so that values of "Other" demag
+types are properly stored. Expanded frmDebug usage to monitor comm port chatter. (REK)
+
+version 2.2.26, 14 February 2006: Moved SQUID Reset Count in modMeasure before delay, which
+increases sensitivity at low moments (JLK).
+
+version 2.2.25, 26 January 2006: Added lagtime calibration check to frmSusceptibility.measure. (REK)
+Added line to stop rockmag steps if program halted. Adjusted frmAF.pollAFUnit to trust AF unit --
+we'll have to see whether that works with the older units. (Scott Bogue)
+
+version 2.2.24, 2 December 2005: Added MinStepSize to the frmRockmagRoutine. (REK)
+
+version 2.2.23, 1 December 2005: Added IRMInterrupt. (REK)
+
+version 2.2.22, 30 November 2005: Adjusted code for IRM firing via return circuit. (REK)
+
+version 2.2.21, 22 November 2005: Modified class RockmagStep to minimize homing to top senu strictu, which grinds
+gears on Shoemaker. (REK)
+
+version 2.2.20, 20 November 2005: Modified Measure_ReadSample to allow for remeasurement in case of flux jump.
+Changed IRM timing by adding 2 second delay before monitoring ready line. (REK)
+
+Version 2.2.19, 18 November 2005: Improved code for utilizing IRM trim and targeting IRM voltage with read monitor. (REK)
+
+Version 2.2.18, 17 November 2005: Added 0.5s delay between ARM voltage set and ARM latch line (dis)connect.
+Also fixed major bug in ARM code where by latch line was set low when frmIRMARM was loaded. (REK)
+
+Version 2.2.17, 15 November 2005: Adjusted IRM 0 V firing step so that it doesn't stall.
+Added Pulse-MCC volt conversion factors to settings dialog. Made UpDownTorqueFactor and SamplePickupThrottle adjustable. (REK)
+
+Version 2.2.16, 10 October 2005: Added susceptibility lag time calibration to manual holder run (REK)
+
+Version 2.2.15, 24 September 2005: Added advanced MCC features to frmIRMARM (REK)
+
+Version 2.2.14, 7 July 2005: Again adjusted IRM timing due to premature discharge problem. (REK)
+
+Version 2.2.13, 26 June 2005: Added pre-sample pickup IRM discharge to modChanger and frmMeasure.
+Switched IRM calibration to a 20-point calibration. Fixed FrmRockmagRoutine to include susceptibility measurements.
+Added check when measuring susceptibility to make sure we aren't going to try to move above position 0. (REK)
+
+Version 2.2.12, 24 June 2005: Removed RANGE parameters to MCC board, introduced in 2.2.10, which our board does not support
+and were causing ARM not to work. Fixed problem with IRM by adding and extending delays in frmIRMARM.FireIRM. (RK)
+
+Version 2.2.11, 23 June 2005: Moved delay loop in frmDCMotors.WaitForMotorStop into do-loop to fix premature dropping.
+Uncommented MotorStop command at end of same sub. Also made stat file more readable. (Scott Bogue)
+
+Version 2.2.10, 22 June 2005: Added support for IRM return voltage; added range restrictions on IRM and ARM voltage out (REK).
+
+Version 2.2.9, 20 June 2005: Fixed bug whereby IRM defaulted to backfield mode (REK).
+
+Version 2.2.8, 14 June 2005: Added backfield options to frmRockmagRoutine, plus some other improvements to form (REK).
+
+Version 2.2.7, 14 June 2005: Added support for HTML help files (REK).
+
+Version 2.2.6, 14 June 2005: Implemented IRM backfield support, module enable options (REK)
+
+Version 2.2.5, 2 June 2005: Added a "set bias field to 0" command before the start of non-ARM measurements in RockmagStep. (REK)
+
+Version 2.2.4, 2 May 2005: Separated AF Max and IRM Max fields in rockmag step routine. (REK)
+
+Version 2.2.3, 11 April 2005: Fixed ARM bug. Removed all references to ComPortKeithley. (REK)
+
+Version 2.2.2, 3 April 2005: Debugged AF fit, HF IRM coil against equipment (REK)
+
+Version 2.2.1, 29 March 2005: Added tentative support for 25-point AF fit.
+MMC card, HF IRM coil, batch AF measurements, rockmag step monitor,
+reverse polarity. (REK)

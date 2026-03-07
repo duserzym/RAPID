@@ -1,0 +1,234 @@
+[Root]
+Most Recent Package=Paleomag 2005 Standard Setup
+
+[Package|Paleomag 2005 Standard Install|Root]
+SubWizProgID=PDWizard.SetupPkgSubWiz
+BuildFolder=C:\Paleomag\Paleomag 2004\Package
+
+[Package|Paleomag 2005 Standard Install|Configure DAO ISAMs]
+Applicable=No
+
+[Package|Paleomag 2005 Standard Install|Configure DAO ODBC]
+JetWorkspace=
+ODBCDirect=
+
+[Package|Paleomag 2005 Standard Install|Files Found]
+
+[Package|Paleomag 2005 Standard Install|Files Released]
+
+[Package|Paleomag 2005 Standard Install|Missing Dependency Information]
+C:\Paleomag\Paleomag 2004\vbsendmail\vbSendMail.dll=
+
+[Package|Paleomag 2005 Standard Install|Out-of-Date Dependency Information]
+C:\WINNT\system32\COMCT332.OCX=
+
+[Package|Paleomag 2005 Standard Install|Files Added]
+
+[Package|Paleomag 2005 Standard Install|Files Removed]
+
+[Package|Paleomag 2005 Standard Install|Files In Project]
+S:\Paleomag\PALEOMAG.exe=Yes
+C:\WINNT\system32\MSVBVM60.DLL=Yes
+C:\WINNT\system32\OLEAUT32.DLL=Yes
+C:\WINNT\system32\OLEPRO32.DLL=Yes
+C:\WINNT\system32\ASYCFILT.DLL=Yes
+C:\WINNT\system32\STDOLE2.TLB=Yes
+C:\Program Files\Microsoft Visual Studio\VB98\Wizards\PDWizard\Redist\COMCAT.DLL=Yes
+C:\WINNT\system32\MSSTDFMT.DLL=Yes
+C:\Paleomag\Paleomag 2004\vbsendmail\vbSendMail.dll=Yes
+C:\WINNT\system32\COMDLG32.OCX=Yes
+C:\WINNT\system32\COMCTL32.OCX=Yes
+C:\WINNT\system32\MSCOMM32.OCX=Yes
+C:\WINNT\system32\MSFLXGRD.OCX=Yes
+C:\WINNT\system32\MSHFLXGD.OCX=Yes
+C:\WINNT\system32\MSCHRT20.OCX=Yes
+C:\WINNT\system32\TABCTL32.OCX=Yes
+C:\WINNT\system32\COMCT332.OCX=Yes
+C:\WINNT\system32\MSCOMCTL.OCX=Yes
+C:\Program Files\Microsoft Visual Studio\VB98\Wizards\PDWizard\SETUP.EXE=Yes
+C:\Program Files\Microsoft Visual Studio\VB98\Wizards\PDWizard\SETUP1.EXE=Yes
+C:\WINNT\system32\VB6STKIT.DLL=Yes
+C:\Program Files\Microsoft Visual Studio\VB98\Wizards\PDWizard\ST6UNST.EXE=Yes
+
+[Package|Paleomag 2005 Standard Install|Configure Registry Files]
+Applicable=No
+
+[Package|Paleomag 2005 Standard Install|Configure Remote Servers]
+Applicable=No
+
+[Package|Paleomag 2005 Standard Install|Install Locations]
+S:\Paleomag\PALEOMAG.exe=$(AppPath)
+C:\WINNT\system32\MSVBVM60.DLL=$(WinSysPathSysFile)
+C:\WINNT\system32\OLEAUT32.DLL=$(WinSysPathSysFile)
+C:\WINNT\system32\OLEPRO32.DLL=$(WinSysPathSysFile)
+C:\WINNT\system32\ASYCFILT.DLL=$(WinSysPathSysFile)
+C:\WINNT\system32\STDOLE2.TLB=$(WinSysPathSysFile)
+C:\Program Files\Microsoft Visual Studio\VB98\Wizards\PDWizard\Redist\COMCAT.DLL=$(WinSysPathSysFile)
+C:\WINNT\system32\MSSTDFMT.DLL=$(WinSysPath)
+C:\Paleomag\Paleomag 2004\vbsendmail\vbSendMail.dll=$(WinSysPath)
+C:\WINNT\system32\COMDLG32.OCX=$(WinSysPath)
+C:\WINNT\system32\COMCTL32.OCX=$(WinSysPath)
+C:\WINNT\system32\MSCOMM32.OCX=$(WinSysPath)
+C:\WINNT\system32\MSFLXGRD.OCX=$(WinSysPath)
+C:\WINNT\system32\MSHFLXGD.OCX=$(WinSysPath)
+C:\WINNT\system32\MSCHRT20.OCX=$(WinSysPath)
+C:\WINNT\system32\TABCTL32.OCX=$(WinSysPath)
+C:\WINNT\system32\COMCT332.OCX=$(WinSysPath)
+C:\WINNT\system32\MSCOMCTL.OCX=$(WinSysPath)
+C:\Program Files\Microsoft Visual Studio\VB98\Wizards\PDWizard\SETUP.EXE=$(AppPath)
+C:\Program Files\Microsoft Visual Studio\VB98\Wizards\PDWizard\SETUP1.EXE=$(WinPath)
+C:\WINNT\system32\VB6STKIT.DLL=$(WinSysPathSysFile)
+C:\Program Files\Microsoft Visual Studio\VB98\Wizards\PDWizard\ST6UNST.EXE=$(WinPath)
+
+[Package|Paleomag 2005 Standard Install|Configure Shared Files]
+Applicable=Yes
+S:\Paleomag\PALEOMAG.exe=No
+
+[Package|Paleomag 2005 Standard Install|Distribution]
+Type=single
+Size=
+Title=Paleomag 2004
+
+[Package|Paleomag 2005 Standard Install|IconGroups]
+Group0=Paleomag 2004
+PrivateGroup0=True
+Parent0=$(Programs)
+
+[Package|Paleomag 2005 Standard Install|Paleomag 2004]
+Icon1=PALEOMAG.exe
+Title1=Paleomag 2004
+StartIn1=$(AppPath)
+Key1=Icon1
+
+[Package|Paleomag 2005 Standard Install|Package]
+PackageFolder=C:\Paleomag\Paleomag 2004\Package
+ProjectFolder=C:\Paleomag\Paleomag 2004
+ServerSideCab=
+File1=C:\Paleomag\Paleomag 2004\Package\setup.exe
+File2=C:\Paleomag\Paleomag 2004\Package\Setup.Lst
+File3=C:\Paleomag\Paleomag 2004\Package\PALEOMAG.CAB
+Handler1=PDWizard.FolderDplySubWiz
+Handler2=PDWizard.WebPostDplySubWiz
+
+
+[Package|Paleomag 2005 Standard Setup|Root]
+SubWizProgID=PDWizard.SetupPkgSubWiz
+BuildFolder=F:\Paleomag\Paleomag 2005\Package
+
+[Package|Paleomag 2005 Standard Setup|Configure DAO ISAMs]
+Applicable=No
+
+[Package|Paleomag 2005 Standard Setup|Configure DAO ODBC]
+JetWorkspace=
+ODBCDirect=
+
+[Package|Paleomag 2005 Standard Setup|Files Found]
+
+[Package|Paleomag 2005 Standard Setup|Files Released]
+cbw.dll=
+
+[Package|Paleomag 2005 Standard Setup|Missing Dependency Information]
+F:\Paleomag\vbsendmail\vbSendMail.dll=
+C:\WINNT\system32\msstdfmt.dll=
+C:\MCC\cbw32.dll=
+
+[Package|Paleomag 2005 Standard Setup|Out-of-Date Dependency Information]
+C:\WINNT\system32\MSCOMCT2.OCX=
+C:\WINNT\system32\MSCOMCTL.OCX=
+C:\WINNT\system32\COMCT332.OCX=
+C:\WINNT\system32\mschrt20.ocx=
+C:\WINNT\system32\MSFLXGRD.OCX=
+C:\WINNT\system32\comctl32.ocx=
+C:\WINNT\system32\comdlg32.ocx=
+
+[Package|Paleomag 2005 Standard Setup|Files Added]
+
+[Package|Paleomag 2005 Standard Setup|Files Removed]
+
+[Package|Paleomag 2005 Standard Setup|Files In Project]
+F:\Paleomag\Paleomag 2005\PALEOMAG.exe=Yes
+C:\WINNT\system32\MSVBVM60.DLL=Yes
+C:\WINNT\system32\OLEAUT32.DLL=Yes
+C:\WINNT\system32\OLEPRO32.DLL=Yes
+C:\WINNT\system32\ASYCFILT.DLL=Yes
+C:\WINNT\system32\STDOLE2.TLB=Yes
+C:\Program Files\VB98\Wizards\PDWizard\Redist\COMCAT.DLL=Yes
+C:\MCC\cbw32.dll=Yes
+C:\WINNT\system32\msstdfmt.dll=Yes
+F:\Paleomag\vbsendmail\vbSendMail.dll=Yes
+C:\WINNT\system32\comdlg32.ocx=Yes
+C:\WINNT\system32\comctl32.ocx=Yes
+C:\WINNT\system32\MSCOMM32.OCX=Yes
+C:\WINNT\system32\MSFLXGRD.OCX=Yes
+C:\WINNT\system32\MSHFLXGD.OCX=Yes
+C:\WINNT\system32\mschrt20.ocx=Yes
+C:\WINNT\system32\TABCTL32.OCX=Yes
+C:\WINNT\system32\COMCT332.OCX=Yes
+C:\WINNT\system32\MSCOMCTL.OCX=Yes
+C:\WINNT\system32\MSCOMCT2.OCX=Yes
+C:\Program Files\VB98\Wizards\PDWizard\SETUP.EXE=Yes
+C:\Program Files\VB98\Wizards\PDWizard\SETUP1.EXE=Yes
+C:\WINNT\system32\VB6STKIT.DLL=Yes
+C:\Program Files\VB98\Wizards\PDWizard\ST6UNST.EXE=Yes
+
+[Package|Paleomag 2005 Standard Setup|Configure Registry Files]
+Applicable=No
+
+[Package|Paleomag 2005 Standard Setup|Configure Remote Servers]
+Applicable=No
+
+[Package|Paleomag 2005 Standard Setup|Install Locations]
+F:\Paleomag\Paleomag 2005\PALEOMAG.exe=$(AppPath)
+C:\WINNT\system32\MSVBVM60.DLL=$(WinSysPathSysFile)
+C:\WINNT\system32\OLEAUT32.DLL=$(WinSysPathSysFile)
+C:\WINNT\system32\OLEPRO32.DLL=$(WinSysPathSysFile)
+C:\WINNT\system32\ASYCFILT.DLL=$(WinSysPathSysFile)
+C:\WINNT\system32\STDOLE2.TLB=$(WinSysPathSysFile)
+C:\Program Files\VB98\Wizards\PDWizard\Redist\COMCAT.DLL=$(WinSysPathSysFile)
+C:\MCC\cbw32.dll=$(WinSysPath)
+C:\WINNT\system32\msstdfmt.dll=$(WinSysPath)
+F:\Paleomag\vbsendmail\vbSendMail.dll=$(WinSysPath)
+C:\WINNT\system32\comdlg32.ocx=$(WinSysPath)
+C:\WINNT\system32\comctl32.ocx=$(WinSysPath)
+C:\WINNT\system32\MSCOMM32.OCX=$(WinSysPath)
+C:\WINNT\system32\MSFLXGRD.OCX=$(WinSysPath)
+C:\WINNT\system32\MSHFLXGD.OCX=$(WinSysPath)
+C:\WINNT\system32\mschrt20.ocx=$(WinSysPath)
+C:\WINNT\system32\TABCTL32.OCX=$(WinSysPath)
+C:\WINNT\system32\COMCT332.OCX=$(WinSysPath)
+C:\WINNT\system32\MSCOMCTL.OCX=$(WinSysPath)
+C:\WINNT\system32\MSCOMCT2.OCX=$(WinSysPath)
+C:\Program Files\VB98\Wizards\PDWizard\SETUP.EXE=$(AppPath)
+C:\Program Files\VB98\Wizards\PDWizard\SETUP1.EXE=$(WinPath)
+C:\WINNT\system32\VB6STKIT.DLL=$(WinSysPathSysFile)
+C:\Program Files\VB98\Wizards\PDWizard\ST6UNST.EXE=$(WinPath)
+
+[Package|Paleomag 2005 Standard Setup|Configure Shared Files]
+Applicable=Yes
+F:\Paleomag\Paleomag 2005\PALEOMAG.exe=No
+
+[Package|Paleomag 2005 Standard Setup|Distribution]
+Type=single
+Size=
+Title=Paleomag 2005
+
+[Package|Paleomag 2005 Standard Setup|IconGroups]
+Group0=Paleomag 2005
+PrivateGroup0=True
+Parent0=$(Programs)
+
+[Package|Paleomag 2005 Standard Setup|Paleomag 2005]
+Icon1=PALEOMAG.exe
+Title1=Paleomag 2005
+StartIn1=$(AppPath)
+Key1=Icon1
+
+[Package|Paleomag 2005 Standard Setup|Package]
+PackageFolder=F:\Paleomag\Paleomag 2005\Package
+ProjectFolder=F:\Paleomag\Paleomag 2005
+ServerSideCab=
+File1=F:\Paleomag\Paleomag 2005\Package\setup.exe
+File2=F:\Paleomag\Paleomag 2005\Package\Setup.Lst
+File3=F:\Paleomag\Paleomag 2005\Package\PALEOMAG.CAB
+Handler1=PDWizard.FolderDplySubWiz
+Handler2=PDWizard.WebPostDplySubWiz

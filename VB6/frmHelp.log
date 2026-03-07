@@ -1,0 +1,19 @@
+Line 16: Class SHDocVwCtl.WebBrowser of control brwWebBrowser was not a loaded control class.
+Line 22: The property name ExtentX in brwWebBrowser is invalid.
+Line 23: The property name ExtentY in brwWebBrowser is invalid.
+Line 24: The property name ViewMode in brwWebBrowser is invalid.
+Line 25: The property name Offline in brwWebBrowser is invalid.
+Line 26: The property name Silent in brwWebBrowser is invalid.
+Line 27: The property name RegisterAsBrowser in brwWebBrowser is invalid.
+Line 28: The property name RegisterAsDropTarget in brwWebBrowser is invalid.
+Line 29: The property name AutoArrange in brwWebBrowser is invalid.
+Line 30: The property name NoClientEdge in brwWebBrowser is invalid.
+Line 31: The property name AlignLeft in brwWebBrowser is invalid.
+Line 32: The property name NoWebView in brwWebBrowser is invalid.
+Line 33: The property name HideFileNames in brwWebBrowser is invalid.
+Line 34: The property name SingleClick in brwWebBrowser is invalid.
+Line 35: The property name SingleSelection in brwWebBrowser is invalid.
+Line 36: The property name NoFolders in brwWebBrowser is invalid.
+Line 37: The property name Transparent in brwWebBrowser is invalid.
+Line 38: The property name ViewID in brwWebBrowser is invalid.
+Line 39: The property name Location in brwWebBrowser is invalid.
