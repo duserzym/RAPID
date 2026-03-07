@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7A0219"/>
+      <stop offset="100%" stop-color="#520012"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.32"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFCD34"/>
+      <stop offset="100%" stop-color="#ffd965"/>
+    </linearGradient>
+  </defs>
+  <rect x="48" y="48" width="928" height="928" rx="210" fill="url(#bg)"/>
+  <rect x="88" y="88" width="848" height="420" rx="170" fill="url(#gloss)"/>
+  <path d="M120 640 C 220 360, 330 860, 430 640 C 530 420, 640 760, 760 570 C 840 470, 890 530, 930 500"
+        stroke="url(#wave)" stroke-width="54" fill="none" stroke-linecap="round"/>
+    <text x="512" y="430" text-anchor="middle" font-family="Avenir Next, SF Pro Text, Segoe UI, Arial, sans-serif"
+      font-size="270" font-weight="800" fill="#fff6e4" letter-spacing="12">VRM</text>
+</svg>
