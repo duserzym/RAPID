@@ -1,2 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Keep classic VB6 source/forms in Windows line-ending format.
+VB6/*.bas text eol=crlf
+VB6/*.cls text eol=crlf
+VB6/*.frm text eol=crlf
