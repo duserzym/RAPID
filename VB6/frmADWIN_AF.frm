@@ -49,7 +49,7 @@ Begin VB.Form frmADWIN_AF
          Width           =   1455
       End
       Begin VB.Label Label8 
-         Caption         =   "°C"
+         Caption         =   "ï¿½C"
          Height          =   255
          Left            =   2040
          TabIndex        =   47
@@ -57,7 +57,7 @@ Begin VB.Form frmADWIN_AF
          Width           =   255
       End
       Begin VB.Label Label7 
-         Caption         =   "°C"
+         Caption         =   "ï¿½C"
          Height          =   255
          Left            =   2040
          TabIndex        =   46
@@ -920,15 +920,15 @@ Public Function DoRampADWIN(ByRef MonitorWave As Wave, _
             txtTemp1.BackColor = ColorOrange
             txtTemp2.BackColor = ColorOrange
             
-            ErrorMessage = "The AF degaussing unit is above " & Thot & "°C: " & Format$(Temp1, "##0.00") & _
-                "°C and " & Format$(Temp2, "##0.00") & "°C." & _
+            ErrorMessage = "The AF degaussing unit is above " & Thot & "ï¿½C: " & Format$(Temp1, "##0.00") & _
+                "ï¿½C and " & Format$(Temp2, "##0.00") & "ï¿½C." & _
                 vbCrLf & "Execution will restart soon."
             
             If TWarning = False Then frmSendMail.MailNotification "AF too hot", ErrorMessage, CodeYellow
             
             TWarning = True
             
-            ' MsgBox "Pause... " & Temp1 & "°C " & Temp2 & "°C"
+            ' MsgBox "Pause... " & Temp1 & "ï¿½C " & Temp2 & "ï¿½C"
             ' Loop until the temperature which was above Thot decreases at least 5 degrees before restarting
             Do While Temp1 >= Thot - 5 Or Temp2 >= Thot - 5
                 
@@ -1823,15 +1823,15 @@ Public Function DoRampADWIN_WithParameterLogging( _
             txtTemp1.BackColor = ColorOrange
             txtTemp2.BackColor = ColorOrange
             
-            ErrorMessage = "The AF degaussing unit is above " & Thot & "°C: " & Format$(Temp1, "##0.00") & _
-                "°C and " & Format$(Temp2, "##0.00") & "°C." & _
+            ErrorMessage = "The AF degaussing unit is above " & Thot & "ï¿½C: " & Format$(Temp1, "##0.00") & _
+                "ï¿½C and " & Format$(Temp2, "##0.00") & "ï¿½C." & _
                 vbCrLf & "Execution will restart soon."
             
             If TWarning = False Then frmSendMail.MailNotification "AF too hot", ErrorMessage, CodeYellow
             
             TWarning = True
             
-            ' MsgBox "Pause... " & Temp1 & "°C " & Temp2 & "°C"
+            ' MsgBox "Pause... " & Temp1 & "ï¿½C " & Temp2 & "ï¿½C"
             ' Loop until the temperature which was above Thot decreases at least 5 degrees before restarting
             Do While Temp1 >= Thot - 5 Or Temp2 >= Thot - 5
                 
@@ -4037,6 +4037,42 @@ Public Function RoundSlopeToPeriod(ByVal Slope As Double, _
                               
 End Function
 
+Private Function GetADWIN_AFRelayBitMask(ByRef TTLBoard As Board) As Long
+
+    Const AFSourceUsesIRMRelayHigh As Boolean = False
+
+    Dim NeededBitVal As Long
+
+    NeededBitVal = TTLBoard.CalcADWINDigOutBit(IRMRelay, _
+                                               AFSourceUsesIRMRelayHigh, _
+                                               True)
+
+    Select Case ActiveCoilSystem
+
+        Case modConfig.AxialCoilSystem
+
+            NeededBitVal = NeededBitVal + _
+                           TTLBoard.CalcADWINDigOutBit(AFAxialRelay, _
+                                                      True, _
+                                                      True)
+
+        Case TransverseCoilSystem
+
+            NeededBitVal = NeededBitVal + _
+                           TTLBoard.CalcADWINDigOutBit(AFTransRelay, _
+                                                      True, _
+                                                      True)
+
+        Case Else
+
+            'No AF coil selected; leave all relay outputs low.
+
+    End Select
+
+    GetADWIN_AFRelayBitMask = NeededBitVal
+
+End Function
+
 Public Sub SetAFRelays()
 
     Dim TTLBoard As Board
@@ -4134,26 +4170,7 @@ Public Sub SetAFRelays()
         
     'Figure out the digital output bit-value that needs to be written to the
     'adwin board
-    Select Case ActiveCoilSystem
-    
-        Case modConfig.AxialCoilSystem
-
-            NeededBitVal = TTLBoard.CalcADWINDigOutBit(AFAxialRelay, _
-                                                       True, _
-                                                       True)
-                                                       
-        Case TransverseCoilSystem
-    
-            NeededBitVal = TTLBoard.CalcADWINDigOutBit(AFTransRelay, _
-                                                       True, _
-                                                       True)
-                                                   
-        Case Else
-    
-            'No coils active, change all relays to the Set low ("Down") position
-            NeededBitVal = 0
-        
-    End Select
+    NeededBitVal = GetADWIN_AFRelayBitMask(TTLBoard)
         
     TTLBoard.DigitalOut_ADWIN NeededBitVal
  
