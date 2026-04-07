@@ -4037,9 +4037,8 @@ Public Function RoundSlopeToPeriod(ByVal Slope As Double, _
                               
 End Function
 
-Private Function GetADWIN_AFRelayBitMask(ByRef TTLBoard As Board) As Long
-
-    Const AFSourceUsesIRMRelayHigh As Boolean = False
+ Private Function GetADWIN_AFRelayBitMask(ByRef TTLBoard As Board, _
+                                         ByVal AFSourceUsesIRMRelayHigh As Boolean) As Long
 
     Dim NeededBitVal As Long
 
@@ -4073,7 +4072,7 @@ Private Function GetADWIN_AFRelayBitMask(ByRef TTLBoard As Board) As Long
 
 End Function
 
-Public Sub SetAFRelays()
+Public Sub SetAFRelays(Optional ByVal AFSourceUsesIRMRelayHigh As Boolean = False)
 
     Dim TTLBoard As Board
     Dim BoardName As String
@@ -4170,7 +4169,7 @@ Public Sub SetAFRelays()
         
     'Figure out the digital output bit-value that needs to be written to the
     'adwin board
-    NeededBitVal = GetADWIN_AFRelayBitMask(TTLBoard)
+    NeededBitVal = GetADWIN_AFRelayBitMask(TTLBoard, AFSourceUsesIRMRelayHigh)
         
     TTLBoard.DigitalOut_ADWIN NeededBitVal
  

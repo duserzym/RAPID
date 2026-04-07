@@ -56,7 +56,7 @@ Begin VB.Form frmIRMARM
          Width           =   1095
       End
       Begin VB.Label Label7 
-         Caption         =   "°C"
+         Caption         =   "ï¿½C"
          Height          =   255
          Left            =   1200
          TabIndex        =   46
@@ -64,7 +64,7 @@ Begin VB.Form frmIRMARM
          Width           =   255
       End
       Begin VB.Label Label8 
-         Caption         =   "°C"
+         Caption         =   "ï¿½C"
          Height          =   255
          Left            =   1200
          TabIndex        =   45
@@ -1219,15 +1219,15 @@ Public Sub FireASC_IrmAtPulseVolts(ByVal pulse_volts As Double, _
                  txtTemp1.BackColor = ColorOrange
                  txtTemp2.BackColor = ColorOrange
                  
-                 ErrorMessage = "The IRM Coil(s) temperature is above " & Thot & "°C: " & Format$(Temp1, "##0.00") & _
-                     "°C and " & Format$(Temp2, "##0.00") & "°C." & _
+                 ErrorMessage = "The IRM Coil(s) temperature is above " & Thot & "ï¿½C: " & Format$(Temp1, "##0.00") & _
+                     "ï¿½C and " & Format$(Temp2, "##0.00") & "ï¿½C." & _
                      vbCrLf & "Execution will restart soon."
                  
                  If TWarning = False Then frmSendMail.MailNotification "AF too hot", ErrorMessage, CodeYellow
                  
                  TWarning = True
                  
-                 ' MsgBox "Pause... " & Temp1 & "°C " & Temp2 & "°C"
+                 ' MsgBox "Pause... " & Temp1 & "ï¿½C " & Temp2 & "ï¿½C"
                  ' Loop until the temperature which was above Thot decreases at least 5 degrees before restarting
                  Do While Temp1 >= Thot - 5 Or Temp2 >= Thot - 5
                      
@@ -1868,15 +1868,15 @@ Public Sub FireIRM(ByVal voltage As Double, _
                  txtTemp1.BackColor = ColorOrange
                  txtTemp2.BackColor = ColorOrange
                  
-                 ErrorMessage = "The IRM Coil(s) temperature is above " & Thot & "°C: " & Format$(Temp1, "##0.00") & _
-                     "°C and " & Format$(Temp2, "##0.00") & "°C." & _
+                 ErrorMessage = "The IRM Coil(s) temperature is above " & Thot & "ï¿½C: " & Format$(Temp1, "##0.00") & _
+                     "ï¿½C and " & Format$(Temp2, "##0.00") & "ï¿½C." & _
                      vbCrLf & "Execution will restart soon."
                  
                  If TWarning = False Then frmSendMail.MailNotification "AF too hot", ErrorMessage, CodeYellow
                  
                  TWarning = True
                  
-                 ' MsgBox "Pause... " & Temp1 & "°C " & Temp2 & "°C"
+                 ' MsgBox "Pause... " & Temp1 & "ï¿½C " & Temp2 & "ï¿½C"
                  ' Loop until the temperature which was above Thot decreases at least 5 degrees before restarting
                  Do While Temp1 >= Thot - 5 Or Temp2 >= Thot - 5
                      
@@ -3313,40 +3313,19 @@ Public Sub optCoil_Click(Index As Integer)
     'rather than a user click
     If CoilsLocked = True Then Exit Sub
     
-    If optCoil(1).value = True And _
-       EnableTransIRM = False And _
-       EnableAxialIRM = True Then
-       
-       optCoil(1).value = False
-       optCoil(0).value = True
-       
-    ElseIf optCoil(0).value = True And _
-           EnableAxialIRM = False And _
-           EnableTransIRM = True Then
-           
-        optCoil(0).value = False
-        optCoil(1).value = True
-        
-    ElseIf EnableAxialIRM = False And _
-           EnableTransIRM = False Then
-           
-        optCoil(0).value = False
-        optCoil(1).value = False
-       
-    End If
-
     If Index = 0 And _
        optCoil(Index).value = True _
     Then
        
         ActiveCoilSystem = AxialCoilSystem
+        frmADWIN_AF.SetAFRelays AFSourceUsesIRMRelayHigh:=True
                 
     ElseIf Index = 1 And _
        optCoil(Index).value = True _
     Then
       
         ActiveCoilSystem = TransverseCoilSystem
-                
+        frmADWIN_AF.SetAFRelays AFSourceUsesIRMRelayHigh:=True
     Else
     
         ActiveCoilSystem = NoCoilSystem
