@@ -1,0 +1,1 @@
+"""RapidPy gaussmeter control app."""
