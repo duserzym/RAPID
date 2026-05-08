@@ -10,3 +10,5 @@ Additional RAPID gaussmeter documentation:
 - [docs/fw-bell-gaussmeter-user-guide.md](docs/fw-bell-gaussmeter-user-guide.md) covers operator setup, driver installation, DLL placement, and GUI usage.
 - [docs/fw-bell-gaussmeter-developer-guide.md](docs/fw-bell-gaussmeter-developer-guide.md) covers direct driver work, helper usage, and SCPI communication outside the RAPID GUI.
 
+The committed FW Bell preparation toolkit lives under [tools/](tools/) and includes the helper, Zadig-based driver setup assets, and the bundled libusb-win32 payload used by the documented workflow.
+

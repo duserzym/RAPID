@@ -9,6 +9,35 @@ The current RAPID code supports two gaussmeter backends:
 
 For the attached FW Bell instrument, use the FW Bell path.
 
+## Preparation Toolkit In This Repo
+
+The FW Bell setup now depends on committed support files under `tools/`. Treat these as part of the supported preparation workflow, not as disposable debug artifacts.
+
+Primary preparation files:
+
+- [`../tools/zadig.exe`](../tools/zadig.exe) - the main driver-binding tool used for the validated Windows setup path
+- [`../tools/zadig.ini`](../tools/zadig.ini) - the repo-local Zadig defaults used during recovery and validation
+- [`../tools/zadig_install_fwbell.py`](../tools/zadig_install_fwbell.py) - optional automation helper for the Zadig flow
+- [`../tools/usb5100_probe.exe`](../tools/usb5100_probe.exe) - the required x86 helper that RAPID calls at runtime
+- [`../tools/usb5100_probe.c`](../tools/usb5100_probe.c) - source for rebuilding the helper
+
+Bundled libusb-win32 payload kept with the repo so the driver-install path is reproducible:
+
+- [`../tools/installer_x86.exe`](../tools/installer_x86.exe)
+- [`../tools/installer_x64.exe`](../tools/installer_x64.exe)
+- [`../tools/x86/libusb0_x86.dll`](../tools/x86/libusb0_x86.dll)
+- [`../tools/x86/libusb0.sys`](../tools/x86/libusb0.sys)
+- [`../tools/amd64/libusb0.dll`](../tools/amd64/libusb0.dll)
+- [`../tools/amd64/libusb0.sys`](../tools/amd64/libusb0.sys)
+- [`../tools/ia64/libusb0.dll`](../tools/ia64/libusb0.dll)
+- [`../tools/ia64/libusb0.sys`](../tools/ia64/libusb0.sys)
+- [`../tools/license/libusb0/installer_license.txt`](../tools/license/libusb0/installer_license.txt)
+
+Investigation-only files kept for reference, not as the primary operator path:
+
+- [`../tools/fw_bell_5100.inf`](../tools/fw_bell_5100.inf)
+- [`../tools/fw_bell_5100_fixed.inf`](../tools/fw_bell_5100_fixed.inf)
+
 ## What You Need
 
 You need all of the following before the GUI can talk to the instrument:
@@ -34,6 +63,8 @@ Files already in this repo that are relevant:
 - `tools/fw_bell_5100_fixed.inf`
 - `tools/installer_x86.exe`
 - `tools/installer_x64.exe`
+
+If you copy the preparation toolkit outside the repo for lab use, keep the `tools/` tree intact rather than copying single files in isolation.
 
 Important note about the DLLs:
 
@@ -75,11 +106,17 @@ The path that worked in practice on this machine was Zadig plus `libusb-win32`, 
 Recommended procedure:
 
 1. Close any RAPID gaussmeter GUI, helper, or vendor utility that might already have the device open.
-2. Run `tools/zadig.exe` as Administrator.
+2. Run [`../tools/zadig.exe`](../tools/zadig.exe) as Administrator.
 3. In Zadig, enable `Options -> List All Devices`.
 4. Select the FW Bell device matching `VID_16A2` / `PID_5100`.
 5. Choose `libusb-win32` as the target driver.
 6. Install or replace the driver.
+
+Repo-local preparation notes:
+
+- [`../tools/zadig.ini`](../tools/zadig.ini) stores the defaults that were used during the validated recovery path.
+- [`../tools/zadig_install_fwbell.py`](../tools/zadig_install_fwbell.py) is available if you want to script the same Zadig flow instead of driving the UI manually.
+- The bundled `installer_*.exe` and `tools/x86`, `tools/amd64`, and `tools/ia64` payload are kept in the repo so the libusb-win32 install assets stay versioned alongside the RAPID workflow docs.
 
 What not to rely on as the primary path:
 
@@ -238,6 +275,15 @@ Most likely causes:
 - Windows attached the device to a different driver instance
 
 Use a stable DLL location and recheck Zadig binding.
+
+### Problem: The driver preparation files seem to be missing
+
+Use the committed repo copies first:
+
+1. Recheck that the `tools/` directory was copied intact.
+2. Confirm [`../tools/zadig.exe`](../tools/zadig.exe) still sits next to [`../tools/zadig.ini`](../tools/zadig.ini).
+3. If you are using the bundled libusb-win32 assets outside the repo, recopy the `tools/x86`, `tools/amd64`, `tools/ia64`, and `tools/license` subtrees together.
+4. Do not depend on temp-extracted driver payloads.
 
 ### Problem: Manual COM mode does not help
 

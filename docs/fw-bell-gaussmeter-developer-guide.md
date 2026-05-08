@@ -4,6 +4,37 @@ This guide is for developers who want to work with the FW Bell gaussmeter driver
 
 It documents the driver stack, the helper executable, the DLL expectations, and the SCPI commands currently wired into RAPID.
 
+## Preparation Toolkit In This Repo
+
+The FW Bell workflow now assumes the preparation assets in `tools/` are part of the repository contract.
+
+Primary files:
+
+- [`../tools/usb5100_probe.c`](../tools/usb5100_probe.c)
+- [`../tools/usb5100_probe.exe`](../tools/usb5100_probe.exe)
+- [`../tools/zadig.exe`](../tools/zadig.exe)
+- [`../tools/zadig.ini`](../tools/zadig.ini)
+- [`../tools/zadig_install_fwbell.py`](../tools/zadig_install_fwbell.py)
+
+Bundled libusb-win32 support payload:
+
+- [`../tools/installer_x86.exe`](../tools/installer_x86.exe)
+- [`../tools/installer_x64.exe`](../tools/installer_x64.exe)
+- [`../tools/x86/libusb0_x86.dll`](../tools/x86/libusb0_x86.dll)
+- [`../tools/x86/libusb0.sys`](../tools/x86/libusb0.sys)
+- [`../tools/amd64/libusb0.dll`](../tools/amd64/libusb0.dll)
+- [`../tools/amd64/libusb0.sys`](../tools/amd64/libusb0.sys)
+- [`../tools/ia64/libusb0.dll`](../tools/ia64/libusb0.dll)
+- [`../tools/ia64/libusb0.sys`](../tools/ia64/libusb0.sys)
+- [`../tools/license/libusb0/installer_license.txt`](../tools/license/libusb0/installer_license.txt)
+
+Reference-only INF investigation files:
+
+- [`../tools/fw_bell_5100.inf`](../tools/fw_bell_5100.inf)
+- [`../tools/fw_bell_5100_fixed.inf`](../tools/fw_bell_5100_fixed.inf)
+
+If you need to prepare another machine, start from the committed `tools/` tree in this repo before hunting for copies in temp directories or older downloads.
+
 ## Architecture Summary
 
 The RAPID FW Bell path is split into two layers:
@@ -34,12 +65,19 @@ This exists because the proven vendor path is the x86 sidecar path, not direct x
 Useful support files in the repo:
 
 - `tools/zadig.exe`
+- `tools/zadig.ini`
+- `tools/zadig_install_fwbell.py`
 - `tools/installer_x86.exe`
 - `tools/installer_x64.exe`
 - `tools/fw_bell_5100.inf`
 - `tools/fw_bell_5100_fixed.inf`
 - `tools/x86/libusb0_x86.dll`
 - `tools/amd64/libusb0.dll`
+- `tools/x86/libusb0.sys`
+- `tools/amd64/libusb0.sys`
+- `tools/ia64/libusb0.dll`
+- `tools/ia64/libusb0.sys`
+- `tools/license/libusb0/installer_license.txt`
 
 ## Windows Driver Requirements
 
@@ -51,10 +89,16 @@ The path that was actually validated earlier in development was a Zadig-installe
 
 Practical guidance:
 
-1. Use `tools/zadig.exe`.
+1. Use [`../tools/zadig.exe`](../tools/zadig.exe).
 2. Enable `List All Devices`.
 3. Choose the FW Bell device.
 4. Install `libusb-win32`.
+
+Preparation workflow notes:
+
+- [`../tools/zadig.ini`](../tools/zadig.ini) captures the defaults used during the validated setup.
+- [`../tools/zadig_install_fwbell.py`](../tools/zadig_install_fwbell.py) is the optional automation entry point if you want to script Zadig rather than click through the UI.
+- The bundled `installer_*.exe` and `libusb0*` payload files are committed so the driver setup path can be reproduced from the repo itself.
 
 Do not assume the unsigned INF files in the repo are the primary supported path. They were part of the investigation, but signature enforcement blocked that route on this machine.
 
@@ -283,14 +327,22 @@ That is a Windows/device-state problem, not a Python parsing problem. Fix the dr
 
 When working on FW Bell support, use this order:
 
-1. Make the device appear correctly in Windows.
-2. Make `usb5100_probe.exe --dll ... status` work.
-3. Make `read` work.
-4. Validate raw SCPI commands.
-5. Only then change Python backend behavior.
-6. Only then change the GUI.
+1. Prepare the machine from the committed `tools/` payload first.
+2. Make the device appear correctly in Windows.
+3. Make `usb5100_probe.exe --dll ... status` work.
+4. Make `read` work.
+5. Validate raw SCPI commands.
+6. Only then change Python backend behavior.
+7. Only then change the GUI.
 
 That order avoids confusing GUI bugs with driver-layer failures.
+
+For machine preparation, the expected sequence is:
+
+1. Use [`../tools/zadig.exe`](../tools/zadig.exe) or [`../tools/zadig_install_fwbell.py`](../tools/zadig_install_fwbell.py) to bind the device.
+2. Keep the repo's libusb-win32 payload available if the install tool needs to reference its bundled files.
+3. Put the vendor `usb5100.dll` and `libusb0.dll` in a stable directory.
+4. Validate the repo helper [`../tools/usb5100_probe.exe`](../tools/usb5100_probe.exe) before touching Python code.
 
 ## Current RAPID Behavior Worth Knowing
 
