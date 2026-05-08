@@ -73,8 +73,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("RapidPy Gaussmeter Control")
-        self.resize(1360, 820)
-        self.setMinimumSize(1040, 680)
+        self.resize(1360, 860)
+        self.setMinimumSize(1040, 720)
         compact_font = QtGui.QFont(self.font())
         compact_size = compact_font.pointSizeF()
         if compact_size > 0:
@@ -259,7 +259,7 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Preferred,
             QtWidgets.QSizePolicy.Policy.Expanding,
         )
-        self.console.setMinimumHeight(180)
+        self.console.setMinimumHeight(120)
         left.addWidget(self.console, stretch=1)
         left_host_layout.addWidget(left_card)
         left_scroll.setWidget(left_host)
@@ -299,19 +299,19 @@ class MainWindow(QtWidgets.QMainWindow):
         reading_font.setBold(True)
         self.reading_label.setFont(reading_font)
         self.reading_label.setAlignment(QtCore.Qt.AlignCenter)
-        self.reading_label.setMinimumHeight(96)
+        self.reading_label.setMinimumHeight(60)
         status_layout.addWidget(self.reading_label)
 
         self.units_label = QtWidgets.QLabel("Units: -")
         self.units_label.setObjectName("valuePill")
-        self.units_label.setMinimumHeight(44)
+        self.units_label.setMinimumHeight(26)
         status_layout.addWidget(self.units_label)
 
         self.meta_label = QtWidgets.QLabel("Mode: -\nRange: -\nInstrument time: -")
         self.meta_label.setObjectName("valuePill")
         self.meta_label.setWordWrap(True)
         self.meta_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop)
-        self.meta_label.setMinimumHeight(92)
+        self.meta_label.setMinimumHeight(56)
         status_layout.addWidget(self.meta_label)
         status_layout.addStretch(1)
 
@@ -324,7 +324,7 @@ class MainWindow(QtWidgets.QMainWindow):
         sampling_layout = QtWidgets.QGridLayout(sampling_group)
         sampling_layout.setContentsMargins(10, 16, 10, 10)
         sampling_layout.setHorizontalSpacing(12)
-        sampling_layout.setVerticalSpacing(8)
+        sampling_layout.setVerticalSpacing(6)
         sampling_layout.setColumnStretch(1, 1)
         sampling_layout.setColumnStretch(3, 1)
 
@@ -336,7 +336,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sample_rate_spin.setRange(50, 60000)
         self.sample_rate_spin.setSingleStep(50)
         self.sample_rate_spin.setValue(500)
-        self.sample_rate_spin.setMinimumHeight(32)
+        self.sample_rate_spin.setMinimumHeight(26)
+        self.sample_rate_spin.setMaximumWidth(140)
         sampling_layout.addWidget(self.sample_rate_spin, 0, 1)
 
         sample_count_label = QtWidgets.QLabel("Sample count")
@@ -346,7 +347,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sample_count_spin.setFont(sampling_font)
         self.sample_count_spin.setRange(1, 100000)
         self.sample_count_spin.setValue(100)
-        self.sample_count_spin.setMinimumHeight(32)
+        self.sample_count_spin.setMinimumHeight(26)
+        self.sample_count_spin.setMaximumWidth(140)
         sampling_layout.addWidget(self.sample_count_spin, 0, 3)
 
         alarm_low_label = QtWidgets.QLabel("Alarm low")
@@ -355,9 +357,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.alarm_low_spin = QtWidgets.QDoubleSpinBox()
         self.alarm_low_spin.setFont(sampling_font)
         self.alarm_low_spin.setRange(-1_000_000_000.0, 1_000_000_000.0)
-        self.alarm_low_spin.setDecimals(6)
+        self.alarm_low_spin.setDecimals(3)
         self.alarm_low_spin.setValue(-1.0)
-        self.alarm_low_spin.setMinimumHeight(32)
+        self.alarm_low_spin.setMinimumHeight(26)
+        self.alarm_low_spin.setMaximumWidth(140)
         sampling_layout.addWidget(self.alarm_low_spin, 1, 1)
 
         alarm_high_label = QtWidgets.QLabel("Alarm high")
@@ -366,9 +369,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.alarm_high_spin = QtWidgets.QDoubleSpinBox()
         self.alarm_high_spin.setFont(sampling_font)
         self.alarm_high_spin.setRange(-1_000_000_000.0, 1_000_000_000.0)
-        self.alarm_high_spin.setDecimals(6)
+        self.alarm_high_spin.setDecimals(3)
         self.alarm_high_spin.setValue(1.0)
-        self.alarm_high_spin.setMinimumHeight(32)
+        self.alarm_high_spin.setMinimumHeight(26)
+        self.alarm_high_spin.setMaximumWidth(140)
         sampling_layout.addWidget(self.alarm_high_spin, 1, 3)
 
         self.sample_now_btn = QtWidgets.QPushButton("Sample Once Now")
@@ -384,7 +388,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.save_session_btn,
         ):
             button.setFont(sampling_font)
-            button.setMinimumHeight(34)
+            button.setMinimumHeight(30)
         sampling_layout.addWidget(self.sample_now_btn, 2, 0, 1, 2)
         sampling_layout.addWidget(self.start_sampling_btn, 2, 2, 1, 2)
         sampling_layout.addWidget(self.sample_on_alarm_btn, 3, 0, 1, 2)
@@ -394,7 +398,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.session_duration_label = QtWidgets.QLabel()
         self.session_duration_label.setObjectName("valuePill")
         self.session_duration_label.setFont(sampling_font)
-        self.session_duration_label.setMinimumHeight(40)
+        self.session_duration_label.setMinimumHeight(26)
         self.session_status = QtWidgets.QPlainTextEdit()
         self.session_status.setObjectName("statusPill")
         self.session_status.setFont(sampling_font)
@@ -406,7 +410,11 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored
         )
         self.session_status.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        self.session_status.setMinimumHeight(132)
+        self.session_status.setFixedHeight(72)
+        self.session_status.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         sampling_layout.addWidget(self.session_duration_label, 5, 0, 1, 4)
         sampling_layout.addWidget(self.session_status, 6, 0, 1, 4)
 
@@ -426,7 +434,7 @@ class MainWindow(QtWidgets.QMainWindow):
         top_splitter.addWidget(sampling_scroll)
         top_splitter.setStretchFactor(0, 0)
         top_splitter.setStretchFactor(1, 1)
-        top_splitter.setSizes([280, 560])
+        top_splitter.setSizes([240, 600])
         right.addWidget(top_splitter)
 
         content_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
@@ -441,7 +449,7 @@ class MainWindow(QtWidgets.QMainWindow):
         plot_title.setObjectName("subtitle")
         plot_layout.addWidget(plot_title)
         self.session_plot = pg.PlotWidget()
-        self.session_plot.setMinimumHeight(300)
+        self.session_plot.setMinimumHeight(200)
         self.session_plot.showGrid(x=True, y=True, alpha=0.25)
         self.session_plot.setMenuEnabled(False)
         self.session_plot.setLabel("bottom", "Elapsed (s)")
@@ -469,14 +477,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.details = QtWidgets.QPlainTextEdit()
         self.details.setObjectName("console")
         self.details.setReadOnly(True)
-        self.details.setMinimumHeight(140)
+        self.details.setMinimumHeight(80)
         details_layout.addWidget(self.details)
 
         content_splitter.addWidget(plot_section)
         content_splitter.addWidget(details_section)
         content_splitter.setStretchFactor(0, 3)
         content_splitter.setStretchFactor(1, 1)
-        content_splitter.setSizes([500, 180])
+        content_splitter.setSizes([360, 120])
         right.addWidget(content_splitter, stretch=1)
 
         splitter.addWidget(left_scroll)
