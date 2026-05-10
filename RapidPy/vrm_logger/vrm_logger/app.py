@@ -408,7 +408,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if app is None:
             return
 
-        common_assets = Path(__file__).resolve().parents[2] / "rapidpy_common" / "assets"
+        if getattr(sys, "frozen", False):
+            base = Path(sys._MEIPASS)  # type: ignore[attr-defined]
+        else:
+            base = Path(__file__).resolve().parents[2]
+        common_assets = base / "rapidpy_common" / "assets"
         arrow_down = (common_assets / "arrow_down.svg").as_posix()
         arrow_up = (common_assets / "arrow_up.svg").as_posix()
 
@@ -989,7 +993,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Z: {zs[idx]:+.5g} {suffix}"
         )
         global_pos = self.plot.mapToGlobal(
-            self.plot.mapFromScene(pos).toPoint()
+            self.plot.mapFromScene(pos)
         )
         QtWidgets.QToolTip.showText(global_pos, tip, self.plot)
 

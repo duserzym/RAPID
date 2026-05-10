@@ -44,6 +44,8 @@ class MainWindow(QtWidgets.QMainWindow):
         c.addWidget(subtitle)
 
         buttons = [
+            ("COM Port Mapper", "com_port_mapper/main.py"),
+            ("Gaussmeter Control", "gaussmeter_control/main.py"),
             ("VRM Logger", "vrm_logger/main.py"),
             ("AF Tuner", "af_tuner/main.py"),
             ("Changer XY", "changer_xy_control/main.py"),
