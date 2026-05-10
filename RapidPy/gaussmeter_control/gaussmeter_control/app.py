@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from datetime import datetime
+import math
 from pathlib import Path
 import sys
 import time
@@ -34,6 +35,30 @@ from rapidpy_common.gaussmeter import (  # noqa: E402
     serial_port_name_to_number,
 )
 from rapidpy_common.ui import apply_card_shadow, apply_liquid_glass_theme  # noqa: E402
+
+
+# Physical unit conversion: displayed label → Tesla (B-field)
+_LABEL_TO_TESLA: dict[str, float] = {
+    "T":    1.0,
+    "mT":   1e-3,
+    "G":    1e-4,
+    "kG":   0.1,
+    "A/m":  4 * math.pi * 1e-7,  # μ₀
+    "kA/m": 4 * math.pi * 1e-4,
+    "Oe":   1e-4,
+    "kOe":  0.1,
+}
+
+# Tesla → plot base unit conversion factors and axis labels
+_PLOT_UNIT_CONFIGS: tuple[tuple[str, str, float], ...] = (
+    # (base_unit_label, y_axis_label, factor_from_T)
+    ("T",   "Field (T)",    1.0),
+    ("mT",  "Field (mT)",   1e3),
+    ("G",   "Field (G)",    1e4),
+    ("kG",  "Field (kG)",   10.0),
+    ("A/m", "Field (A/m)", 1.0 / (4 * math.pi * 1e-7)),
+    ("Oe",  "Field (Oe)",  1e4),
+)
 
 
 RANGE_OPTIONS = (
@@ -91,6 +116,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sampling_target_count = 0
         self._sampling_captured_count = 0
         self._sampling_alarm_enabled = False
+        self._plot_unit_config_index: int = 0  # index into _PLOT_UNIT_CONFIGS; 0 = T
         self._building = False
         self._build_ui()
         self._wire_events()
@@ -160,7 +186,7 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Preferred,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
-        self.driver_status.setFixedHeight(58)
+        self.driver_status.setFixedHeight(70)
         left.addWidget(self.driver_status)
 
         dll_row = QtWidgets.QHBoxLayout()
@@ -445,15 +471,28 @@ class MainWindow(QtWidgets.QMainWindow):
         plot_layout = QtWidgets.QVBoxLayout(plot_section)
         plot_layout.setContentsMargins(0, 0, 0, 0)
         plot_layout.setSpacing(8)
+        plot_header_layout = QtWidgets.QHBoxLayout()
+        plot_header_layout.setContentsMargins(0, 0, 0, 0)
         plot_title = QtWidgets.QLabel("Session Plot")
         plot_title.setObjectName("subtitle")
-        plot_layout.addWidget(plot_title)
+        plot_header_layout.addWidget(plot_title)
+        plot_header_layout.addStretch(1)
+        plot_units_label = QtWidgets.QLabel("Units:")
+        plot_header_layout.addWidget(plot_units_label)
+        self.plot_units_combo = QtWidgets.QComboBox()
+        for cfg in _PLOT_UNIT_CONFIGS:
+            self.plot_units_combo.addItem(cfg[0])
+        self.plot_units_combo.setFixedWidth(90)
+        self.plot_units_combo.setCurrentIndex(0)
+        plot_header_layout.addWidget(self.plot_units_combo)
+        plot_layout.addLayout(plot_header_layout)
+
         self.session_plot = pg.PlotWidget()
         self.session_plot.setMinimumHeight(200)
         self.session_plot.showGrid(x=True, y=True, alpha=0.25)
         self.session_plot.setMenuEnabled(False)
         self.session_plot.setLabel("bottom", "Elapsed (s)")
-        self.session_plot.setLabel("left", "Field")
+        self.session_plot.setLabel("left", _PLOT_UNIT_CONFIGS[0][1])
         self.session_plot.getPlotItem().hideButtons()
         self.session_curve = self.session_plot.plot(
             [],
@@ -464,6 +503,27 @@ class MainWindow(QtWidgets.QMainWindow):
             symbolBrush="#0f766e",
             symbolPen="#0f766e",
         )
+
+        # Crosshair and tooltip for hover
+        _cross_pen = pg.mkPen(color=(200, 200, 200), width=1, style=QtCore.Qt.PenStyle.DashLine)
+        self._plot_vline = pg.InfiniteLine(angle=90, movable=False, pen=_cross_pen)
+        self._plot_hline = pg.InfiniteLine(angle=0, movable=False, pen=_cross_pen)
+        self._plot_tooltip = pg.TextItem(
+            text="", color=(240, 240, 240), anchor=(0.0, 1.0),
+            fill=pg.mkBrush(30, 30, 30, 180),
+        )
+        self.session_plot.addItem(self._plot_vline, ignoreBounds=True)
+        self.session_plot.addItem(self._plot_hline, ignoreBounds=True)
+        self.session_plot.addItem(self._plot_tooltip, ignoreBounds=True)
+        self._plot_vline.setVisible(False)
+        self._plot_hline.setVisible(False)
+        self._plot_tooltip.setVisible(False)
+        self._plot_mouse_proxy = pg.SignalProxy(
+            self.session_plot.scene().sigMouseMoved,
+            rateLimit=60,
+            slot=self._on_plot_mouse_moved,
+        )
+
         plot_layout.addWidget(self.session_plot, stretch=1)
 
         details_section = QtWidgets.QWidget()
@@ -525,6 +585,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sample_count_spin.valueChanged.connect(self._update_sampling_controls)
         self.alarm_low_spin.valueChanged.connect(self._update_sampling_controls)
         self.alarm_high_spin.valueChanged.connect(self._update_sampling_controls)
+        self.plot_units_combo.currentIndexChanged.connect(self._on_plot_units_changed)
 
     def _browse_for_dll(self) -> None:
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -543,14 +604,27 @@ class MainWindow(QtWidgets.QMainWindow):
         return [text]
 
     def _refresh_driver_status(self) -> None:
+        user_paths = self._driver_search_paths()
         if self.auto_port_radio.isChecked():
-            available, detail = fwbell_driver_status(self._driver_search_paths())
+            available, detail = fwbell_driver_status(user_paths)
         else:
-            available, detail = gaussmeter_driver_status(self._driver_search_paths())
+            available, detail = gaussmeter_driver_status(user_paths)
         if available:
-            self.driver_status.setPlainText(f"Driver ready: {detail}")
+            # Indicate whether the DLL was supplied by the user or auto-found.
+            if user_paths:
+                source = "User-specified"
+            else:
+                source = "Auto-detected"
+            self.driver_status.setPlainText(f"Driver ready ({source}):\n{detail}")
         else:
-            self.driver_status.setPlainText(f"Driver unavailable: {detail}")
+            # Provide a clear next-step hint when no DLL is found.
+            if "not found" in detail.lower() and not user_paths:
+                hint = (
+                    "\nPlace usb5100.dll next to the app, or use Browse DLL to locate it."
+                )
+            else:
+                hint = ""
+            self.driver_status.setPlainText(f"Driver unavailable:\n{detail}{hint}")
         self.connect_btn.setEnabled(available)
         if not available and self._client is None:
             self._set_reading(None)
@@ -892,14 +966,64 @@ class MainWindow(QtWidgets.QMainWindow):
         self._log(f"Saved {len(self._session_samples)} session samples to {file_path}.")
 
     def _update_session_plot(self) -> None:
+        cfg = _PLOT_UNIT_CONFIGS[self._plot_unit_config_index]
         if not self._session_samples:
             self.session_curve.setData([], [])
-            self.session_plot.setLabel("left", "Field")
+            self.session_plot.setLabel("left", cfg[1])
             return
         x_values = [sample.elapsed_s for sample in self._session_samples]
-        y_values = [sample.reading.value for sample in self._session_samples]
+        y_values = [self._sample_to_plot_value(sample) for sample in self._session_samples]
         self.session_curve.setData(x_values, y_values)
-        self.session_plot.setLabel("left", f"Field ({self._session_samples[-1].reading.units_label})")
+        self.session_plot.setLabel("left", cfg[1])
+
+    def _sample_to_plot_value(self, sample: SessionSample) -> float:
+        """Convert a SessionSample's reading to the currently selected plot units."""
+        cfg = _PLOT_UNIT_CONFIGS[self._plot_unit_config_index]
+        target_factor = cfg[2]          # T → target unit
+        src_label = sample.reading.units_label
+        src_to_T = _LABEL_TO_TESLA.get(src_label)
+        if src_to_T is None:
+            # Unknown label — return raw value unchanged
+            return sample.reading.value
+        return sample.reading.value * src_to_T * target_factor
+
+    def _on_plot_units_changed(self, index: int) -> None:
+        self._plot_unit_config_index = index
+        self._update_session_plot()
+
+    def _on_plot_mouse_moved(self, event: tuple) -> None:
+        pos = event[0]
+        plot_item = self.session_plot.getPlotItem()
+        if not self.session_plot.sceneBoundingRect().contains(pos):
+            self._plot_vline.setVisible(False)
+            self._plot_hline.setVisible(False)
+            self._plot_tooltip.setVisible(False)
+            return
+        if not self._session_samples:
+            self._plot_vline.setVisible(False)
+            self._plot_hline.setVisible(False)
+            self._plot_tooltip.setVisible(False)
+            return
+
+        mouse_pt = plot_item.vb.mapSceneToView(pos)
+        mx = mouse_pt.x()
+
+        # Snap to nearest sample
+        nearest = min(self._session_samples, key=lambda s: abs(s.elapsed_s - mx))
+        py = self._sample_to_plot_value(nearest)
+        cfg = _PLOT_UNIT_CONFIGS[self._plot_unit_config_index]
+        units_label = cfg[0]
+
+        self._plot_vline.setPos(nearest.elapsed_s)
+        self._plot_hline.setPos(py)
+        self._plot_tooltip.setText(
+            f"#{nearest.index}  t={nearest.elapsed_s:.3f} s\n"
+            f"Field = {py:.6g} {units_label}"
+        )
+        self._plot_tooltip.setPos(nearest.elapsed_s, py)
+        self._plot_vline.setVisible(True)
+        self._plot_hline.setVisible(True)
+        self._plot_tooltip.setVisible(True)
 
     def _set_reading(self, reading: GaussmeterReading | None) -> None:
         if reading is None:

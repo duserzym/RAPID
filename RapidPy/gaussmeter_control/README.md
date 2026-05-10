@@ -8,6 +8,7 @@ Standalone PySide6 panel for the VB6 `frm908AGaussmeter` workflow.
 - Supports USB auto mode and manual COM-port mode
 - Reads live gaussmeter values with polling
 - Exposes VB6-aligned controls for mode, units, range, null, auto-zero, peak reset, and time sync
+- Adds a sampling-session workflow with one-shot capture, timed capture, alarm-window capture, a live trend plot, and CSV export
 - Reuses `rapidpy_common/gaussmeter.py` so the same source functions can be shared by the COM mapper and later subsystem ports
 
 ## Driver Requirement
