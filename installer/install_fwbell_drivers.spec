@@ -2,11 +2,11 @@
 # Run from repo root:
 #   pyinstaller installer\install_fwbell_drivers.spec
 #
-# Output: dist\install_fwbell_drivers\install_fwbell_drivers.exe
+# Output: dist\install_fwbell_drivers.exe  (one-file bundle)
 #
 # The spec bundles usb5100.dll + libusb0.dll from the repo lib\ folder into a
-# drivers\ subfolder inside the exe bundle so the installer can find and copy
-# them without the user needing to locate them manually.
+# drivers\ subfolder inside the exe so the installer can find and copy them
+# without the user needing to locate them manually.
 
 from pathlib import Path
 
@@ -41,24 +41,18 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
     name="install_fwbell_drivers",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,          # No console window for the GUI path
-    uac_admin=True,         # Request elevation via manifest
-    icon=None,
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=True,
     upx_exclude=[],
-    name="install_fwbell_drivers",
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    uac_admin=True,
+    icon=None,
 )

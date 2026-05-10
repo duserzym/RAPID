@@ -10,8 +10,8 @@
 #define AppVersion   "1.0.0"
 #define AppPublisher "RAPID Lab"
 #define AppExeName   "RapidPy_Gaussmeter.exe"
-#define DistDir      "..\dist\RapidPy_Gaussmeter"
-#define DrvInstDir   "..\dist\install_fwbell_drivers"
+#define GaussExe     "..\dist\RapidPy_Gaussmeter.exe"
+#define DrvInstExe   "..\dist\install_fwbell_drivers.exe"
 
 [Setup]
 AppId={{A3F2C1D0-7B4E-4A9F-8C23-1E5D6F7A8B9C}}
@@ -44,15 +44,11 @@ DllPageDesc=Locate the FW Bell vendor DLLs so the app can find them automaticall
 DllNote=These files come from the FW Bell PC5180 software package:%n  usb5100.dll%n  libusb0.dll%nIf you skip this step you can run the driver installer separately from the Start Menu.
 
 [Files]
-; Main application (PyInstaller one-folder bundle)
-Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Main application (one-file bundle)
+Source: "{#GaussExe}"; DestDir: "{app}"; Flags: ignoreversion
 
-; Standalone driver installer (separate PyInstaller bundle)
-Source: "{#DrvInstDir}\*"; DestDir: "{app}\driver_installer"; Flags: ignoreversion recursesubdirs createallsubdirs
-
-; usb5100_probe.exe is already inside the bundle under tools\
-; but we also expose it at app root for convenience
-Source: "{#DistDir}\tools\usb5100_probe.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Standalone driver installer (one-file bundle)
+Source: "{#DrvInstExe}"; DestDir: "{app}\driver_installer"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}";                   Filename: "{app}\{#AppExeName}"
