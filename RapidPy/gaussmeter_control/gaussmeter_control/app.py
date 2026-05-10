@@ -504,23 +504,10 @@ class MainWindow(QtWidgets.QMainWindow):
             symbolPen="#0f766e",
         )
 
-        # Crosshair and tooltip for hover
-        _cross_pen = pg.mkPen(color=(200, 200, 200), width=1, style=QtCore.Qt.PenStyle.DashLine)
-        self._plot_vline = pg.InfiniteLine(angle=90, movable=False, pen=_cross_pen)
-        self._plot_hline = pg.InfiniteLine(angle=0, movable=False, pen=_cross_pen)
-        self._plot_tooltip = pg.TextItem(
-            text="", color=(240, 240, 240), anchor=(0.0, 1.0),
-            fill=pg.mkBrush(30, 30, 30, 180),
-        )
-        self.session_plot.addItem(self._plot_vline, ignoreBounds=True)
-        self.session_plot.addItem(self._plot_hline, ignoreBounds=True)
-        self.session_plot.addItem(self._plot_tooltip, ignoreBounds=True)
-        self._plot_vline.setVisible(False)
-        self._plot_hline.setVisible(False)
-        self._plot_tooltip.setVisible(False)
+        # Snap-to-point tooltip on hover
         self._plot_mouse_proxy = pg.SignalProxy(
             self.session_plot.scene().sigMouseMoved,
-            rateLimit=60,
+            rateLimit=30,
             slot=self._on_plot_mouse_moved,
         )
 
@@ -995,35 +982,35 @@ class MainWindow(QtWidgets.QMainWindow):
         pos = event[0]
         plot_item = self.session_plot.getPlotItem()
         if not self.session_plot.sceneBoundingRect().contains(pos):
-            self._plot_vline.setVisible(False)
-            self._plot_hline.setVisible(False)
-            self._plot_tooltip.setVisible(False)
+            QtWidgets.QToolTip.hideText()
             return
         if not self._session_samples:
-            self._plot_vline.setVisible(False)
-            self._plot_hline.setVisible(False)
-            self._plot_tooltip.setVisible(False)
+            QtWidgets.QToolTip.hideText()
             return
 
         mouse_pt = plot_item.vb.mapSceneToView(pos)
         mx = mouse_pt.x()
 
-        # Snap to nearest sample
+        # Snap to nearest sample within 2% of view width
+        vb_rect = plot_item.vb.viewRect()
+        snap_tol = vb_rect.width() * 0.02
         nearest = min(self._session_samples, key=lambda s: abs(s.elapsed_s - mx))
+        if abs(nearest.elapsed_s - mx) > snap_tol:
+            QtWidgets.QToolTip.hideText()
+            return
+
         py = self._sample_to_plot_value(nearest)
         cfg = _PLOT_UNIT_CONFIGS[self._plot_unit_config_index]
         units_label = cfg[0]
 
-        self._plot_vline.setPos(nearest.elapsed_s)
-        self._plot_hline.setPos(py)
-        self._plot_tooltip.setText(
-            f"#{nearest.index}  t={nearest.elapsed_s:.3f} s\n"
+        tip = (
+            f"#{nearest.index}  t = {nearest.elapsed_s:.3f} s\n"
             f"Field = {py:.6g} {units_label}"
         )
-        self._plot_tooltip.setPos(nearest.elapsed_s, py)
-        self._plot_vline.setVisible(True)
-        self._plot_hline.setVisible(True)
-        self._plot_tooltip.setVisible(True)
+        global_pos = self.session_plot.mapToGlobal(
+            self.session_plot.mapFromScene(pos)
+        )
+        QtWidgets.QToolTip.showText(global_pos, tip, self.session_plot)
 
     def _set_reading(self, reading: GaussmeterReading | None) -> None:
         if reading is None:

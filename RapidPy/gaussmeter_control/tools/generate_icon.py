@@ -40,17 +40,36 @@ def draw_icon(output_png: Path, output_ico: Path) -> None:
     painter.setPen(arc_pen)
     painter.setBrush(QtCore.Qt.NoBrush)
 
-    # Source pole position — below centre so arcs fan upward into the icon
-    cx, cy = 512, 820
+    # --- "GM" text label — top 30% of canvas ---
+    font = QtGui.QFont("SF Pro Display", 210)
+    if not QtGui.QFontInfo(font).exactMatch():
+        font = QtGui.QFont("Avenir Next", 210)
+    if not QtGui.QFontInfo(font).exactMatch():
+        font = QtGui.QFont("Segoe UI", 210)
+    font.setWeight(QtGui.QFont.Black)
+    font.setLetterSpacing(QtGui.QFont.AbsoluteSpacing, 8)
 
-    # Three field line arcs of increasing radius
-    for radius in (155, 255, 355):
+    painter.setFont(font)
+    painter.setPen(QtGui.QColor("#D8EEFF"))
+    # Text rect: y 70‥370 — occupies top ~30% of the 1024-px canvas
+    painter.drawText(QtCore.QRect(0, 70, size, 300), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, "GM")
+
+    # --- Magnetic field arcs — bottom 45% of canvas (y ≥ 460) ---
+    arc_pen = QtGui.QPen(QtGui.QColor("#38C1FF"), 44)
+    arc_pen.setCapStyle(QtCore.Qt.RoundCap)
+    arc_pen.setJoinStyle(QtCore.Qt.RoundJoin)
+    painter.setPen(arc_pen)
+    painter.setBrush(QtCore.Qt.NoBrush)
+
+    # Source pole at y=900 so the largest arc top ≈ 900 - 340*1.25 = 475
+    cx, cy = 512, 900
+
+    for radius in (140, 240, 340):
         path = QtGui.QPainterPath()
-        # Semicircular arc from right side to left side, curving upward
         path.moveTo(cx + radius, cy)
         path.cubicTo(
-            cx + radius, cy - radius * 1.3,
-            cx - radius, cy - radius * 1.3,
+            cx + radius, cy - radius * 1.25,
+            cx - radius, cy - radius * 1.25,
             cx - radius, cy,
         )
         painter.drawPath(path)
@@ -58,20 +77,7 @@ def draw_icon(output_png: Path, output_ico: Path) -> None:
     # --- Small filled circle at the pole source ---
     painter.setPen(QtCore.Qt.NoPen)
     painter.setBrush(QtGui.QBrush(QtGui.QColor("#38C1FF")))
-    painter.drawEllipse(QtCore.QPointF(cx, cy), 38, 38)
-
-    # --- "GM" text label ---
-    font = QtGui.QFont("SF Pro Display", 270)
-    if not QtGui.QFontInfo(font).exactMatch():
-        font = QtGui.QFont("Avenir Next", 270)
-    if not QtGui.QFontInfo(font).exactMatch():
-        font = QtGui.QFont("Segoe UI", 270)
-    font.setWeight(QtGui.QFont.Black)
-    font.setLetterSpacing(QtGui.QFont.AbsoluteSpacing, 10)
-
-    painter.setFont(font)
-    painter.setPen(QtGui.QColor("#D8EEFF"))
-    painter.drawText(QtCore.QRect(0, 120, size, 380), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop, "GM")
+    painter.drawEllipse(QtCore.QPointF(cx, cy), 36, 36)
     painter.end()
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
