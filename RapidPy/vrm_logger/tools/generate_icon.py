@@ -29,26 +29,30 @@ def draw_icon(output_png: Path, output_ico: Path) -> None:
     painter.setBrush(QtGui.QBrush(gloss))
     painter.drawRoundedRect(88, 88, 848, 420, 170, 170)
 
-    wave_pen = QtGui.QPen(QtGui.QColor("#FFCD34"), 54)
-    wave_pen.setCapStyle(QtCore.Qt.RoundCap)
-    painter.setPen(wave_pen)
-    path = QtGui.QPainterPath(QtCore.QPointF(120, 640))
-    path.cubicTo(220, 360, 330, 860, 430, 640)
-    path.cubicTo(530, 420, 640, 760, 760, 570)
-    path.cubicTo(840, 470, 890, 530, 930, 500)
-    painter.drawPath(path)
-
-    font = QtGui.QFont("SF Pro Display", 270)
+    # --- "VRM" text label — top 30% of canvas ---
+    font = QtGui.QFont("SF Pro Display", 185)
     if not QtGui.QFontInfo(font).exactMatch():
-        font = QtGui.QFont("Avenir Next", 270)
+        font = QtGui.QFont("Avenir Next", 185)
     if not QtGui.QFontInfo(font).exactMatch():
-        font = QtGui.QFont("Segoe UI", 270)
+        font = QtGui.QFont("Segoe UI", 185)
     font.setWeight(QtGui.QFont.Black)
-    font.setLetterSpacing(QtGui.QFont.AbsoluteSpacing, 12)
+    font.setLetterSpacing(QtGui.QFont.AbsoluteSpacing, 4)
 
     painter.setFont(font)
     painter.setPen(QtGui.QColor("#fff6e4"))
-    painter.drawText(QtCore.QRect(0, 140, size, 360), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop, "VRM")
+    # Text rect: y 70‥370 — occupies top ~30% of the 1024-px canvas
+    painter.drawText(QtCore.QRect(0, 70, size, 300), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, "VRM")
+
+    # --- Decay wave — bottom 50% of canvas (minimum y ≈ 480) ---
+    wave_pen = QtGui.QPen(QtGui.QColor("#FFCD34"), 54)
+    wave_pen.setCapStyle(QtCore.Qt.RoundCap)
+    painter.setPen(wave_pen)
+    # Wave shifted down: troughs at ~760, peaks at ~510
+    path = QtGui.QPainterPath(QtCore.QPointF(110, 720))
+    path.cubicTo(210, 490, 330, 900, 440, 720)
+    path.cubicTo(540, 540, 645, 840, 760, 660)
+    path.cubicTo(845, 545, 895, 600, 935, 575)
+    painter.drawPath(path)
     painter.end()
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
