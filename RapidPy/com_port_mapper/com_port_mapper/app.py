@@ -67,6 +67,13 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("RapidPy COM Port Mapper")
         self.resize(1320, 760)
+        
+        # Load window icon if available
+        self._assets_dir = Path(__file__).resolve().parent.parent / "assets"
+        self._icon_png = self._assets_dir / "com_port_mapper_icon.png"
+        if self._icon_png.exists():
+            self.setWindowIcon(QtGui.QIcon(str(self._icon_png)))
+        
         self._worker_thread: QtCore.QThread | None = None
         self._worker: SweepWorker | None = None
         self._results_by_port: dict[str, PortProbeResult] = {}
