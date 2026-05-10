@@ -4,6 +4,8 @@ RapidPy now contains multiple subsystem control apps to support a staged VB6 -> 
 
 ## Apps
 
+- `com_port_mapper`: COM sweep and RAPID device identification helper for Windows serial adapters
+- `gaussmeter_control`: 908A gaussmeter operator panel backed by the legacy `gm0.dll` driver
 - `vrm_logger`: VRM logging and SQUID live plotting
 - `af_tuner`: AF coil tuning panel based on `frmAFTuner`
 - `changer_xy_control`: hole/sample list and queue prep based on `frmChanger`
@@ -16,6 +18,7 @@ RapidPy now contains multiple subsystem control apps to support a staged VB6 -> 
 - `rapidpy_common/ui.py`: shared UMN maroon/gold liquid-glass style
 - `rapidpy_common/hardware.py`: VB6-aligned Quicksilver motor protocol, movement, and conversion utilities
 - `rapidpy_common/adwin_af.py`: ADWIN AF ramp backend (`boot/load/set params/start/readback`)
+- `rapidpy_common/gaussmeter.py`: shared `gm0.dll` wrapper, reading conversion helpers, and gaussmeter probe entry points
 
 Implemented parity highlights:
 

@@ -1,0 +1,1130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RapidPy — Python rock magnetometer control software for the modern era</title>
+  <meta name="description" content="Open-source Python replacement for the RAPID VB6 paleomagnetic magnetometer controller. Modern 64-bit apps for rock magnetism labs." />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ── Reset & base ─────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --maroon:      #7B1628;
+      --maroon-dark: #5A0F1C;
+      --maroon-mid:  #9E1F33;
+      --gold:        #FFCD34;
+      --gold-light:  #FFE07A;
+      --cream:       #F5F0E8;
+      --cream-dark:  #EBE4D4;
+      --text:        #1A1A1A;
+      --text-muted:  #555;
+      --white:       #FFFFFF;
+      --radius-sm:   8px;
+      --radius-md:   16px;
+      --radius-lg:   28px;
+      --shadow-sm:   0 2px 8px rgba(0,0,0,.08);
+      --shadow-md:   0 8px 32px rgba(0,0,0,.12);
+      --shadow-lg:   0 24px 64px rgba(0,0,0,.18);
+      --transition:  0.25s cubic-bezier(.4,0,.2,1);
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      color: var(--text);
+      background: var(--white);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ── Nav ──────────────────────────────────────────────────────────── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 clamp(1.5rem, 5vw, 4rem);
+      height: 64px;
+      background: rgba(255,255,255,.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid rgba(123,22,40,.10);
+    }
+
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 1.15rem;
+      color: var(--maroon);
+      text-decoration: none;
+    }
+
+    .nav-logo-badge {
+      background: var(--maroon);
+      color: var(--gold);
+      font-size: .7rem;
+      font-weight: 800;
+      letter-spacing: .08em;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 2rem;
+      list-style: none;
+    }
+
+    .nav-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: .9rem;
+      font-weight: 500;
+      transition: color var(--transition);
+    }
+
+    .nav-links a:hover { color: var(--maroon); }
+
+    /* ── Hero ─────────────────────────────────────────────────────────── */
+    .hero {
+      position: relative;
+      min-height: 92vh;
+      display: flex;
+      align-items: center;
+      overflow: hidden;
+      background: linear-gradient(135deg, var(--maroon-dark) 0%, var(--maroon) 50%, #9E2040 100%);
+    }
+
+    /* Subtle geometric grid overlay */
+    .hero::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,205,52,.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,205,52,.06) 1px, transparent 1px);
+      background-size: 64px 64px;
+      animation: grid-drift 20s linear infinite;
+    }
+
+    @keyframes grid-drift {
+      from { transform: translate(0, 0); }
+      to   { transform: translate(64px, 64px); }
+    }
+
+    /* Glowing orbs */
+    .hero-orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(80px);
+      opacity: .35;
+      pointer-events: none;
+    }
+
+    .hero-orb-1 {
+      width: 600px; height: 600px;
+      background: radial-gradient(circle, #FF6B6B, transparent);
+      top: -200px; right: -100px;
+    }
+
+    .hero-orb-2 {
+      width: 400px; height: 400px;
+      background: radial-gradient(circle, var(--gold), transparent);
+      bottom: -100px; left: 10%;
+    }
+
+    .hero-content {
+      position: relative;
+      z-index: 2;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: clamp(3rem,8vh,6rem) clamp(1.5rem,5vw,4rem);
+    }
+
+    .hero-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255,205,52,.15);
+      border: 1px solid rgba(255,205,52,.3);
+      color: var(--gold-light);
+      font-size: .8rem;
+      font-weight: 600;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      padding: 6px 14px;
+      border-radius: 100px;
+      margin-bottom: 1.5rem;
+    }
+
+    .hero-eyebrow-dot {
+      width: 6px; height: 6px;
+      background: var(--gold);
+      border-radius: 50%;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: .5; transform: scale(.8); }
+    }
+
+    .hero h1 {
+      font-size: clamp(3rem, 7vw, 5.5rem);
+      font-weight: 800;
+      line-height: 1.05;
+      color: var(--white);
+      margin-bottom: 1.5rem;
+      letter-spacing: -.03em;
+    }
+
+    .hero h1 em {
+      font-style: normal;
+      background: linear-gradient(135deg, var(--gold), var(--gold-light));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-desc {
+      font-size: clamp(1.05rem, 2vw, 1.3rem);
+      color: rgba(255,255,255,.75);
+      max-width: 600px;
+      margin-bottom: 2.5rem;
+      line-height: 1.7;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 28px;
+      border-radius: 100px;
+      font-size: .95rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all var(--transition);
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn-primary {
+      background: var(--gold);
+      color: var(--maroon-dark);
+    }
+
+    .btn-primary:hover {
+      background: var(--gold-light);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(255,205,52,.4);
+    }
+
+    .btn-outline {
+      background: rgba(255,255,255,.1);
+      color: var(--white);
+      border: 1px solid rgba(255,255,255,.25);
+      backdrop-filter: blur(8px);
+    }
+
+    .btn-outline:hover {
+      background: rgba(255,255,255,.18);
+      transform: translateY(-2px);
+    }
+
+    /* Hero stats */
+    .hero-stats {
+      display: flex;
+      gap: 3rem;
+      margin-top: 4rem;
+      padding-top: 3rem;
+      border-top: 1px solid rgba(255,255,255,.12);
+      flex-wrap: wrap;
+    }
+
+    .stat { color: var(--white); }
+
+    .stat-value {
+      font-size: 2rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, var(--gold), var(--gold-light));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      line-height: 1;
+    }
+
+    .stat-label {
+      font-size: .8rem;
+      color: rgba(255,255,255,.55);
+      margin-top: 4px;
+      font-weight: 500;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+
+    /* ── Section layout ───────────────────────────────────────────────── */
+    section {
+      padding: clamp(4rem,10vh,8rem) clamp(1.5rem,5vw,4rem);
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .section-eyebrow {
+      font-size: .8rem;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--maroon);
+      margin-bottom: .75rem;
+    }
+
+    .section-title {
+      font-size: clamp(1.8rem, 4vw, 2.8rem);
+      font-weight: 800;
+      letter-spacing: -.02em;
+      line-height: 1.15;
+      margin-bottom: 1rem;
+      color: var(--text);
+    }
+
+    .section-subtitle {
+      font-size: 1.05rem;
+      color: var(--text-muted);
+      max-width: 640px;
+      line-height: 1.7;
+      margin-bottom: 3rem;
+    }
+
+    /* ── Migration banner ─────────────────────────────────────────────── */
+    .migration-banner {
+      background: linear-gradient(135deg, var(--cream) 0%, var(--cream-dark) 100%);
+      border-top: 1px solid var(--cream-dark);
+      border-bottom: 1px solid var(--cream-dark);
+    }
+
+    .migration-banner > section {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4rem;
+      align-items: center;
+    }
+
+    @media (max-width: 768px) {
+      .migration-banner > section { grid-template-columns: 1fr; }
+    }
+
+    .migration-visual {
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+      justify-content: center;
+    }
+
+    .migration-box {
+      background: var(--white);
+      border-radius: var(--radius-md);
+      padding: 1.5rem 2rem;
+      text-align: center;
+      box-shadow: var(--shadow-sm);
+      border: 1px solid rgba(0,0,0,.06);
+      min-width: 130px;
+    }
+
+    .migration-box .tech { font-size: 1.4rem; font-weight: 800; margin-bottom: 4px; }
+    .migration-box .year { font-size: .75rem; color: var(--text-muted); font-weight: 500; }
+
+    .migration-box.old { opacity: .6; }
+    .migration-box.old .tech { color: #888; }
+
+    .migration-box.new .tech { color: var(--maroon); }
+
+    .migration-arrow {
+      font-size: 1.6rem;
+      color: var(--maroon);
+      flex-shrink: 0;
+    }
+
+    .migration-list {
+      list-style: none;
+    }
+
+    .migration-list li {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: .65rem 0;
+      font-size: .95rem;
+      color: var(--text-muted);
+      border-bottom: 1px solid rgba(0,0,0,.06);
+    }
+
+    .migration-list li:last-child { border-bottom: none; }
+
+    .migration-list .check {
+      width: 20px; height: 20px;
+      background: var(--maroon);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .migration-list .check svg { width: 10px; height: 10px; fill: var(--white); }
+
+    /* ── Module cards ─────────────────────────────────────────────────── */
+    .modules-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 2rem;
+    }
+
+    .module-card {
+      background: var(--white);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      border: 1px solid rgba(0,0,0,.08);
+      box-shadow: var(--shadow-sm);
+      transition: all var(--transition);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .module-card:hover {
+      transform: translateY(-6px);
+      box-shadow: var(--shadow-lg);
+      border-color: rgba(123,22,40,.15);
+    }
+
+    .module-card-image {
+      width: 100%;
+      aspect-ratio: 16/10;
+      object-fit: cover;
+      object-position: top left;
+      background: var(--cream-dark);
+      display: block;
+    }
+
+    .module-card-image-placeholder {
+      width: 100%;
+      aspect-ratio: 16/10;
+      background: linear-gradient(135deg, var(--cream) 0%, var(--cream-dark) 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .module-card-icon {
+      width: 64px;
+      height: 64px;
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.8rem;
+    }
+
+    .module-card-body {
+      padding: 1.75rem;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: .75rem;
+    }
+
+    .module-card-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .module-badge {
+      font-size: .7rem;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      padding: 3px 10px;
+      border-radius: 100px;
+    }
+
+    .badge-ready    { background: #E8F5E9; color: #2E7D32; }
+    .badge-wip      { background: #FFF8E1; color: #F57F17; }
+    .badge-planned  { background: #F3E5F5; color: #6A1B9A; }
+
+    .module-card h3 {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .module-card p {
+      font-size: .9rem;
+      color: var(--text-muted);
+      line-height: 1.65;
+    }
+
+    .module-specs {
+      list-style: none;
+      margin-top: auto;
+      padding-top: .75rem;
+      border-top: 1px solid rgba(0,0,0,.07);
+      display: flex;
+      flex-direction: column;
+      gap: .35rem;
+    }
+
+    .module-specs li {
+      font-size: .8rem;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .spec-key {
+      font-weight: 600;
+      color: var(--text);
+      min-width: 70px;
+    }
+
+    .module-card-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: .75rem;
+      font-size: .85rem;
+      font-weight: 600;
+      color: var(--maroon);
+      text-decoration: none;
+      transition: gap var(--transition);
+    }
+
+    .module-card-link:hover { gap: 10px; }
+
+    /* ── Architecture diagram ─────────────────────────────────────────── */
+    .arch-section {
+      background: linear-gradient(135deg, #0F172A 0%, #1E1B4B 100%);
+      border-radius: var(--radius-lg);
+      padding: 3rem;
+      color: var(--white);
+    }
+
+    .arch-section .section-eyebrow { color: var(--gold-light); }
+    .arch-section .section-title   { color: var(--white); }
+    .arch-section .section-subtitle{ color: rgba(255,255,255,.6); }
+
+    .arch-tree {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .85rem;
+      line-height: 1.9;
+      color: rgba(255,255,255,.8);
+      background: rgba(0,0,0,.3);
+      border-radius: var(--radius-md);
+      padding: 2rem;
+      overflow-x: auto;
+      border: 1px solid rgba(255,255,255,.08);
+    }
+
+    .arch-tree .dir  { color: #93C5FD; font-weight: 600; }
+    .arch-tree .file { color: rgba(255,255,255,.65); }
+    .arch-tree .comment { color: #6EE7B7; }
+
+    /* ── Stack strip ──────────────────────────────────────────────────── */
+    .stack-strip {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      justify-content: center;
+      padding: 2rem 0;
+    }
+
+    .stack-pill {
+      background: var(--white);
+      border: 1px solid rgba(0,0,0,.10);
+      border-radius: 100px;
+      padding: 8px 20px;
+      font-size: .85rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .stack-pill .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+    }
+
+    /* ── Timeline ─────────────────────────────────────────────────────── */
+    .timeline {
+      position: relative;
+      padding-left: 2rem;
+    }
+
+    .timeline::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: .5rem;
+      bottom: .5rem;
+      width: 2px;
+      background: linear-gradient(to bottom, var(--maroon), var(--gold), rgba(0,0,0,.08));
+      border-radius: 2px;
+    }
+
+    .timeline-item {
+      position: relative;
+      padding: 0 0 2.5rem 2rem;
+    }
+
+    .timeline-item::before {
+      content: '';
+      position: absolute;
+      left: -5px;
+      top: 6px;
+      width: 12px; height: 12px;
+      background: var(--maroon);
+      border-radius: 50%;
+      border: 2px solid var(--white);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .timeline-item.future::before { background: var(--cream-dark); border-color: rgba(0,0,0,.2); }
+
+    .timeline-date {
+      font-size: .75rem;
+      font-weight: 700;
+      color: var(--maroon);
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      margin-bottom: .35rem;
+    }
+
+    .timeline-item.future .timeline-date { color: var(--text-muted); }
+
+    .timeline-title {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: .35rem;
+    }
+
+    .timeline-desc {
+      font-size: .88rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* ── CTA section ──────────────────────────────────────────────────── */
+    .cta-section {
+      background: linear-gradient(135deg, var(--maroon-dark) 0%, var(--maroon) 100%);
+      padding: clamp(4rem,8vh,7rem) clamp(1.5rem,5vw,4rem);
+      text-align: center;
+    }
+
+    .cta-section h2 {
+      font-size: clamp(1.8rem, 4vw, 2.8rem);
+      font-weight: 800;
+      color: var(--white);
+      margin-bottom: 1rem;
+      letter-spacing: -.02em;
+    }
+
+    .cta-section p {
+      color: rgba(255,255,255,.7);
+      font-size: 1.05rem;
+      max-width: 520px;
+      margin: 0 auto 2.5rem;
+      line-height: 1.7;
+    }
+
+    .cta-actions {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    /* ── Footer ───────────────────────────────────────────────────────── */
+    footer {
+      background: #0F172A;
+      color: rgba(255,255,255,.5);
+      padding: 2.5rem clamp(1.5rem,5vw,4rem);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+      font-size: .85rem;
+    }
+
+    footer a {
+      color: rgba(255,255,255,.6);
+      text-decoration: none;
+      transition: color var(--transition);
+    }
+
+    footer a:hover { color: var(--gold); }
+
+    .footer-links { display: flex; gap: 1.5rem; }
+
+    /* ── Scrolling image fallback ─────────────────────────────────────── */
+    @media (max-width: 600px) {
+      .nav-links { display: none; }
+      .hero-stats { gap: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Navigation ───────────────────────────────────────────────────────── -->
+<nav>
+  <a href="#" class="nav-logo">
+    <span class="nav-logo-badge">RAPID</span>
+    RapidPy
+  </a>
+  <ul class="nav-links">
+    <li><a href="#modules">Modules</a></li>
+    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="#roadmap">Roadmap</a></li>
+    <li><a href="https://github.com/YOUR_ORG/RAPID" target="_blank">GitHub ↗</a></li>
+  </ul>
+</nav>
+
+<!-- ── Hero ─────────────────────────────────────────────────────────────── -->
+<header class="hero">
+  <div class="hero-orb hero-orb-1"></div>
+  <div class="hero-orb hero-orb-2"></div>
+
+  <div class="hero-content">
+    <div class="hero-eyebrow">
+      <span class="hero-eyebrow-dot"></span>
+      Open Source · GPLv3
+    </div>
+
+    <h1>RapidPy — Python rock<br/>magnetometer control<br/><em>for the modern era.</em></h1>
+
+    <p class="hero-desc">
+      RAPID is being rewritten from legacy 32-bit Visual Basic 6 into a clean
+      Python 64-bit stack — keeping the same instrument protocols while adding
+      live plotting, CSV export, and a maintainable open codebase.
+    </p>
+
+    <div class="hero-actions">
+      <a href="#modules" class="btn btn-primary">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm3.354 5.146a.5.5 0 0 1 0 .708l-4 4a.5.5 0 0 1-.708 0l-2-2a.5.5 0 1 1 .708-.708L7 9.793l3.646-3.647a.5.5 0 0 1 .708 0z"/></svg>
+        Explore Modules
+      </a>
+      <a href="https://github.com/YOUR_ORG/RAPID" class="btn btn-outline" target="_blank">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        View on GitHub
+      </a>
+    </div>
+
+    <div class="hero-stats">
+      <div class="stat">
+        <div class="stat-value">3</div>
+        <div class="stat-label">Released modules</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">64-bit</div>
+        <div class="stat-label">Native Python</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">PySide6</div>
+        <div class="stat-label">Modern UI</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">2024→</div>
+        <div class="stat-label">Active development</div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ── Migration story ───────────────────────────────────────────────────── -->
+<div class="migration-banner">
+  <section>
+    <div>
+      <p class="section-eyebrow">Why RapidPy?</p>
+      <h2 class="section-title">From legacy VB6<br/>to maintainable Python</h2>
+      <p class="section-subtitle">
+        The original RAPID system was written in Visual Basic 6 and has run rock
+        magnetism labs reliably for decades. As Windows evolves and VB6 becomes
+        harder to maintain, RapidPy provides a drop-in module-by-module replacement
+        — same instrument protocols, modern codebase.
+      </p>
+      <ul class="migration-list">
+        <li>
+          <span class="check"><svg viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></span>
+          Same hardware — no instrument changes needed
+        </li>
+        <li>
+          <span class="check"><svg viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></span>
+          64-bit executables, no 32-bit compatibility shims
+        </li>
+        <li>
+          <span class="check"><svg viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></span>
+          Open source and community-maintainable
+        </li>
+        <li>
+          <span class="check"><svg viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></span>
+          Live plotting and CSV export built in
+        </li>
+        <li>
+          <span class="check"><svg viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></span>
+          Staged rollout — run new and old panels side by side
+        </li>
+      </ul>
+    </div>
+
+    <div class="migration-visual">
+      <div class="migration-box old">
+        <div class="tech">VB6</div>
+        <div class="year">Visual Basic 6 · 32-bit · Windows only</div>
+      </div>
+      <div class="migration-arrow">→</div>
+      <div class="migration-box new">
+        <div class="tech">Python</div>
+        <div class="year">PySide6 · 64-bit · PyInstaller bundles</div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ── Technology stack ──────────────────────────────────────────────────── -->
+<div style="background: var(--cream); padding: 2rem 0; border-bottom: 1px solid var(--cream-dark);">
+  <div class="stack-strip">
+    <div class="stack-pill"><span class="dot" style="background:#3776AB"></span> Python 3.13</div>
+    <div class="stack-pill"><span class="dot" style="background:#41CD52"></span> PySide6 / Qt6</div>
+    <div class="stack-pill"><span class="dot" style="background:#E94D4D"></span> pyqtgraph</div>
+    <div class="stack-pill"><span class="dot" style="background:#F7931E"></span> PyInstaller</div>
+    <div class="stack-pill"><span class="dot" style="background:#7B1628"></span> Conda</div>
+    <div class="stack-pill"><span class="dot" style="background:#24292F"></span> GitHub Actions</div>
+  </div>
+</div>
+
+<!-- ── Modules ───────────────────────────────────────────────────────────── -->
+<section id="modules">
+  <p class="section-eyebrow">Released Apps</p>
+  <h2 class="section-title">Subsystem control modules</h2>
+  <p class="section-subtitle">
+    Each module is a self-contained executable — operators can run only the
+    panels they need without installing the full system.
+  </p>
+
+  <div class="modules-grid">
+
+    <!-- Gaussmeter -->
+    <div class="module-card">
+      <img
+        class="module-card-image"
+        src="../images/gaussmeter_app.png"
+        alt="RapidPy Gaussmeter Control screenshot"
+        loading="lazy"
+        onerror="this.style.display='none'"
+      />
+      <div class="module-card-body">
+        <div class="module-card-header">
+          <div class="module-card-icon" style="background: linear-gradient(135deg,#0B2545,#061328);">
+            <span style="font-size:1.4rem">🧲</span>
+          </div>
+          <span class="module-badge badge-ready">Released</span>
+        </div>
+        <h3>Gaussmeter Control</h3>
+        <p>
+          Driver-backed operator panel for the FW Bell 908A USB gaussmeter.
+          Live field readings, configurable sampling sessions with alarm
+          thresholds, and an interactive hover tooltip on the session plot.
+        </p>
+        <ul class="module-specs">
+          <li><span class="spec-key">Backend</span>usb5100.dll (64-bit USB) or gm0.dll (RS-232)</li>
+          <li><span class="spec-key">Output</span>Timestamped CSV session export</li>
+          <li><span class="spec-key">Bundle</span>Includes FW Bell USB driver installer</li>
+        </ul>
+        <a href="https://github.com/YOUR_ORG/RAPID/blob/main/docs/gaussmeter-user-manual.md" class="module-card-link" target="_blank">
+          View documentation →
+        </a>
+      </div>
+    </div>
+
+    <!-- VRM Logger -->
+    <div class="module-card">
+      <img
+        class="module-card-image"
+        src="../images/vrm_logger_app.png"
+        alt="RapidPy VRM Decay Logger screenshot"
+        loading="lazy"
+        onerror="this.style.display='none'"
+      />
+      <div class="module-card-body">
+        <div class="module-card-header">
+          <div class="module-card-icon" style="background: linear-gradient(135deg,#7A0219,#520012);">
+            <span style="font-size:1.4rem">📉</span>
+          </div>
+          <span class="module-badge badge-ready">Released</span>
+        </div>
+        <h3>VRM Decay Logger</h3>
+        <p>
+          Three-axis SQUID live-view logger for viscous remanent magnetisation
+          decay experiments. Configurable log/linear time steps, per-axis
+          calibration, and direct legacy INI file loading.
+        </p>
+        <ul class="module-specs">
+          <li><span class="spec-key">Backend</span>RS-232 SQUID serial stream (X/Y/Z)</li>
+          <li><span class="spec-key">Cal</span>Loads from legacy Paleomag_v3.INI</li>
+          <li><span class="spec-key">Output</span>Timestamped 3-axis CSV</li>
+        </ul>
+        <a href="https://github.com/YOUR_ORG/RAPID/blob/main/docs/vrm-logger-user-manual.md" class="module-card-link" target="_blank">
+          View documentation →
+        </a>
+      </div>
+    </div>
+
+    <!-- ADwin Comms -->
+    <div class="module-card">
+      <div class="module-card-image-placeholder">
+        <div class="module-card-icon" style="background: linear-gradient(135deg,#0D3B2E,#062018); width:80px; height:80px; border-radius:20px;">
+          <span style="font-size:2rem">⚡</span>
+        </div>
+      </div>
+      <div class="module-card-body">
+        <div class="module-card-header">
+          <div class="module-card-icon" style="background: linear-gradient(135deg,#0D3B2E,#062018);">
+            <span style="font-size:1.4rem">⚡</span>
+          </div>
+          <span class="module-badge badge-ready">Released</span>
+        </div>
+        <h3>ADwin Communications Tester</h3>
+        <p>
+          Diagnostic panel for testing ADwin Gold II digital and analog I/O
+          channels before running AF demagnetisation or DC motor control
+          routines. Live square-wave output visualisation.
+        </p>
+        <ul class="module-specs">
+          <li><span class="spec-key">Backend</span>ADwin Gold II via Python bindings</li>
+          <li><span class="spec-key">Purpose</span>Pre-flight comms bench test</li>
+          <li><span class="spec-key">Channels</span>Digital I/O + Analog in/out</li>
+        </ul>
+        <a href="https://github.com/YOUR_ORG/RAPID/blob/main/docs/adwin-comms-user-manual.md" class="module-card-link" target="_blank">
+          View documentation →
+        </a>
+      </div>
+    </div>
+
+    <!-- AF Tuner — WIP -->
+    <div class="module-card">
+      <div class="module-card-image-placeholder">
+        <div class="module-card-icon" style="background: linear-gradient(135deg,#1A237E,#0D1659); width:80px; height:80px; border-radius:20px;">
+          <span style="font-size:2rem">🎛️</span>
+        </div>
+      </div>
+      <div class="module-card-body">
+        <div class="module-card-header">
+          <div class="module-card-icon" style="background: linear-gradient(135deg,#1A237E,#0D1659);">
+            <span style="font-size:1.4rem">🎛️</span>
+          </div>
+          <span class="module-badge badge-wip">In Progress</span>
+        </div>
+        <h3>AF Tuner</h3>
+        <p>
+          Alternating-field coil tuning panel — Python port of
+          <code>frmAFTuner</code>. Manages ADwin-driven AF ramps,
+          relay selection, and field calibration curves.
+        </p>
+        <ul class="module-specs">
+          <li><span class="spec-key">VB6 src</span>frmAFTuner.frm</li>
+          <li><span class="spec-key">Backend</span>ADwin AF ramp via adwin_af.py</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- XY Changer — WIP -->
+    <div class="module-card">
+      <div class="module-card-image-placeholder">
+        <div class="module-card-icon" style="background: linear-gradient(135deg,#4A148C,#2D0A5A); width:80px; height:80px; border-radius:20px;">
+          <span style="font-size:2rem">📐</span>
+        </div>
+      </div>
+      <div class="module-card-body">
+        <div class="module-card-header">
+          <div class="module-card-icon" style="background: linear-gradient(135deg,#4A148C,#2D0A5A);">
+            <span style="font-size:1.4rem">📐</span>
+          </div>
+          <span class="module-badge badge-wip">In Progress</span>
+        </div>
+        <h3>XY Sample Changer</h3>
+        <p>
+          Sample queue prep and XY table control panel — port of
+          <code>frmChanger</code>. Handles
+          <code>HomeToCenter</code> and <code>MoveToCorner</code>
+          routines with limit-switch guidance.
+        </p>
+        <ul class="module-specs">
+          <li><span class="spec-key">VB6 src</span>frmChanger.frm</li>
+          <li><span class="spec-key">Motor</span>Quicksilver XY via hardware.py</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- System Shell — Planned -->
+    <div class="module-card">
+      <div class="module-card-image-placeholder">
+        <div class="module-card-icon" style="background: linear-gradient(135deg,#263238,#102027); width:80px; height:80px; border-radius:20px;">
+          <span style="font-size:2rem">🖥️</span>
+        </div>
+      </div>
+      <div class="module-card-body">
+        <div class="module-card-header">
+          <div class="module-card-icon" style="background: linear-gradient(135deg,#263238,#102027);">
+            <span style="font-size:1.4rem">🖥️</span>
+          </div>
+          <span class="module-badge badge-planned">Planned</span>
+        </div>
+        <h3>System Shell</h3>
+        <p>
+          Unified operator launcher for all converted subsystem panels —
+          replacement for the VB6 main form. Orchestrates startup sequencing,
+          hardware checks, and inter-panel communication.
+        </p>
+        <ul class="module-specs">
+          <li><span class="spec-key">VB6 src</span>frmProgram.frm</li>
+          <li><span class="spec-key">Role</span>Central orchestrator</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ── Architecture ──────────────────────────────────────────────────────── -->
+<section id="architecture" style="padding-top: 0;">
+  <div class="arch-section">
+    <p class="section-eyebrow">Codebase</p>
+    <h2 class="section-title">Architecture</h2>
+    <p class="section-subtitle">
+      A shared hardware abstraction layer sits beneath all subsystem apps,
+      keeping driver code in one place and subsystem UIs thin.
+    </p>
+
+    <pre class="arch-tree">
+<span class="dir">RAPID/</span>
+├── <span class="dir">RapidPy/</span>
+│   ├── <span class="dir">rapidpy_common/</span>         <span class="comment"># Shared layer</span>
+│   │   ├── <span class="file">ui.py</span>               <span class="comment"># UMN maroon/gold style sheet</span>
+│   │   ├── <span class="file">hardware.py</span>         <span class="comment"># Quicksilver motor protocol + motion helpers</span>
+│   │   ├── <span class="file">adwin_af.py</span>         <span class="comment"># ADwin AF ramp backend</span>
+│   │   └── <span class="file">gaussmeter.py</span>       <span class="comment"># gm0.dll / FW Bell wrapper</span>
+│   │
+│   ├── <span class="dir">gaussmeter_control/</span>     <span class="comment"># ✅ Released</span>
+│   ├── <span class="dir">vrm_logger/</span>             <span class="comment"># ✅ Released</span>
+│   ├── <span class="dir">adwin_comms/</span>            <span class="comment"># ✅ Released</span>
+│   ├── <span class="dir">af_tuner/</span>               <span class="comment"># 🔧 In progress</span>
+│   ├── <span class="dir">changer_xy_control/</span>     <span class="comment"># 🔧 In progress</span>
+│   ├── <span class="dir">updown_control/</span>         <span class="comment"># 🔧 In progress</span>
+│   ├── <span class="dir">dc_motor_control/</span>       <span class="comment"># 🔧 In progress</span>
+│   └── <span class="dir">system_shell/</span>           <span class="comment"># 📋 Planned</span>
+│
+├── <span class="dir">installer/</span>               <span class="comment"># PyInstaller specs + Inno Setup</span>
+├── <span class="dir">docs/</span>                    <span class="comment"># User and developer manuals</span>
+└── <span class="dir">VB6/</span>                     <span class="comment"># Original VB6 source (reference)</span></pre>
+  </div>
+</section>
+
+<!-- ── Roadmap ───────────────────────────────────────────────────────────── -->
+<section id="roadmap">
+  <p class="section-eyebrow">Transition Plan</p>
+  <h2 class="section-title">Migration roadmap</h2>
+  <p class="section-subtitle">
+    Subsystem-by-subsystem replacement, each validated against real hardware
+    before the next one begins.
+  </p>
+
+  <div class="timeline">
+    <div class="timeline-item">
+      <div class="timeline-date">2024 — Phase 1</div>
+      <div class="timeline-title">Instrument drivers &amp; shared layer</div>
+      <div class="timeline-desc">
+        Python wrappers for <code>gm0.dll</code>, FW Bell <code>usb5100.dll</code>,
+        Quicksilver motor protocol, and ADwin AF ramp. UMN maroon/gold Qt style sheet.
+      </div>
+    </div>
+
+    <div class="timeline-item">
+      <div class="timeline-date">2025 — Phase 2</div>
+      <div class="timeline-title">Core operator panels released</div>
+      <div class="timeline-desc">
+        Gaussmeter Control, VRM Decay Logger, and ADwin Communications Tester
+        released as standalone Windows executables. Deployed at IRM, University of Minnesota.
+      </div>
+    </div>
+
+    <div class="timeline-item">
+      <div class="timeline-date">2025–2026 — Phase 3</div>
+      <div class="timeline-title">Motor control &amp; AF panels</div>
+      <div class="timeline-desc">
+        XY changer, up/down vertical axis, DC motor control, and AF tuner panels.
+        All panels validated against hardware limits and safety interlocks.
+      </div>
+    </div>
+
+    <div class="timeline-item future">
+      <div class="timeline-date">2026 — Phase 4</div>
+      <div class="timeline-title">System Shell &amp; full orchestration</div>
+      <div class="timeline-desc">
+        Unified system shell merges all validated subsystem backends into a single
+        orchestrated control app — full VB6 parity with no parallel VB6 required.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── CTA ───────────────────────────────────────────────────────────────── -->
+<div class="cta-section">
+  <h2>Get involved</h2>
+  <p>
+    RAPID is open source under GPLv3. Bug reports, hardware compatibility
+    notes, and pull requests are welcome.
+  </p>
+  <div class="cta-actions">
+    <a href="https://github.com/YOUR_ORG/RAPID" class="btn btn-primary" target="_blank">
+      View Repository
+    </a>
+    <a href="https://github.com/YOUR_ORG/RAPID/issues" class="btn btn-outline" target="_blank">
+      Report an Issue
+    </a>
+  </div>
+</div>
+
+<!-- ── Footer ───────────────────────────────────────────────────────────── -->
+<footer>
+  <span>© 2025 RAPID Lab · UC Berkeley / IRM Minnesota · GPLv3</span>
+  <div class="footer-links">
+    <a href="https://github.com/YOUR_ORG/RAPID" target="_blank">GitHub</a>
+    <a href="https://github.com/YOUR_ORG/RAPID/blob/main/LICENSE" target="_blank">License</a>
+    <a href="https://sourceforge.net/projects/paleomag/" target="_blank">Original VB6 Source</a>
+  </div>
+</footer>
+
+</body>
+</html>
