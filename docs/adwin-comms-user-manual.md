@@ -281,26 +281,56 @@ Comparing the two traces lets you verify:
 
 ## 9. ADwin Driver Installation
 
-The ADwin system uses `adwin32.dll` (Windows 32-bit COM DLL) to communicate with the board via USB or Ethernet.
+The ADwin system uses `adwin32.dll` (Windows 32-bit COM DLL) to communicate with the board via USB or Ethernet. This DLL is supplied by **Jäger Messtechnik**, the manufacturer of ADwin hardware — it is not available on PyPI and cannot be replaced by any Python package.
+
+> **ADwin product page:** [www.adwin.de/us/products/products.html](https://www.adwin.de/us/products/products.html)  
+> **Python for ADwin info:** [www.adwin.de/us/products/python.html](https://www.adwin.de/us/products/python.html)
+
+### Dependency chain
+
+```
+ADwin hardware (Gold II / Pro II)
+        ↓
+ADwin driver installer  (from adwin.de → Downloads)
+        ↓  installs adwin32.dll → C:\Windows\System32\
+RapidPy / adwin_af.py   (ctypes.WinDLL("adwin32.dll"))
+        ↓
+RapidPyADWin.exe  /  af_tuner  /  full RAPID orchestrator
+```
+
+**A pip-installable Python package alone is not sufficient.** The driver installer is required on every PC that will communicate with the board.
 
 ### What is needed
-- The **ADwin driver package** from Jäger Messtechnik (the board manufacturer).
-- Typically installed as part of the **ADwin Development Environment** (ADbasic IDE).
-- After installation, `adwin32.dll` is copied to `C:\Windows\System32\` (or `SysWOW64\`).
+- The **ADwin driver/runtime package** from Jäger Messtechnik.
+- Typically installed as part of the **ADwin Development Environment** (includes ADbasic IDE and USB/Ethernet drivers).
+- After installation, `adwin32.dll` is present in `C:\Windows\System32\` and the boot file `ADwin9.btl` (or equivalent for your board model) is placed in the ADwin program directory.
 
 ### Installation steps
-1. Download the ADwin driver/software package from [www.adwin.de](https://www.adwin.de).
-2. Run the installer as Administrator.
-3. Accept the USB driver installation when prompted (the installer registers the board's USB device).
-4. Verify: open a command prompt and run `python -c "import ctypes; ctypes.WinDLL('adwin32.dll'); print('OK')"` — if it prints `OK`, the DLL is accessible.
+1. Go to [www.adwin.de/us/products/products.html](https://www.adwin.de/us/products/products.html) and navigate to **Support → Downloads**.
+2. Download the ADwin software package appropriate for your board model (Gold II, Pro II, etc.).
+3. Run the installer as Administrator.
+4. Accept the USB driver installation when prompted (registers the board's USB device with Windows).
+5. Note the install path — the `.btl` boot file location is needed in the Board Configuration panel.
+6. Verify the DLL is accessible by running in a command prompt:
+   ```
+   python -c "import ctypes; ctypes.WinDLL('adwin32.dll'); print('OK')"
+   ```
+   If it prints `OK`, communication is ready. If it raises `OSError`, the driver is not installed or the DLL is not on the system path.
 
 ### Do you need to install the driver to use this Python app?
 
-**Yes.** The Python app calls `adwin32.dll` via ctypes — the same DLL that the VB6 RAPID software uses. There is no Python-native ADwin driver that bypasses this requirement. The app will open without the driver, but hardware buttons will be disabled.
+**Yes, to communicate with hardware.** Without `adwin32.dll`, the app launches in degraded mode: all hardware buttons are disabled and the console shows:
+
+```
+[WARNING] adwin32.dll not found: ...
+  → Hardware buttons disabled.  Install ADwin driver to enable.
+```
+
+This is intentional — the app is safe to open on any machine for inspection or documentation purposes.
 
 ### Python package alternative?
 
-There is a PyPI package called `adwin` (and similar wrappers) that wrap the same `adwin32.dll`. Since our `rapidpy_common/adwin_af.py` already implements the necessary ctypes bindings directly, adding the PyPI package would be redundant and add a dependency. Our implementation is lighter, fully under our control, and already covers all needed functions.
+There is a PyPI package called `adwin` (and similar community wrappers) that wrap the same `adwin32.dll` — they do not bypass the driver requirement, they simply provide a higher-level Python API on top of it. Since `rapidpy_common/adwin_af.py` already implements all necessary ctypes bindings directly, adding the PyPI package would be redundant. Our implementation is lighter, fully under our control, and matches the exact function signatures used by the legacy VB6 RAPID code.
 
 ---
 
