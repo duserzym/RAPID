@@ -4,6 +4,7 @@ import ctypes
 import os
 import re
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -263,12 +264,44 @@ def _candidate_usb5100_dll_paths(extra_paths: Sequence[str | Path] | None = None
         if env_path:
             candidates.append(Path(env_path))
 
+    # When running as a PyInstaller frozen exe, prefer the bundle directory
+    # (_internal/); also check the tools/ subfolder where the probe lives.
+    frozen_dir = _frozen_app_dir()
+    if frozen_dir is not None:
+        candidates.extend(
+            [
+                frozen_dir / "drivers" / "usb5100.dll",
+                frozen_dir / "tools" / "usb5100.dll",
+                frozen_dir / "usb5100.dll",
+            ]
+        )
+
+    # Directory containing the running executable (also covers plain python main.py).
+    exe_dir = Path(sys.executable).parent
+    candidates.extend(
+        [
+            exe_dir / "usb5100.dll",
+            exe_dir / "drivers" / "usb5100.dll",
+        ]
+    )
+
+    # Current working directory (covers running main.py from the app folder).
+    candidates.append(Path.cwd() / "usb5100.dll")
+
     repo_root = _repo_root()
     candidates.extend(
         [
             repo_root / "lib" / "usb5100.dll",
             repo_root / "tools" / "usb5100.dll",
             Path(r"C:/Program Files (x86)/FW Bell/PC5180/usb5100.dll"),
+        ]
+    )
+
+    # Standard RapidPy installation paths.
+    candidates.extend(
+        [
+            Path(r"C:/Program Files/RapidPy/Gaussmeter/drivers/usb5100.dll"),
+            Path(r"C:/Program Files (x86)/RapidPy/Gaussmeter/drivers/usb5100.dll"),
         ]
     )
 
@@ -308,12 +341,39 @@ def find_usb5100_dll(extra_paths: Sequence[str | Path] | None = None) -> Path | 
     return None
 
 
+def _frozen_app_dir() -> Path | None:
+    """Return the _internal/ data directory when frozen by PyInstaller (one-folder bundle).
+
+    In PyInstaller's one-folder mode the .exe lives in the top-level bundle
+    folder, but ALL bundled data/binaries are extracted to the _internal/
+    subdirectory, which is exposed as sys._MEIPASS.  Always prefer _MEIPASS
+    so path searches find the actual files.
+    """
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass)          # e.g. dist\RapidPy_Gaussmeter\_internal
+        return Path(sys.executable).parent  # fallback for one-file mode
+    return None
+
+
 def _candidate_usb5100_helper_paths() -> list[Path]:
     candidates = []
 
     env_path = os.environ.get("RAPID_USB5100_HELPER")
     if env_path:
         candidates.append(Path(env_path))
+
+    # When running as a PyInstaller frozen exe the helper is bundled inside
+    # the same folder under tools\.
+    frozen_dir = _frozen_app_dir()
+    if frozen_dir is not None:
+        candidates.extend(
+            [
+                frozen_dir / "tools" / "usb5100_probe.exe",
+                frozen_dir / "usb5100_probe.exe",
+            ]
+        )
 
     repo_root = _repo_root()
     candidates.extend(
@@ -384,6 +444,7 @@ def _run_fwbell_helper(
             text=True,
             timeout=timeout_s,
             check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
     except FileNotFoundError as exc:
         raise GaussmeterDriverError(f"Unable to launch {helper_path}: {exc}") from exc

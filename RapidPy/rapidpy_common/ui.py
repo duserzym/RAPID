@@ -32,6 +32,11 @@ def apply_liquid_glass_theme(app: QtWidgets.QApplication) -> None:
             border: 1px solid rgba(255, 255, 255, 0.65);
             border-radius: 24px;
         }}
+        QFrame#livePanel {{
+            background: rgba(255, 255, 255, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.62);
+            border-radius: 24px;
+        }}
         QLabel#title {{
             font-size: 24px;
             font-weight: 760;
@@ -48,6 +53,22 @@ def apply_liquid_glass_theme(app: QtWidgets.QApplication) -> None:
             padding: 8px 10px;
             font-weight: 650;
         }}
+        QPlainTextEdit#statusPill {{
+            background: rgba(255, 255, 255, 0.82);
+            border: 1px solid rgba(122, 2, 25, 0.16);
+            border-radius: 16px;
+            padding: 8px 10px;
+            font-weight: 650;
+            color: #2f2827;
+            selection-background-color: rgba(122, 2, 25, 0.18);
+        }}
+        QLabel#readingDisplay {{
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid rgba(122, 2, 25, 0.14);
+            border-radius: 20px;
+            padding: 16px 18px;
+            color: {MAROON};
+        }}
         QPlainTextEdit#console {{
             background: rgba(28, 20, 19, 0.88);
             color: #fff2c9;
@@ -55,6 +76,13 @@ def apply_liquid_glass_theme(app: QtWidgets.QApplication) -> None:
             border: 1px solid rgba(255, 205, 52, 0.32);
             padding: 8px;
             selection-background-color: {MAROON};
+        }}
+        QScrollArea#panelScroll {{
+            background: transparent;
+            border: none;
+        }}
+        QScrollArea#panelScroll > QWidget > QWidget {{
+            background: transparent;
         }}
         QPushButton {{
             background: rgba(255, 255, 255, 0.76);
