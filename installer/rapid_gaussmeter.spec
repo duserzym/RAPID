@@ -8,8 +8,9 @@
 from pathlib import Path
 import sys
 
-REPO_ROOT  = Path(SPECPATH).parent          # e.g. E:\Github\RAPID
-APP_DIR    = REPO_ROOT / "RapidPy" / "gaussmeter_control"
+REPO_ROOT   = Path(SPECPATH).parent          # e.g. E:\Github\RAPID
+APP_DIR     = REPO_ROOT / "RapidPy" / "gaussmeter_control"
+ICON_PATH   = APP_DIR / "assets" / "gaussmeter_icon.ico"
 COMMON_DIR = REPO_ROOT / "RapidPy" / "rapidpy_common"
 TOOLS_DIR  = REPO_ROOT / "tools"
 LIB_DIR    = REPO_ROOT / "lib"
@@ -70,7 +71,7 @@ exe = EXE(
     console=False,              # No terminal window
     disable_windowed_traceback=False,
     argv_emulation=False,
-    icon=None,                  # Replace with .ico path if desired
+    icon=str(ICON_PATH) if ICON_PATH.exists() else None,
 )
 
 coll = COLLECT(
