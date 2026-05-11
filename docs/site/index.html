@@ -735,7 +735,7 @@
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm3.354 5.146a.5.5 0 0 1 0 .708l-4 4a.5.5 0 0 1-.708 0l-2-2a.5.5 0 1 1 .708-.708L7 9.793l3.646-3.647a.5.5 0 0 1 .708 0z"/></svg>
         Explore Modules
       </a>
-      <a href="https://github.com/YOUR_ORG/RAPID" class="btn btn-outline" target="_blank">
+      <a href="https://github.com/duserzym/RAPID" class="btn btn-outline" target="_blank">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
         View on GitHub
       </a>
@@ -903,11 +903,13 @@
 
     <!-- ADwin Comms -->
     <div class="module-card">
-      <div class="module-card-image-placeholder">
-        <div class="module-card-icon" style="background: linear-gradient(135deg,#0D3B2E,#062018); width:80px; height:80px; border-radius:20px;">
-          <span style="font-size:2rem">⚡</span>
-        </div>
-      </div>
+      <img
+        class="module-card-image"
+        src="../images/adwin_comms_app.png"
+        alt="RapidPy ADwin Communications Tester screenshot"
+        loading="lazy"
+        onerror="this.style.display='none'"
+      />
       <div class="module-card-body">
         <div class="module-card-header">
           <div class="module-card-icon" style="background: linear-gradient(135deg,#0D3B2E,#062018);">
@@ -929,6 +931,36 @@
         <a href="https://github.com/YOUR_ORG/RAPID/blob/main/docs/adwin-comms-user-manual.md" class="module-card-link" target="_blank">
           View documentation →
         </a>
+      </div>
+    </div>
+
+    <!-- COM Port Mapper -->
+    <div class="module-card">
+      <img
+        class="module-card-image"
+        src="../images/com_port_mapper_app.png"
+        alt="RapidPy COM Port Mapper screenshot"
+        loading="lazy"
+        onerror="this.style.display='none'"
+      />
+      <div class="module-card-body">
+        <div class="module-card-header">
+          <div class="module-card-icon" style="background: linear-gradient(135deg,#1A3A5C,#0D1F35);">
+            <span style="font-size:1.4rem">🔌</span>
+          </div>
+          <span class="module-badge badge-ready">Released</span>
+        </div>
+        <h3>COM Port Mapper</h3>
+        <p>
+          Utility for detecting and assigning serial COM ports to each
+          hardware device (gaussmeter, SQUID, motor controllers) before
+          starting a measurement session.
+        </p>
+        <ul class="module-specs">
+          <li><span class="spec-key">Detection</span>Auto-probes port list</li>
+          <li><span class="spec-key">Devices</span>Gaussmeter, SQUID, XY/Z motors</li>
+          <li><span class="spec-key">Saves</span>JSON config read by all modules</li>
+        </ul>
       </div>
     </div>
 
