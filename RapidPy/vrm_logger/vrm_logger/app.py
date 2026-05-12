@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import sys
+import threading
 import time
 from collections import deque
 from datetime import datetime
@@ -70,15 +71,19 @@ class AcquisitionWorker(QtCore.QObject):
         self._interval_s = max(interval_s, 0.05)
         self._spacing_mode = spacing_mode
         self._running = True
+        self._stop_event = threading.Event()
 
     @QtCore.Slot()
     def run(self) -> None:
         started = time.monotonic()
         wait_s = self._interval_s
+        self._stop_event.clear()
         self.status.emit("Acquisition started.")
 
         while self._running:
-            time.sleep(wait_s)
+            # Interruptible sleep: wakes immediately when stop() is called
+            if self._stop_event.wait(timeout=wait_s):
+                break
             if not self._running:
                 break
 
@@ -108,6 +113,7 @@ class AcquisitionWorker(QtCore.QObject):
 
     def stop(self) -> None:
         self._running = False
+        self._stop_event.set()  # wake the interruptible sleep immediately
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -121,7 +127,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if compact_size > 0:
             compact_font.setPointSizeF(max(8.0, compact_size - 1.5))
             self.setFont(compact_font)
-        self._assets_dir = Path(__file__).resolve().parent.parent / "assets"
+        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+            self._assets_dir = Path(sys._MEIPASS) / "assets"  # type: ignore[attr-defined]
+        else:
+            self._assets_dir = Path(__file__).resolve().parent.parent / "assets"
         self._icon_png = self._assets_dir / "vrm_icon.png"
         if self._icon_png.exists():
             self.setWindowIcon(QtGui.QIcon(str(self._icon_png)))
@@ -431,9 +440,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 color: #2f2827;
             }
             QFrame#card {
-                background: rgba(255, 255, 255, 0.72);
-                border: 1px solid rgba(255, 255, 255, 0.65);
+                background: rgba(255, 255, 255, 0.92);
+                border: 1px solid rgba(122, 2, 25, 0.14);
                 border-radius: 24px;
+            }
+            QFrame#card QWidget {
+                background: transparent;
             }
             QLabel#title {
                 font-size: 24px;
@@ -463,12 +475,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 font-weight: 650;
             }
             QPlainTextEdit#console {
-                background: rgba(28, 20, 19, 0.88);
-                color: #fff2c9;
+                background: rgba(255, 248, 240, 0.95);
+                color: #1a1410;
                 border-radius: 14px;
-                border: 1px solid rgba(255, 205, 52, 0.32);
+                border: 1px solid rgba(122, 2, 25, 0.28);
                 padding: 8px;
                 selection-background-color: #7A0219;
+                selection-color: #ffffff;
             }
             QScrollArea#panelScroll {
                 background: transparent;
@@ -478,28 +491,34 @@ class MainWindow(QtWidgets.QMainWindow):
                 background: transparent;
             }
             QSplitter::handle {
-                background: rgba(122, 2, 25, 0.08);
+                background: rgba(122, 2, 25, 0.18);
                 border-radius: 4px;
             }
             QSplitter::handle:hover {
-                background: rgba(122, 2, 25, 0.18);
+                background: rgba(122, 2, 25, 0.35);
             }
             QPushButton {
-                background: rgba(255, 255, 255, 0.76);
-                border: 1px solid rgba(255, 255, 255, 0.75);
+                background: rgba(255, 255, 255, 0.72);
+                border: 1px solid rgba(122, 2, 25, 0.55);
                 border-radius: 14px;
                 padding: 9px 14px;
+                color: #2f2827;
             }
             QPushButton:hover {
-                background: rgba(255, 255, 255, 0.92);
+                background: rgba(255, 255, 255, 0.88);
+                border-color: rgba(122, 2, 25, 0.75);
             }
             QPushButton:pressed {
-                background: rgba(232, 226, 216, 0.95);
+                background: rgba(255, 255, 255, 0.94);
+            }
+            QFrame#card QPushButton {
+                background: rgba(255, 255, 255, 0.72);
+                color: #2f2827;
             }
             QPushButton#accent {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #7A0219, stop:1 #5a0013);
-                color: #fff9eb;
-                border: 1px solid rgba(255, 255, 255, 0.26);
+                color: #ffffff;
+                border: 1px solid rgba(122, 2, 25, 0.80);
                 font-weight: 680;
             }
             QPushButton#accent:hover {
@@ -509,8 +528,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 background: #5a0013;
             }
             QLineEdit, QComboBox, QDoubleSpinBox {
-                border: 1px solid rgba(255, 255, 255, 0.82);
-                background: rgba(255, 255, 255, 0.72);
+                border: 1px solid rgba(122, 2, 25, 0.35);
+                background: #ffffff;
                 border-radius: 12px;
                 padding: 7px;
                 selection-background-color: #7A0219;
@@ -518,6 +537,7 @@ class MainWindow(QtWidgets.QMainWindow):
             }
             QComboBox {
                 padding-right: 34px;
+                min-width: 80px;
             }
             QComboBox::drop-down {
                 subcontrol-origin: padding;
@@ -540,27 +560,25 @@ class MainWindow(QtWidgets.QMainWindow):
                 height: 14px;
             }
             QAbstractSpinBox {
-                padding-right: 52px;
+                padding-right: 30px;
+                min-width: 64px;
             }
             QAbstractSpinBox::up-button,
             QAbstractSpinBox::down-button {
-                width: 24px;
+                width: 22px;
                 border: none;
-                border-radius: 9px;
+                border-radius: 5px;
                 background: rgba(122, 2, 25, 0.12);
-                margin-right: 3px;
             }
             QAbstractSpinBox::up-button {
                 subcontrol-origin: border;
                 subcontrol-position: top right;
-                margin-top: 3px;
-                margin-bottom: 1px;
+                margin: 5px 5px 1px 0px;
             }
             QAbstractSpinBox::down-button {
                 subcontrol-origin: border;
                 subcontrol-position: bottom right;
-                margin-top: 1px;
-                margin-bottom: 3px;
+                margin: 1px 5px 5px 0px;
             }
             QAbstractSpinBox::up-button:hover,
             QAbstractSpinBox::down-button:hover {
@@ -580,6 +598,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 width: 13px;
                 height: 13px;
             }
+            QFrame#card QLineEdit,
+            QFrame#card QComboBox,
+            QFrame#card QDoubleSpinBox {
+                background: #ffffff;
+            }
             QScrollBar:vertical {
                 background: rgba(255, 255, 255, 0.2);
                 width: 10px;
@@ -587,7 +610,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 margin: 4px 2px 4px 2px;
             }
             QScrollBar::handle:vertical {
-                background: rgba(255, 205, 52, 0.72);
+                background: rgba(122, 2, 25, 0.45);
                 border-radius: 5px;
                 min-height: 24px;
             }
@@ -849,6 +872,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _stop_logging(self) -> None:
         if self._worker is not None:
+            self.stop_btn.setEnabled(False)  # immediate visual feedback
+            self._append_console("Stopping acquisition…")
             self._worker.stop()
 
     def _worker_finished(self) -> None:
@@ -906,9 +931,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.curve_x.setData(list(self._time), list(self._x_vals))
         self.curve_y.setData(list(self._time), list(self._y_vals))
         self.curve_z.setData(list(self._time), list(self._z_vals))
-        view_box = self.plot.getViewBox()
-        view_box.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)
-        view_box.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
+        # autorange was enabled at startup and stays enabled — no need to re-call per sample
 
         if self._csv_writer is not None:
             abs_dt = datetime.fromtimestamp(self._session_start_epoch + sample.time_s)

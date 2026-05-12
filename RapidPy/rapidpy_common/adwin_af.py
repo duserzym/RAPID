@@ -3,10 +3,50 @@ from __future__ import annotations
 import ctypes
 import os
 import platform
+import struct
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+
+def _find_adwin_btl_folder() -> str:
+    """Try to locate the ADwin BTL folder from the Windows registry.
+
+    Returns the folder path string, or "" if not found or not on Windows.
+    """
+    if platform.system() != "Windows":
+        return ""
+    try:
+        import winreg
+        # Jäger's installer writes the install directory here (32- and 64-bit paths)
+        for hive_flag in (winreg.KEY_READ | winreg.KEY_WOW64_32KEY,
+                          winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+                          winreg.KEY_READ):
+            for subkey in (
+                r"SOFTWARE\Jäger Meßtechnik GmbH\ADwin\Directory",
+                r"SOFTWARE\ADwin\Directory",
+            ):
+                try:
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, subkey,
+                                       access=hive_flag) as key:
+                        btl_dir, _ = winreg.QueryValueEx(key, "BTL")
+                        if btl_dir and Path(btl_dir).is_dir():
+                            return str(btl_dir)
+                        # Try the install root directly
+                        install_dir, _ = winreg.QueryValueEx(key, "")
+                        candidate = Path(install_dir) / "BTL"
+                        if candidate.is_dir():
+                            return str(candidate)
+                except (FileNotFoundError, OSError, ValueError):
+                    continue
+    except Exception:  # pragma: no cover
+        pass
+    # Last-resort hard-coded paths used by the default installer
+    for guess in (r"C:\ADwin\BTL", r"C:\ADwin9\BTL", r"C:\ADwin"):
+        if Path(guess).is_dir():
+            return guess
+    return ""
 
 
 class AdwinError(RuntimeError):
@@ -65,11 +105,17 @@ class AdwinRampResult:
 class _AdwinDll:
     def __init__(self) -> None:
         if platform.system() != "Windows":
-            raise AdwinError("ADWIN backend requires Windows (adwin32.dll).")
+            raise AdwinError("ADWIN backend requires Windows (adwin32.dll / adwin64.dll).")
+        # 64-bit Python cannot load the 32-bit adwin32.dll; use adwin64.dll on 64-bit Python.
+        # The DLLs live in C:\Windows\ (not System32) and must be loaded by full path.
+        dll_name = "adwin32.dll" if struct.calcsize("P") == 4 else "adwin64.dll"
+        dll_path = Path(r"C:\Windows") / dll_name
         try:
-            self._dll = ctypes.WinDLL("adwin32.dll")
+            self._dll = ctypes.WinDLL(str(dll_path))
         except OSError as exc:
-            raise AdwinError("Unable to load adwin32.dll. Install ADWIN runtime on this machine.") from exc
+            raise AdwinError(
+                f"Unable to load {dll_path}. Install ADWIN runtime on this machine."
+            ) from exc
 
         self._bind()
 
@@ -122,8 +168,19 @@ class _AdwinDll:
         self.Get_Digout.argtypes = [ctypes.c_int]
         self.Get_Digout.restype = ctypes.c_long
 
+        self.Get_ADC = self._dll.Get_ADC
+        self.Get_ADC.argtypes = [ctypes.c_int, ctypes.c_int]
+        self.Get_ADC.restype = ctypes.c_long
+
+        self.Set_DAC = self._dll.Set_DAC
+        self.Set_DAC.argtypes = [ctypes.c_int, ctypes.c_long, ctypes.c_int]
+        self.Set_DAC.restype = ctypes.c_int
+
 
 class AdwinAFController:
+    # ±10 V range, 16-bit (0..65535, 32768 = 0 V)
+    _COUNTS_PER_VOLT: float = 32768.0 / 10.0
+
     def __init__(self, board: Optional[AdwinBoardConfig] = None, limits: Optional[AdwinCoilLimits] = None) -> None:
         self.board = board or AdwinBoardConfig()
         self.limits = limits or AdwinCoilLimits()
@@ -135,17 +192,27 @@ class AdwinAFController:
         return int(self.board.board_num)
 
     def _resolve_file(self, filename: str) -> str:
-        root = Path(self.board.bin_folder).expanduser() if self.board.bin_folder else Path.cwd()
+        """Resolve *filename* relative to bin_folder (or auto-detected ADwin BTL folder)."""
+        if self.board.bin_folder:
+            root = Path(self.board.bin_folder).expanduser()
+        else:
+            auto = _find_adwin_btl_folder()
+            root = Path(auto) if auto else Path.cwd()
         path = root / filename
         return str(path)
 
     def boot_board(self) -> None:
-        ver = int(self._dll.ADTest_Version(self._dev, 0))
-        if ver != 0:
-            boot_path = self._resolve_file(self.board.boot_file)
-            ret = int(self._dll.ADboot(os.fsencode(boot_path), self._dev, 0, 1))
-            if ret != 8000:
-                raise AdwinError(f"ADWIN boot failed with code {ret} using {boot_path}.")
+        """Boot the ADwin board using the configured BTL file."""
+        boot_path = self._resolve_file(self.board.boot_file)
+        if not Path(boot_path).is_file():
+            raise AdwinError(
+                f"BTL boot file not found: {boot_path}\n"
+                "Set the 'bin folder' to the directory containing your .btl file "
+                "(typically C:\\ADwin\\BTL\\)."
+            )
+        ret = int(self._dll.ADboot(os.fsencode(boot_path), self._dev, 0, 1))
+        if ret <= 0:
+            raise AdwinError(f"ADWIN boot failed (return code {ret}) using {boot_path}.")
 
     def clear_all_processes(self) -> None:
         for proc in range(1, 11):
@@ -154,7 +221,12 @@ class AdwinAFController:
 
     def load_process(self) -> None:
         process_path = self._resolve_file(self.board.process_file)
-        ret = int(self._dll.ADBload(os.fsencode(process_path), self._dev, 1))
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(str(Path(process_path).parent))
+            ret = int(self._dll.ADBload(os.fsencode(process_path), self._dev, 1))
+        finally:
+            os.chdir(original_cwd)
         if ret != 1:
             raise AdwinError(f"Failed to load ADWIN process {process_path}; return={ret}.")
 
@@ -182,6 +254,30 @@ class AdwinAFController:
 
     def get_digout(self) -> int:
         return int(self._dll.Get_Digout(self._dev))
+
+    def test_version(self) -> int:
+        """Return ADTest_Version result. 0 = not booted / unreachable; nonzero = OK."""
+        return int(self._dll.ADTest_Version(self._dev, 0))
+
+    def voltage_to_count(self, volts: float) -> int:
+        """Convert ±10 V to a 16-bit DAC count (0..65535, 32768 = 0 V)."""
+        return max(0, min(65535, int(volts * self._COUNTS_PER_VOLT) + 32768))
+
+    def count_to_voltage(self, count: int) -> float:
+        """Convert a 16-bit ADC count to ±10 V."""
+        return (int(count) - 32768) / self._COUNTS_PER_VOLT
+
+    def set_dac(self, channel: int, voltage: float) -> None:
+        """Write *voltage* (±10 V) to a DAC output channel. Board must be booted."""
+        count = self.voltage_to_count(voltage)
+        ret = int(self._dll.Set_DAC(int(channel), int(count), self._dev))
+        if ret != 0:
+            raise AdwinError(f"Set_DAC(ch={channel}, v={voltage:.3f}V, count={count}) failed with code {ret}.")
+
+    def get_adc(self, channel: int) -> float:
+        """Read ADC voltage (±10 V) from *channel*. Board must be booted."""
+        count = int(self._dll.Get_ADC(int(channel), self._dev))
+        return self.count_to_voltage(count)
 
     def calc_digout_bit(self, chan_num: int, set_high: bool, one_chan_on: bool = True) -> int:
         if chan_num < 0 or chan_num > 5:

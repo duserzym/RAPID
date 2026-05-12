@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PySide6 import QtGui, QtWidgets
@@ -28,13 +29,16 @@ def apply_liquid_glass_theme(app: QtWidgets.QApplication) -> None:
             color: #2f2827;
         }}
         QFrame#card {{
-            background: rgba(255, 255, 255, 0.72);
-            border: 1px solid rgba(255, 255, 255, 0.65);
+            background: rgba(255, 255, 255, 0.92);
+            border: 1px solid rgba(122, 2, 25, 0.14);
             border-radius: 24px;
         }}
+        QFrame#card QWidget {{
+            background: transparent;
+        }}
         QFrame#livePanel {{
-            background: rgba(255, 255, 255, 0.5);
-            border: 1px solid rgba(255, 255, 255, 0.62);
+            background: rgba(255, 255, 255, 0.60);
+            border: 1px solid rgba(122, 2, 25, 0.10);
             border-radius: 24px;
         }}
         QLabel#title {{
@@ -85,16 +89,17 @@ def apply_liquid_glass_theme(app: QtWidgets.QApplication) -> None:
             background: transparent;
         }}
         QPushButton {{
-            background: rgba(255, 255, 255, 0.76);
-            border: 1px solid rgba(255, 255, 255, 0.75);
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid rgba(122, 2, 25, 0.14);
             border-radius: 14px;
             padding: 9px 14px;
+            color: #2f2827;
         }}
         QPushButton:hover {{
-            background: rgba(255, 255, 255, 0.92);
+            background: rgba(255, 255, 255, 0.88);
         }}
         QPushButton:pressed {{
-            background: rgba(232, 226, 216, 0.95);
+            background: rgba(255, 255, 255, 0.94);
         }}
         QPushButton#accent {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {MAROON}, stop:1 #5a0013);
@@ -109,8 +114,8 @@ def apply_liquid_glass_theme(app: QtWidgets.QApplication) -> None:
             background: #5a0013;
         }}
         QLineEdit, QComboBox, QDoubleSpinBox, QSpinBox {{
-            border: 1px solid rgba(255, 255, 255, 0.82);
-            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid rgba(122, 2, 25, 0.35);
+            background: #ffffff;
             border-radius: 12px;
             padding: 7px;
             selection-background-color: {MAROON};
@@ -118,6 +123,7 @@ def apply_liquid_glass_theme(app: QtWidgets.QApplication) -> None:
         }}
         QComboBox {{
             padding-right: 34px;
+            min-width: 80px;
         }}
         QComboBox::drop-down {{
             subcontrol-origin: padding;
@@ -140,27 +146,25 @@ def apply_liquid_glass_theme(app: QtWidgets.QApplication) -> None:
             height: 14px;
         }}
         QAbstractSpinBox {{
-            padding-right: 52px;
+            padding-right: 30px;
+            min-width: 64px;
         }}
         QAbstractSpinBox::up-button,
         QAbstractSpinBox::down-button {{
-            width: 24px;
+            width: 22px;
             border: none;
-            border-radius: 9px;
+            border-radius: 5px;
             background: rgba(122, 2, 25, 0.12);
-            margin-right: 3px;
         }}
         QAbstractSpinBox::up-button {{
             subcontrol-origin: border;
             subcontrol-position: top right;
-            margin-top: 3px;
-            margin-bottom: 1px;
+            margin: 5px 5px 1px 0px;
         }}
         QAbstractSpinBox::down-button {{
             subcontrol-origin: border;
             subcontrol-position: bottom right;
-            margin-top: 1px;
-            margin-bottom: 3px;
+            margin: 1px 5px 5px 0px;
         }}
         QAbstractSpinBox::up-button:hover,
         QAbstractSpinBox::down-button:hover {{
@@ -179,6 +183,12 @@ def apply_liquid_glass_theme(app: QtWidgets.QApplication) -> None:
             image: url({arrow_down});
             width: 13px;
             height: 13px;
+        }}
+        QFrame#card QLineEdit,
+        QFrame#card QComboBox,
+        QFrame#card QDoubleSpinBox,
+        QFrame#card QSpinBox {{
+            background: #ffffff;
         }}
         QHeaderView::section {{
             background: rgba(255, 255, 255, 0.85);
@@ -204,6 +214,20 @@ def apply_liquid_glass_theme(app: QtWidgets.QApplication) -> None:
         }}
         """
     )
+
+
+def set_app_icon(
+    target: "QtWidgets.QApplication | QtWidgets.QWidget",
+    icon_name: str,
+    dev_assets_dir: Path,
+) -> None:
+    """Set window/application icon, resolving path for both dev and frozen (PyInstaller) runs."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        icon_path = Path(sys._MEIPASS) / "assets" / icon_name  # type: ignore[attr-defined]
+    else:
+        icon_path = dev_assets_dir / icon_name
+    if icon_path.exists():
+        target.setWindowIcon(QtGui.QIcon(str(icon_path)))
 
 
 def apply_card_shadow(widget: QtWidgets.QWidget) -> None:
