@@ -16,7 +16,7 @@ def _bootstrap_common_imports() -> None:
 
 _bootstrap_common_imports()
 from rapidpy_common.gaussmeter import gaussmeter_driver_status  # noqa: E402
-from rapidpy_common.ui import apply_card_shadow, apply_liquid_glass_theme  # noqa: E402
+from rapidpy_common.ui import apply_card_shadow, apply_liquid_glass_theme, set_app_icon  # noqa: E402
 
 from .probe import PortProbeResult, sweep_ports  # noqa: E402
 
@@ -67,13 +67,6 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("RapidPy COM Port Mapper")
         self.resize(1320, 760)
-        
-        # Load window icon if available
-        self._assets_dir = Path(__file__).resolve().parent.parent / "assets"
-        self._icon_png = self._assets_dir / "com_port_mapper_icon.png"
-        if self._icon_png.exists():
-            self.setWindowIcon(QtGui.QIcon(str(self._icon_png)))
-        
         self._worker_thread: QtCore.QThread | None = None
         self._worker: SweepWorker | None = None
         self._results_by_port: dict[str, PortProbeResult] = {}
@@ -144,6 +137,20 @@ class MainWindow(QtWidgets.QMainWindow):
         legacy.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
         left.addWidget(legacy)
 
+        # ADwin board status
+        adwin_title = QtWidgets.QLabel("ADwin Board")
+        adwin_title.setObjectName("subtitle")
+        left.addWidget(adwin_title)
+
+        self.adwin_status_label = QtWidgets.QLabel("Not checked")
+        self.adwin_status_label.setObjectName("valuePill")
+        self.adwin_status_label.setWordWrap(True)
+        left.addWidget(self.adwin_status_label)
+
+        btn_check_adwin = QtWidgets.QPushButton("Check ADwin Board")
+        btn_check_adwin.clicked.connect(self._check_adwin)
+        left.addWidget(btn_check_adwin)
+
         note = QtWidgets.QLabel(
             "High-confidence auto-identification covers motor controllers, SQUID, and gaussmeter ports when the "
             "legacy gm0.dll driver is available. Vacuum, susceptibility, and AF still show adapter metadata plus "
@@ -200,6 +207,56 @@ class MainWindow(QtWidgets.QMainWindow):
 
         apply_card_shadow(left_card)
         apply_card_shadow(right_card)
+
+    def _check_adwin(self) -> None:
+        """Probe ADwin DLL presence, BTL path, and board liveness."""
+        lines: list[str] = []
+        try:
+            from rapidpy_common.adwin_af import (
+                AdwinAFController, AdwinBoardConfig, AdwinError,
+                _find_adwin_btl_folder,
+            )
+        except ImportError as exc:
+            self.adwin_status_label.setText(f"Import error: {exc}")
+            return
+
+        # 1. DLL check
+        import struct
+        dll_name = "adwin32.dll" if struct.calcsize("P") == 4 else "adwin64.dll"
+        try:
+            import ctypes
+            ctypes.WinDLL(f"C:\\Windows\\{dll_name}")
+            lines.append(f"✓ DLL: {dll_name}")
+        except OSError:
+            try:
+                ctypes.WinDLL(dll_name)
+                lines.append(f"✓ DLL: {dll_name} (PATH)")
+            except OSError as e:
+                lines.append(f"✗ DLL: {dll_name} not found — install ADwin driver")
+                self.adwin_status_label.setText("\n".join(lines))
+                return
+
+        # 2. BTL path
+        btl_folder = _find_adwin_btl_folder()
+        if btl_folder:
+            lines.append(f"✓ BTL: {btl_folder}")
+        else:
+            lines.append("✗ BTL: auto-detect failed — set path manually in ADwin app")
+
+        # 3. Board liveness (Test_Version)
+        try:
+            ctrl = AdwinAFController(AdwinBoardConfig())
+            ver = ctrl.test_version()
+            if ver == 0:
+                lines.append("● Board: connected but not booted (Test_Version = 0)")
+            else:
+                lines.append(f"✓ Board: live (Test_Version = {ver})")
+        except AdwinError as exc:
+            lines.append(f"✗ Board: {exc}")
+        except Exception as exc:
+            lines.append(f"✗ Board: unexpected error — {exc}")
+
+        self.adwin_status_label.setText("\n".join(lines))
 
     def _wire_events(self) -> None:
         self.sweep_btn.clicked.connect(self.start_sweep)
@@ -342,6 +399,8 @@ class MainWindow(QtWidgets.QMainWindow):
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     apply_liquid_glass_theme(app)
+    assets_dir = Path(__file__).resolve().parent.parent / "assets"
+    set_app_icon(app, "com_port_mapper_icon.png", assets_dir)
     window = MainWindow()
     window.show()
     return app.exec()
