@@ -37,6 +37,7 @@ a = Analysis(
     ],
     datas=[
         (str(COMMON_DIR / "assets"), "rapidpy_common/assets"),
+        (str(APP_DIR / "assets"),    "assets"),
         *_fw_bell_dlls,
     ],
     hiddenimports=[

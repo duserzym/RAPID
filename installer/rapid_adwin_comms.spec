@@ -24,6 +24,7 @@ a = Analysis(
     binaries=[],
     datas=[
         (str(COMMON_DIR / "assets"), "rapidpy_common/assets"),
+        (str(APP_DIR / "assets"),    "assets"),
     ],
     hiddenimports=[
         "pyqtgraph",
