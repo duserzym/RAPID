@@ -8,9 +8,12 @@ Python subsystem app modeled after `VB6/frmAFTuner.frm`.
 - Old/new resonance frequency and max voltage fields
 - Separate `Apply` and `Save` behavior matching VB6 panel expectations
 - ADWIN-backed auto-tune sweep (frequency scan + best-peak selection)
+- Board-timed dense firing capture for clip / waveform inspection
+- Lightweight dual-plot panel for waveform and sweep response review
 - Runtime-configurable ADWIN board/process parameters
 - Runtime-configurable AF relay digital bit mapping (axial/transverse)
 - Coil-specific max ramp/monitor limits fed directly into ADWIN `FPAR` settings
+- Website-style AF tuner icon generated from `tools/generate_icon.py`
 
 ## Run
 
@@ -33,5 +36,7 @@ Notes:
 - Stores values in `~/.rapidpy_af_tuner.json`
 - Stores backend settings in `~/.rapidpy_af_backend.json`
 - Stores sweep settings in `~/.rapidpy_af_autotune.json`
+- Stores dense capture settings in `~/.rapidpy_af_clip_capture.json`
 - Requires Windows with `adwin32.dll` available on `PATH` for live auto-tune execution
-- Applies AF relay switching on coil selection and before auto-tune starts
+- Uses `VB6/ADwin/sineout.T91` for both tuning sweeps and dense waveform capture
+- Applies AF relay switching on coil selection and before ADwin capture starts
