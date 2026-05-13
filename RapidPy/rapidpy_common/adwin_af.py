@@ -7,7 +7,7 @@ import struct
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 
 def _find_adwin_btl_folder() -> str:
@@ -49,6 +49,91 @@ def _find_adwin_btl_folder() -> str:
     return ""
 
 
+def _find_adwin_dll() -> str:
+    """Return the full path to the correct ADwin DLL for this Python bitness.
+
+    Searches (in order):
+      1. C:\\Windows\\               — standard installer location
+      2. C:\\Windows\\System32\\     — some installer variants
+      3. C:\\Windows\\SysWOW64\\     — 32-bit variant on 64-bit Windows
+      4. ADwin install root          — from registry
+      5. System PATH                 — via shutil.which
+
+    Returns the first path that exists, or "" if none found.
+    """
+    import shutil
+    dll_name = "adwin32.dll" if struct.calcsize("P") == 4 else "adwin64.dll"
+    candidates: list[Path] = [
+        Path(r"C:\Windows") / dll_name,
+        Path(r"C:\Windows\System32") / dll_name,
+        Path(r"C:\Windows\SysWOW64") / dll_name,
+    ]
+    # Also look relative to the BTL folder (install root / parent)
+    btl = _find_adwin_btl_folder()
+    if btl:
+        for rel in ("", "Bin", ".."):
+            candidates.append(Path(btl) / rel / dll_name)
+    # PATH
+    in_path = shutil.which(dll_name)
+    if in_path:
+        candidates.append(Path(in_path))
+    for c in candidates:
+        try:
+            if c.resolve().is_file():
+                return str(c.resolve())
+        except Exception:
+            continue
+    return ""
+
+
+def find_btl_files(extra_folder: str = "") -> list[str]:
+    """Return all .btl firmware files found in known ADwin directories.
+
+    Searches the registry-detected BTL folder, common hard-coded paths,
+    and *extra_folder* if given.  Returns a list of absolute path strings
+    sorted so the most-common models come first:
+      ADwin9.btl, ADwin11.btl, ADwin12.btl, then rest alphabetically.
+    """
+    # Gather candidate directories
+    dirs: list[Path] = []
+    auto = _find_adwin_btl_folder()
+    if auto:
+        dirs.append(Path(auto))
+    for hc in (r"C:\ADwin\BTL", r"C:\ADwin9\BTL", r"C:\ADwin", r"C:\ADwin9"):
+        p = Path(hc)
+        if p.is_dir() and p not in dirs:
+            dirs.append(p)
+    if extra_folder:
+        p = Path(extra_folder)
+        if p.is_dir() and p not in dirs:
+            dirs.append(p)
+
+    seen: set[str] = set()
+    results: list[str] = []
+    for d in dirs:
+        try:
+            for f in sorted(d.glob("*.btl"), key=lambda x: x.name.lower()):
+                key = f.name.lower()
+                if key not in seen:
+                    seen.add(key)
+                    results.append(str(f))
+        except OSError:
+            continue
+
+    # Sort: priority models first, then alphabetical
+    _priority = ["adwin9.btl", "adwin11.btl", "adwin12.btl", "adwin10.btl"]
+
+    def _sort_key(path: str) -> tuple[int, str]:
+        name = Path(path).name.lower()
+        try:
+            return (_priority.index(name), name)
+        except ValueError:
+            return (len(_priority), name)
+
+    results.sort(key=_sort_key)
+    return results
+
+
 class AdwinError(RuntimeError):
     """Raised when ADWIN board operations fail."""
 
@@ -58,7 +143,7 @@ class AdwinBoardConfig:
     board_num: int = 1
     bin_folder: str = ""
     boot_file: str = "ADwin9.btl"
-    process_file: str = "AF_Ramp_System.abp"
+    process_file: str = "sineout.T91"
     ramp_dac_chan: int = 1
     monitor_adc_chan: int = 1
     process_num: int = 1
@@ -102,21 +187,59 @@ class AdwinRampResult:
     points_per_period: float
 
 
+@dataclass(slots=True)
+class AdwinDenseCaptureRequest:
+    sine_freq_hz: float
+    amplitude_v: float
+    io_rate_hz: float
+    duration_s: float
+    dac_chan: int = 1
+    adc_chan: int = 1
+    noise_level: int = 5
+    ramp_mode: int = 3  # CLIPTEST in the legacy ADbasic process
+    ramp_up_slope_vps: float = 200.0
+    ramp_down_slope_vps: float = 200.0
+    ramp_down_periods: int = 2
+
+
+@dataclass(slots=True)
+class AdwinDenseCaptureResult:
+    time_s: list[float]
+    dac_v: list[float]
+    adc_v: list[float]
+    out_count: int
+    in_count: int
+    up_count: int
+    down_start: int
+    timestep_s: float
+    points_per_period: float
+    steady_start_idx: int
+    steady_stop_idx: int
+
+
 class _AdwinDll:
     def __init__(self) -> None:
         if platform.system() != "Windows":
             raise AdwinError("ADWIN backend requires Windows (adwin32.dll / adwin64.dll).")
-        # 64-bit Python cannot load the 32-bit adwin32.dll; use adwin64.dll on 64-bit Python.
-        # The DLLs live in C:\Windows\ (not System32) and must be loaded by full path.
         dll_name = "adwin32.dll" if struct.calcsize("P") == 4 else "adwin64.dll"
-        dll_path = Path(r"C:\Windows") / dll_name
+        dll_path_str = _find_adwin_dll()
+        if not dll_path_str:
+            raise AdwinError(
+                f"{dll_name} not found.\n"
+                f"Searched: C:\\Windows\\, C:\\Windows\\System32\\, ADwin install dir, PATH.\n"
+                "Install the ADwin runtime from https://www.adwin.de "
+                "or copy the DLL to C:\\Windows\\."
+            )
         try:
-            self._dll = ctypes.WinDLL(str(dll_path))
+            self._dll = ctypes.WinDLL(dll_path_str)
+            self._dll_path = dll_path_str
         except OSError as exc:
             raise AdwinError(
-                f"Unable to load {dll_path}. Install ADWIN runtime on this machine."
+                f"Unable to load {dll_path_str}.\n"
+                f"OS error: {exc}\n"
+                "Try running this application as Administrator, "
+                "or reinstall ADwin."
             ) from exc
-
         self._bind()
 
     def _bind(self) -> None:
@@ -161,6 +284,8 @@ class _AdwinDll:
         self.Get_ADBFPar.restype = ctypes.c_float
 
         self.Set_Digout = self._dll.Set_Digout
+        # VB6 source-of-truth declaration in Adwin.bas is:
+        #   Set_Digout(value As Long, DeviceNo As Integer)
         self.Set_Digout.argtypes = [ctypes.c_long, ctypes.c_int]
         self.Set_Digout.restype = ctypes.c_int
 
@@ -175,6 +300,18 @@ class _AdwinDll:
         self.Set_DAC = self._dll.Set_DAC
         self.Set_DAC.argtypes = [ctypes.c_int, ctypes.c_long, ctypes.c_int]
         self.Set_DAC.restype = ctypes.c_int
+
+        self.Get_Data = self._dll.Get_Data
+        self.Get_Data.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_long, ctypes.c_long, ctypes.c_int]
+        self.Get_Data.restype = ctypes.c_int
+
+        self.ADGetErrorCode = self._dll.ADGetErrorCode
+        self.ADGetErrorCode.argtypes = []
+        self.ADGetErrorCode.restype = ctypes.c_long
+
+        self.ADGetErrorText = self._dll.ADGetErrorText
+        self.ADGetErrorText.argtypes = [ctypes.c_long, ctypes.c_char_p, ctypes.c_long]
+        self.ADGetErrorText.restype = ctypes.c_long
 
 
 class AdwinAFController:
@@ -201,6 +338,24 @@ class AdwinAFController:
         path = root / filename
         return str(path)
 
+    def _last_error(self) -> tuple[int, str]:
+        code = int(self._dll.ADGetErrorCode())
+        if code == 0:
+            return 0, ""
+        buf = ctypes.create_string_buffer(512)
+        self._dll.ADGetErrorText(code, buf, len(buf))
+        text = buf.value.decode(errors="replace").strip()
+        return code, text
+
+    def _raise_if_error(self, action: str, raw_return: object | None = None) -> None:
+        code, text = self._last_error()
+        if code == 0:
+            return
+        detail = f" ADwin error {code}: {text}" if text else f" ADwin error {code}."
+        if raw_return is not None:
+            detail += f" Raw return={raw_return}."
+        raise AdwinError(f"{action} failed.{detail}")
+
     def boot_board(self) -> None:
         """Boot the ADwin board using the configured BTL file."""
         boot_path = self._resolve_file(self.board.boot_file)
@@ -213,6 +368,7 @@ class AdwinAFController:
         ret = int(self._dll.ADboot(os.fsencode(boot_path), self._dev, 0, 1))
         if ret <= 0:
             raise AdwinError(f"ADWIN boot failed (return code {ret}) using {boot_path}.")
+        self._raise_if_error(f"ADboot(dev={self._dev}, file={Path(boot_path).name})", raw_return=ret)
 
     def clear_all_processes(self) -> None:
         for proc in range(1, 11):
@@ -241,23 +397,39 @@ class AdwinAFController:
             raise AdwinError(f"Set_Fpar({index}, {value}) failed with code {ret}.")
 
     def get_par(self, index: int) -> int:
-        return int(self._dll.Get_ADBPar(int(index), self._dev))
+        value = int(self._dll.Get_ADBPar(int(index), self._dev))
+        self._raise_if_error(f"Get_Par({index}, dev={self._dev})", raw_return=value)
+        return value
 
     def get_fpar(self, index: int) -> float:
-        return float(self._dll.Get_ADBFPar(int(index), self._dev))
+        value = float(self._dll.Get_ADBFPar(int(index), self._dev))
+        self._raise_if_error(f"Get_FPar({index}, dev={self._dev})", raw_return=value)
+        return value
 
     def set_digout(self, value: int) -> None:
-        ret = int(self._dll.Set_Digout(int(value), self._dev))
+        value = int(value) & 0x3F
+        ret = int(self._dll.Set_Digout(value, self._dev))
         if ret != 0:
-            raise AdwinError(f"Set_Digout({value}) failed with code {ret}.")
+            code, text = self._last_error()
+            if code != 0:
+                raise AdwinError(
+                    f"Set_Digout({value}, dev={self._dev}) failed with code {ret}. "
+                    f"ADwin error {code}: {text}"
+                )
+            raise AdwinError(f"Set_Digout({value}, dev={self._dev}) failed with code {ret}.")
+        self._raise_if_error(f"Set_Digout({value}, dev={self._dev})", raw_return=ret)
         self._last_digout_bit = int(value)
 
     def get_digout(self) -> int:
-        return int(self._dll.Get_Digout(self._dev))
+        value = int(self._dll.Get_Digout(self._dev))
+        self._raise_if_error(f"Get_Digout(dev={self._dev})", raw_return=value)
+        return value
 
     def test_version(self) -> int:
         """Return ADTest_Version result. 0 = not booted / unreachable; nonzero = OK."""
-        return int(self._dll.ADTest_Version(self._dev, 0))
+        value = int(self._dll.ADTest_Version(self._dev, 0))
+        self._raise_if_error(f"ADTest_Version(dev={self._dev})", raw_return=value)
+        return value
 
     def voltage_to_count(self, volts: float) -> int:
         """Convert ±10 V to a 16-bit DAC count (0..65535, 32768 = 0 V)."""
@@ -277,7 +449,19 @@ class AdwinAFController:
     def get_adc(self, channel: int) -> float:
         """Read ADC voltage (±10 V) from *channel*. Board must be booted."""
         count = int(self._dll.Get_ADC(int(channel), self._dev))
+        self._raise_if_error(f"Get_ADC(ch={channel}, dev={self._dev})", raw_return=count)
         return self.count_to_voltage(count)
+
+    def get_data_long(self, data_no: int, start_index: int, count: int) -> list[int]:
+        if count <= 0:
+            return []
+        buffer = (ctypes.c_long * count)()
+        ret = int(self._dll.Get_Data(buffer, 2, int(data_no), int(start_index), int(count), self._dev))
+        self._raise_if_error(
+            f"Get_Data(data_no={data_no}, start={start_index}, count={count}, dev={self._dev})",
+            raw_return=ret,
+        )
+        return [int(buffer[i]) for i in range(count)]
 
     def calc_digout_bit(self, chan_num: int, set_high: bool, one_chan_on: bool = True) -> int:
         if chan_num < 0 or chan_num > 5:
@@ -378,3 +562,100 @@ class AdwinAFController:
 
         self.clear_all_processes()
         return result
+
+    def run_dense_loopback(
+        self,
+        request: AdwinDenseCaptureRequest,
+        timeout_s: float = 30.0,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> AdwinDenseCaptureResult:
+        """Run a dense, board-timed sine capture using the legacy ADwin process.
+
+        Unlike the host-polled loopback path, this loads the ADbasic process onto
+        the board, configures its timer/process delay from ``io_rate_hz``, and then
+        bulk-reads the captured arrays from DATA_31 / DATA_32 after completion.
+        """
+        self.boot_board()
+        self.clear_all_processes()
+        self.load_process()
+
+        amplitude_v = max(0.0, min(10.0, float(request.amplitude_v)))
+        sine_freq_hz = max(0.1, float(request.sine_freq_hz))
+        io_rate_hz = max(1.0, float(request.io_rate_hz))
+        duration_s = max(0.05, float(request.duration_s))
+
+        self.set_fpar(31, float(request.ramp_up_slope_vps))
+        self.set_fpar(32, float(request.ramp_down_slope_vps))
+        self.set_fpar(33, amplitude_v)
+        self.set_fpar(34, sine_freq_hz)
+        self.set_fpar(35, amplitude_v)
+        self.set_fpar(36, 10.0)
+        self.set_fpar(37, 10.0)
+
+        self.set_par(31, int(request.ramp_mode))
+        self.set_par(32, int(request.dac_chan))
+        self.set_par(33, int(request.adc_chan))
+        self.set_par(34, int(1_000_000.0 / io_rate_hz * 40.0))
+        self.set_par(35, int(request.noise_level))
+        self.set_par(36, max(1, int(round(duration_s * sine_freq_hz))))
+        self.set_par(37, max(1, int(request.ramp_down_periods)))
+        self.set_par(38, 1)  # ramp down using number of periods
+
+        ret = int(self._dll.ADB_Start(self.board.process_num, self._dev))
+        if ret != 0:
+            raise AdwinError(f"Start_Process({self.board.process_num}) failed with code {ret}.")
+
+        start = time.monotonic()
+        while True:
+            if should_stop is not None and should_stop():
+                self._dll.ADB_Stop(self.board.process_num, self._dev)
+                self.clear_all_processes()
+                raise AdwinError("Dense loopback capture stopped by user.")
+            if self.get_par(4) == 7:
+                break
+            if time.monotonic() - start > timeout_s:
+                self._dll.ADB_Stop(self.board.process_num, self._dev)
+                self.clear_all_processes()
+                raise AdwinError("ADWIN dense loopback timeout while waiting for process completion.")
+            time.sleep(0.05)
+
+        time.sleep(max(0.1, min(1.0, duration_s / 4.0)))
+
+        out_count = max(0, self.get_par(5) - 10)
+        in_count = max(0, self.get_par(6) - 10)
+        up_count = max(0, self.get_par(7))
+        down_start = max(0, self.get_par(8))
+        timestep_s = float(self.get_fpar(6))
+        points_per_period = float(self.get_fpar(7))
+
+        capture_count = min(in_count, out_count) if out_count > 0 else in_count
+        raw_adc = self.get_data_long(31, 1, capture_count)
+        raw_dac = self.get_data_long(32, 1, capture_count)
+
+        steady_start_idx = min(max(up_count - 1, 0), capture_count)
+        steady_stop_idx = min(max(down_start - 1, steady_start_idx), capture_count)
+        if steady_stop_idx - steady_start_idx >= max(10, int(points_per_period)):
+            start_idx = steady_start_idx
+            stop_idx = steady_stop_idx
+        else:
+            start_idx = 0
+            stop_idx = capture_count
+
+        dac_v = [self.count_to_voltage(value) for value in raw_dac[start_idx:stop_idx]]
+        adc_v = [self.count_to_voltage(value) for value in raw_adc[start_idx:stop_idx]]
+        time_s = [i * timestep_s for i in range(len(adc_v))]
+
+        self.clear_all_processes()
+        return AdwinDenseCaptureResult(
+            time_s=time_s,
+            dac_v=dac_v,
+            adc_v=adc_v,
+            out_count=out_count,
+            in_count=in_count,
+            up_count=up_count,
+            down_start=down_start,
+            timestep_s=timestep_s,
+            points_per_period=points_per_period,
+            steady_start_idx=start_idx,
+            steady_stop_idx=stop_idx,
+        )
