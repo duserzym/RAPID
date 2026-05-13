@@ -9,3 +9,4 @@ dependencies:
       - pyserial>=3.5,<4
       - pyinstaller>=6.0,<7
       - pyqtgraph==0.13.3
+      - opencv-python>=4.8

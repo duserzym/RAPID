@@ -743,7 +743,7 @@
 
     <div class="hero-stats">
       <div class="stat">
-        <div class="stat-value">3</div>
+        <div class="stat-value">5</div>
         <div class="stat-label">Released modules</div>
       </div>
       <div class="stat">
@@ -755,7 +755,7 @@
         <div class="stat-label">Modern UI</div>
       </div>
       <div class="stat">
-        <div class="stat-value">2024→</div>
+        <div class="stat-value">2026</div>
         <div class="stat-label">Active development</div>
       </div>
     </div>
@@ -839,7 +839,7 @@
     <div class="module-card">
       <img
         class="module-card-image"
-        src="../images/gaussmeter_app.png"
+        src="images/gaussmeter_app.png"
         alt="RapidPy Gaussmeter Control screenshot"
         loading="lazy"
         onerror="this.style.display='none'"
@@ -872,7 +872,7 @@
     <div class="module-card">
       <img
         class="module-card-image"
-        src="../images/vrm_logger_app.png"
+        src="images/vrm_logger_app.png"
         alt="RapidPy VRM Decay Logger screenshot"
         loading="lazy"
         onerror="this.style.display='none'"
@@ -905,7 +905,7 @@
     <div class="module-card">
       <img
         class="module-card-image"
-        src="../images/adwin_comms_app.png"
+        src="images/adwin-comms-overview.png"
         alt="RapidPy ADwin Communications Tester screenshot"
         loading="lazy"
         onerror="this.style.display='none'"
@@ -919,14 +919,14 @@
         </div>
         <h3>ADwin Communications Tester</h3>
         <p>
-          Diagnostic panel for testing ADwin Gold II digital and analog I/O
-          channels before running AF demagnetisation or DC motor control
-          routines. Live square-wave output visualisation.
+          Diagnostic and dense-capture panel for validating ADwin digital I/O,
+          direct DAC and ADC channels, and board-timed loopback waveform
+          acquisition before running AF demagnetisation hardware.
         </p>
         <ul class="module-specs">
           <li><span class="spec-key">Backend</span>ADwin Gold II via Python bindings</li>
           <li><span class="spec-key">Purpose</span>Pre-flight comms bench test</li>
-          <li><span class="spec-key">Channels</span>Digital I/O + Analog in/out</li>
+          <li><span class="spec-key">Output</span>Dense waveform capture + PNG / CSV export</li>
         </ul>
         <a href="https://github.com/YOUR_ORG/RAPID/blob/main/docs/adwin-comms-user-manual.md" class="module-card-link" target="_blank">
           View documentation →
@@ -938,7 +938,7 @@
     <div class="module-card">
       <img
         class="module-card-image"
-        src="../images/com_port_mapper_app.png"
+        src="images/com_port_mapper_app.png"
         alt="RapidPy COM Port Mapper screenshot"
         loading="lazy"
         onerror="this.style.display='none'"
@@ -1019,29 +1019,59 @@
       </div>
     </div>
 
-    <!-- System Shell — Planned -->
+    <!-- System Shell — In Progress -->
     <div class="module-card">
       <div class="module-card-image-placeholder">
-        <div class="module-card-icon" style="background: linear-gradient(135deg,#263238,#102027); width:80px; height:80px; border-radius:20px;">
-          <span style="font-size:2rem">🖥️</span>
+        <div class="module-card-icon" style="background: linear-gradient(135deg,#4a0111,#7A0219); width:80px; height:80px; border-radius:20px;">
+          <span style="font-size:2rem">⚗️</span>
         </div>
       </div>
       <div class="module-card-body">
         <div class="module-card-header">
-          <div class="module-card-icon" style="background: linear-gradient(135deg,#263238,#102027);">
-            <span style="font-size:1.4rem">🖥️</span>
+          <div class="module-card-icon" style="background: linear-gradient(135deg,#4a0111,#7A0219);">
+            <span style="font-size:1.4rem">⚗️</span>
           </div>
-          <span class="module-badge badge-planned">Planned</span>
+          <span class="module-badge badge-wip">In Progress</span>
         </div>
-        <h3>System Shell</h3>
+        <h3>RAPID v4 Main Shell</h3>
         <p>
-          Unified operator launcher for all converted subsystem panels —
-          replacement for the VB6 main form. Orchestrates startup sequencing,
-          hardware checks, and inter-panel communication.
+          Unified operator interface replacing the VB6 MDI shell. Sidebar navigation
+          across Sample Queue, Sequence Builder, Live Measurement, and System Settings.
+          Phase 2 complete: all dialogs (Zijderveld plots, SQUID comm, IRM/ARM, vacuum,
+          sample select, debug console) fully wired.
         </p>
         <ul class="module-specs">
-          <li><span class="spec-key">VB6 src</span>frmProgram.frm</li>
-          <li><span class="spec-key">Role</span>Central orchestrator</li>
+          <li><span class="spec-key">VB6 src</span>frmProgram.frm (MDI orchestrator)</li>
+          <li><span class="spec-key">Phase</span>2 of 4 — UI complete, backend Phase 3</li>
+          <li><span class="spec-key">Panels</span>Dashboard, Queue, Sequence, Measure, Settings</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Zijderveld Viewer — Released -->
+    <div class="module-card">
+      <div class="module-card-image-placeholder">
+        <div class="module-card-icon" style="background: linear-gradient(135deg,#1a3a5c,#0d2035); width:80px; height:80px; border-radius:20px;">
+          <span style="font-size:2rem">📐</span>
+        </div>
+      </div>
+      <div class="module-card-body">
+        <div class="module-card-header">
+          <div class="module-card-icon" style="background: linear-gradient(135deg,#1a3a5c,#0d2035);">
+            <span style="font-size:1.4rem">📐</span>
+          </div>
+          <span class="module-badge badge-ready">Released</span>
+        </div>
+        <h3>Zijderveld Viewer</h3>
+        <p>
+          Standalone demagnetisation data viewer: Zijderveld diagram, Lambert equal-area
+          stereonet, and intensity-decay curve. Loads CSV files or uses built-in
+          synthetic demo data. Runs independently of all hardware.
+        </p>
+        <ul class="module-specs">
+          <li><span class="spec-key">Plots</span>Zijderveld, stereonet, intensity decay</li>
+          <li><span class="spec-key">Input</span>CSV (label, N, E, U columns)</li>
+          <li><span class="spec-key">Deps</span>PySide6 + pyqtgraph</li>
         </ul>
       </div>
     </div>
@@ -1075,7 +1105,8 @@
 │   ├── <span class="dir">changer_xy_control/</span>     <span class="comment"># 🔧 In progress</span>
 │   ├── <span class="dir">updown_control/</span>         <span class="comment"># 🔧 In progress</span>
 │   ├── <span class="dir">dc_motor_control/</span>       <span class="comment"># 🔧 In progress</span>
-│   └── <span class="dir">system_shell/</span>           <span class="comment"># 📋 Planned</span>
+│   ├── <span class="dir">zijderveld_viewer/</span>      <span class="comment"># ✅ Released — standalone plot viewer</span>
+│   └── <span class="dir">rapid_main/</span>             <span class="comment"># 🔧 Phase 2 — full system shell</span>
 │
 ├── <span class="dir">installer/</span>               <span class="comment"># PyInstaller specs + Inno Setup</span>
 ├── <span class="dir">docs/</span>                    <span class="comment"># User and developer manuals</span>
@@ -1120,12 +1151,24 @@
       </div>
     </div>
 
-    <div class="timeline-item future">
-      <div class="timeline-date">2026 — Phase 4</div>
-      <div class="timeline-title">System Shell &amp; full orchestration</div>
+    <div class="timeline-item">
+      <div class="timeline-date">May 2026 — Phase 4</div>
+      <div class="timeline-title">RAPID v4 System Shell — Phase 2 complete</div>
       <div class="timeline-desc">
-        Unified system shell merges all validated subsystem backends into a single
-        orchestrated control app — full VB6 parity with no parallel VB6 required.
+        Full operator UI shell (<code>rapid_main</code>) reaches Phase 2: all 8
+        settings tabs populated, 9 dialog windows wired (Zijderveld plots, SQUID comm,
+        IRM/ARM, vacuum, sample select, debug console), standalone
+        <code>zijderveld_viewer</code> utility released.
+        Backend hardware integration (Phase 3) now active.
+      </div>
+    </div>
+
+    <div class="timeline-item future">
+      <div class="timeline-date">2026→</div>
+      <div class="timeline-title">Full system orchestration</div>
+      <div class="timeline-desc">
+        Measurement flow engine, live SQUID &amp; ADwin comms, file export, and
+        calibration routines. Full VB6 parity with no parallel VB6 required.
       </div>
     </div>
   </div>
