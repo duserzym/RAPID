@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import collections
+import csv
 import ctypes
 import json
 import math
@@ -1300,6 +1301,14 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         title_row = QtWidgets.QHBoxLayout()
         title_row.addWidget(QtWidgets.QLabel("<b>Loopback Signal Plot</b>"))
         title_row.addStretch()
+        btn_save_plot = QtWidgets.QPushButton("Save Plot")
+        btn_save_plot.setMinimumWidth(90)
+        btn_save_plot.clicked.connect(self._save_plot_image)
+        title_row.addWidget(btn_save_plot)
+        btn_save_csv = QtWidgets.QPushButton("Save CSV")
+        btn_save_csv.setMinimumWidth(90)
+        btn_save_csv.clicked.connect(self._save_plot_csv)
+        title_row.addWidget(btn_save_csv)
         btn_clear_plot = QtWidgets.QPushButton("Clear Plot")
         btn_clear_plot.setMinimumWidth(90)
         btn_clear_plot.clicked.connect(self._clear_plot)
@@ -1308,6 +1317,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
 
         help_lbl = QtWidgets.QLabel(
             "Left-drag to draw a zoom box. Double-click anywhere in the plot to auto-rescale. "
+            "Save Plot writes the current chart image, Save CSV writes time/DAC/ADC samples, and "
             "Clear Plot resets the view to the default time/voltage window."
         )
         help_lbl.setWordWrap(True)
@@ -1734,6 +1744,57 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         self._curve_dac.setData([], [])
         self._curve_adc.setData([], [])
         self._reset_plot_view()
+
+    def _capture_basename(self) -> str:
+        from datetime import datetime
+
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        return f"adwin-loopback-{stamp}"
+
+    def _save_plot_image(self) -> None:
+        if not hasattr(self, "_plot"):
+            return
+        if len(self._t_buf) == 0:
+            self._log("[WARNING] No loopback capture is loaded; run a test before saving the plot.")
+            return
+
+        default_path = str(Path.home() / f"{self._capture_basename()}.png")
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Save loopback plot",
+            default_path,
+            "PNG image (*.png);;JPEG image (*.jpg *.jpeg);;All files (*)",
+        )
+        if not path:
+            return
+
+        pixmap = self._plot.grab()
+        if not pixmap.save(path):
+            self._log(f"[ERROR] Failed to save plot image: {path}")
+            return
+        self._log(f"Saved loopback plot image: {path}")
+
+    def _save_plot_csv(self) -> None:
+        if len(self._t_buf) == 0:
+            self._log("[WARNING] No loopback capture is loaded; run a test before saving CSV data.")
+            return
+
+        default_path = str(Path.home() / f"{self._capture_basename()}.csv")
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Save loopback CSV",
+            default_path,
+            "CSV files (*.csv);;All files (*)",
+        )
+        if not path:
+            return
+
+        rows = zip(self._t_buf, self._dac_buf, self._adc_buf)
+        with open(path, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["time_s", "dac_v", "adc_v"])
+            writer.writerows(rows)
+        self._log(f"Saved loopback CSV: {path}")
 
     def _default_plot_ranges(self) -> tuple[tuple[float, float], tuple[float, float]]:
         duration = max(float(self._spin_dur.value()), 1.0) if hasattr(self, "_spin_dur") else 5.0

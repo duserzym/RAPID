@@ -7,7 +7,36 @@ from pathlib import Path
 from PySide6 import QtCore, QtGui
 
 
-def draw_icon(output_png: Path, output_ico: Path) -> None:
+def draw_icon(glyph_png: Path, output_png: Path, output_ico: Path) -> None:
+    source = QtGui.QImage(str(glyph_png)).convertToFormat(QtGui.QImage.Format_ARGB32)
+    if source.isNull():
+        raise FileNotFoundError(f"Missing glyph image: {glyph_png}")
+
+    left = source.width()
+    top = source.height()
+    right = -1
+    bottom = -1
+    for y in range(source.height()):
+        for x in range(source.width()):
+            if source.pixelColor(x, y).alpha() > 0:
+                left = min(left, x)
+                top = min(top, y)
+                right = max(right, x)
+                bottom = max(bottom, y)
+
+    if right < left or bottom < top:
+        raise RuntimeError(f"No visible glyph pixels found in {glyph_png}")
+
+    glyph = source.copy(left, top, right - left + 1, bottom - top + 1)
+    target = 430
+    scale = target / max(glyph.width(), glyph.height())
+    glyph = glyph.scaled(
+        max(1, int(round(glyph.width() * scale))),
+        max(1, int(round(glyph.height() * scale))),
+        QtCore.Qt.KeepAspectRatio,
+        QtCore.Qt.SmoothTransformation,
+    )
+
     size = 1024
     image = QtGui.QImage(size, size, QtGui.QImage.Format_ARGB32)
     image.fill(QtCore.Qt.transparent)
@@ -18,41 +47,13 @@ def draw_icon(output_png: Path, output_ico: Path) -> None:
     gradient = QtGui.QLinearGradient(0, 0, size, size)
     gradient.setColorAt(0.0, QtGui.QColor("#7A0219"))
     gradient.setColorAt(1.0, QtGui.QColor("#520012"))
-
-    painter.setBrush(QtGui.QBrush(gradient))
     painter.setPen(QtCore.Qt.NoPen)
-    painter.drawRoundedRect(48, 48, 928, 928, 210, 210)
+    painter.setBrush(gradient)
+    painter.drawRoundedRect(QtCore.QRectF(0, 0, size, size), 256, 256)
 
-    gloss = QtGui.QLinearGradient(80, 80, 80, 560)
-    gloss.setColorAt(0.0, QtGui.QColor(255, 255, 255, 76))
-    gloss.setColorAt(1.0, QtGui.QColor(255, 255, 255, 0))
-    painter.setBrush(QtGui.QBrush(gloss))
-    painter.drawRoundedRect(88, 88, 848, 420, 170, 170)
-
-    # --- "VRM" text label — top 30% of canvas ---
-    font = QtGui.QFont("SF Pro Display", 185)
-    if not QtGui.QFontInfo(font).exactMatch():
-        font = QtGui.QFont("Avenir Next", 185)
-    if not QtGui.QFontInfo(font).exactMatch():
-        font = QtGui.QFont("Segoe UI", 185)
-    font.setWeight(QtGui.QFont.Black)
-    font.setLetterSpacing(QtGui.QFont.AbsoluteSpacing, 4)
-
-    painter.setFont(font)
-    painter.setPen(QtGui.QColor("#fff6e4"))
-    # Text rect: y 70‥370 — occupies top ~30% of the 1024-px canvas
-    painter.drawText(QtCore.QRect(0, 70, size, 300), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, "VRM")
-
-    # --- Decay wave — bottom 50% of canvas (minimum y ≈ 480) ---
-    wave_pen = QtGui.QPen(QtGui.QColor("#FFCD34"), 54)
-    wave_pen.setCapStyle(QtCore.Qt.RoundCap)
-    painter.setPen(wave_pen)
-    # Wave shifted down: troughs at ~760, peaks at ~510
-    path = QtGui.QPainterPath(QtCore.QPointF(110, 720))
-    path.cubicTo(210, 490, 330, 900, 440, 720)
-    path.cubicTo(540, 540, 645, 840, 760, 660)
-    path.cubicTo(845, 545, 895, 600, 935, 575)
-    painter.drawPath(path)
+    x_pos = (size - glyph.width()) // 2
+    y_pos = (size - glyph.height()) // 2
+    painter.drawImage(x_pos, y_pos, glyph)
     painter.end()
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
@@ -90,11 +91,12 @@ def generate_icns(output_png: Path, output_icns: Path) -> bool:
 def main() -> int:
     app = QtGui.QGuiApplication([])
     root = Path(__file__).resolve().parent.parent
+    glyph_png = root / "assets" / "vrm_icon_glyph.png"
     output_png = root / "assets" / "vrm_icon.png"
     output_ico = root / "assets" / "vrm_icon.ico"
     output_icns = root / "assets" / "vrm_icon.icns"
 
-    draw_icon(output_png, output_ico)
+    draw_icon(glyph_png, output_png, output_ico)
     generated_icns = generate_icns(output_png, output_icns)
 
     print(f"Generated {output_png}")
