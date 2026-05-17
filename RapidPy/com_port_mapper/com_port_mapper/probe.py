@@ -36,6 +36,8 @@ LEGACY_HINTS = {
     10: [("SQUID", "1200,N,8,1")],
 }
 
+VB6_MOTOR_DEFAULT_ADDRESSES: tuple[int, ...] = (16, 1, 2, 3, 4)
+
 
 @dataclass(slots=True)
 class PortProbeResult:
@@ -174,9 +176,12 @@ def _probe_motor_controller(port: str) -> ProtocolMatch | None:
             bytesize=serial.EIGHTBITS,
             parity=serial.PARITY_NONE,
             stopbits=serial.STOPBITS_TWO,
-            timeout=0.20,
-            write_timeout=0.20,
+            timeout=0.35,
+            write_timeout=0.35,
         ) as ser:
+            # VB6 enables RTS before motor commands; these adapters need the line high.
+            ser.dtr = True
+            ser.rts = True
             ser.reset_input_buffer()
             ser.reset_output_buffer()
             _write_line(ser, "@255 173 416")
@@ -185,7 +190,7 @@ def _probe_motor_controller(port: str) -> ProtocolMatch | None:
 
             responders: list[int] = []
             raw: list[str] = []
-            for address in (1, 2, 3, 4):
+            for address in VB6_MOTOR_DEFAULT_ADDRESSES:
                 response = _query_line(ser, f"@{address} 20")
                 if not response:
                     continue
@@ -203,7 +208,11 @@ def _probe_motor_controller(port: str) -> ProtocolMatch | None:
                 device="Quicksilver motor controller",
                 confidence="High",
                 protocol="57600,N,8,2",
-                notes=f"Motor protocol responded on address(es): {', '.join(str(address) for address in responders)}.",
+                notes=(
+                    "Motor protocol responded on address(es): "
+                    f"{', '.join(str(address) for address in responders)}. "
+                    "VB6 defaults these motor controller addresses to 16 unless changed in settings."
+                ),
                 raw_response=" | ".join(raw),
             )
     except (OSError, serial.SerialException) as exc:

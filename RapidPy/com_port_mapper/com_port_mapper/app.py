@@ -56,7 +56,6 @@ class MainWindow(QtWidgets.QMainWindow):
         "Port",
         "Description",
         "Adapter",
-        "Legacy Hints",
         "Detected Device",
         "Confidence",
         "Protocol",
@@ -71,6 +70,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._worker: SweepWorker | None = None
         self._results_by_port: dict[str, PortProbeResult] = {}
         self._build_ui()
+        self._apply_module_style_overrides()
         self._wire_events()
         self._update_probe_capabilities()
         QtCore.QTimer.singleShot(150, self.start_sweep)
@@ -122,21 +122,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_label.setObjectName("valuePill")
         left.addWidget(self.status_label)
 
-        legacy = QtWidgets.QLabel(
-            "VB6 default map\n"
-            "COM3 Vacuum\n"
-            "COM4 Up/Down\n"
-            "COM5 Turning\n"
-            "COM6 X / Changer\n"
-            "COM7 Y\n"
-            "COM8 Susceptibility\n"
-            "COM9 AF\n"
-            "COM10 SQUID"
-        )
-        legacy.setObjectName("valuePill")
-        legacy.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
-        left.addWidget(legacy)
-
         # ADwin board status
         adwin_title = QtWidgets.QLabel("ADwin Board")
         adwin_title.setObjectName("subtitle")
@@ -153,8 +138,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         note = QtWidgets.QLabel(
             "High-confidence auto-identification covers motor controllers, SQUID, and gaussmeter ports when the "
-            "legacy gm0.dll driver is available. Vacuum, susceptibility, and AF still show adapter metadata plus "
-            "legacy role hints."
+            "legacy gm0.dll driver is available. VB6 COM-role defaults are still used internally as a weak hint "
+            "for no-match cases, but they are not shown as a primary mapping in the UI."
         )
         note.setWordWrap(True)
         left.addWidget(note)
@@ -189,7 +174,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(5, QtWidgets.QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(6, QtWidgets.QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(7, QtWidgets.QHeaderView.Stretch)
         right.addWidget(self.table, stretch=1)
 
         details_title = QtWidgets.QLabel("Selected Port Details")
@@ -197,7 +181,7 @@ class MainWindow(QtWidgets.QMainWindow):
         right.addWidget(details_title)
 
         self.details = QtWidgets.QPlainTextEdit()
-        self.details.setObjectName("console")
+        self.details.setObjectName("detailsConsole")
         self.details.setReadOnly(True)
         self.details.setMaximumHeight(170)
         right.addWidget(self.details)
@@ -207,6 +191,23 @@ class MainWindow(QtWidgets.QMainWindow):
 
         apply_card_shadow(left_card)
         apply_card_shadow(right_card)
+
+    def _apply_module_style_overrides(self) -> None:
+        self.setStyleSheet(
+            self.styleSheet()
+            + """
+            QPlainTextEdit#console,
+            QPlainTextEdit#detailsConsole {
+                background: rgba(255, 255, 255, 0.94);
+                color: #2f2827;
+                border-radius: 16px;
+                border: 1px solid rgba(122, 2, 25, 0.16);
+                padding: 8px;
+                selection-background-color: rgba(122, 2, 25, 0.18);
+                selection-color: #2f2827;
+            }
+            """
+        )
 
     def _check_adwin(self) -> None:
         """Probe ADwin DLL presence, BTL path, and board liveness."""
@@ -306,7 +307,9 @@ class MainWindow(QtWidgets.QMainWindow):
         result = self._results_by_port.get(port)
         if result is None:
             return
-        payload = json.dumps(asdict(result), indent=2)
+        payload_dict = asdict(result)
+        payload_dict.pop("legacy_hints", None)
+        payload = json.dumps(payload_dict, indent=2)
         QtWidgets.QApplication.clipboard().setText(payload)
         self.console.appendPlainText(f"Copied details for {port} to the clipboard.")
 
@@ -318,7 +321,6 @@ class MainWindow(QtWidgets.QMainWindow):
             result.port,
             result.description or "-",
             result.adapter_family,
-            "; ".join(result.legacy_hints) or "-",
             result.detected_device,
             result.confidence,
             result.protocol or "-",
@@ -326,7 +328,7 @@ class MainWindow(QtWidgets.QMainWindow):
         ]
         for column, value in enumerate(values):
             item = QtWidgets.QTableWidgetItem(value)
-            if column in (0, 4, 5, 6):
+            if column in (0, 3, 4, 5):
                 item.setTextAlignment(QtCore.Qt.AlignCenter)
             self.table.setItem(row, column, item)
         if result.confidence == "High":
@@ -376,7 +378,6 @@ class MainWindow(QtWidgets.QMainWindow):
             f"Adapter: {result.adapter_family}",
             f"HWID: {result.hwid or '-'}",
             f"Location: {result.location or '-'}",
-            f"Legacy hints: {'; '.join(result.legacy_hints) or '-'}",
             f"Detected device: {result.detected_device}",
             f"Confidence: {result.confidence}",
             f"Protocol: {result.protocol or '-'}",

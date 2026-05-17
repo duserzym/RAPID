@@ -45,8 +45,8 @@ def draw_icon(glyph_png: Path, output_png: Path, output_ico: Path) -> None:
     painter.setRenderHint(QtGui.QPainter.Antialiasing)
 
     gradient = QtGui.QLinearGradient(0, 0, size, size)
-    gradient.setColorAt(0.0, QtGui.QColor("#1A3A5C"))
-    gradient.setColorAt(1.0, QtGui.QColor("#0D1F35"))
+    gradient.setColorAt(0.0, QtGui.QColor("#4f7496"))
+    gradient.setColorAt(1.0, QtGui.QColor("#25496a"))
     painter.setPen(QtCore.Qt.NoPen)
     painter.setBrush(gradient)
     painter.drawRoundedRect(QtCore.QRectF(0, 0, size, size), 256, 256)
