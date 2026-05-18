@@ -604,19 +604,51 @@ class MainWindow(QtWidgets.QMainWindow):
                 background: #ffffff;
             }
             QScrollBar:vertical {
-                background: rgba(255, 255, 255, 0.2);
-                width: 10px;
-                border-radius: 5px;
-                margin: 4px 2px 4px 2px;
+                background: transparent;
+                width: 12px;
+                margin: 4px 3px 4px 3px;
+                border: none;
+            }
+            QScrollBar:horizontal {
+                background: transparent;
+                height: 12px;
+                margin: 3px 4px 3px 4px;
+                border: none;
+            }
+            QScrollBar::handle:vertical,
+            QScrollBar::handle:horizontal {
+                background: rgba(86, 72, 69, 0.36);
+                border: 1px solid rgba(255, 255, 255, 0.46);
+                border-radius: 6px;
             }
             QScrollBar::handle:vertical {
-                background: rgba(122, 2, 25, 0.45);
-                border-radius: 5px;
-                min-height: 24px;
+                min-height: 34px;
+            }
+            QScrollBar::handle:horizontal {
+                min-width: 34px;
+            }
+            QScrollBar::handle:vertical:hover,
+            QScrollBar::handle:horizontal:hover {
+                background: rgba(86, 72, 69, 0.52);
+            }
+            QScrollBar::handle:vertical:pressed,
+            QScrollBar::handle:horizontal:pressed {
+                background: rgba(122, 2, 25, 0.54);
             }
             QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical {
+            QScrollBar::sub-line:vertical,
+            QScrollBar::add-line:horizontal,
+            QScrollBar::sub-line:horizontal {
+                border: none;
+                background: transparent;
+                width: 0px;
                 height: 0px;
+            }
+            QScrollBar::add-page:vertical,
+            QScrollBar::sub-page:vertical,
+            QScrollBar::add-page:horizontal,
+            QScrollBar::sub-page:horizontal {
+                background: transparent;
             }
             """
         )
