@@ -48,6 +48,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ("Gaussmeter Control", "gaussmeter_control/main.py"),
             ("VRM Logger", "vrm_logger/main.py"),
             ("AF Tuner", "af_tuner/main.py"),
+            ("AF Clip Test", "af_clip_test/main.py"),
             ("Changer XY", "changer_xy_control/main.py"),
             ("Up/Down", "updown_control/main.py"),
             ("DC Motor Control", "dc_motor_control/main.py"),
