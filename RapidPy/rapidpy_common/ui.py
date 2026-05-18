@@ -36,6 +36,31 @@ def apply_liquid_glass_theme(app: QtWidgets.QApplication) -> None:
         QFrame#card QWidget {{
             background: transparent;
         }}
+        QFrame#card QPushButton {{
+            background: rgba(255, 255, 255, 0.96);
+            border: 1px solid rgba(122, 2, 25, 0.45);
+            border-radius: 14px;
+            padding: 9px 14px;
+            color: #2f2827;
+        }}
+        QFrame#card QPushButton:hover {{
+            background: rgba(255, 255, 255, 1.0);
+        }}
+        QFrame#card QPushButton:pressed {{
+            background: rgba(244, 238, 231, 1.0);
+        }}
+        QFrame#card QPushButton#accent {{
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {MAROON}, stop:1 #5a0013);
+            color: #ffffff;
+            border: 1px solid rgba(122, 2, 25, 0.85);
+            font-weight: 680;
+        }}
+        QFrame#card QPushButton#accent:hover {{
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #8a0220, stop:1 #650016);
+        }}
+        QFrame#card QPushButton#accent:pressed {{
+            background: #5a0013;
+        }}
         QFrame#livePanel {{
             background: rgba(255, 255, 255, 0.60);
             border: 1px solid rgba(122, 2, 25, 0.10);
@@ -88,9 +113,56 @@ def apply_liquid_glass_theme(app: QtWidgets.QApplication) -> None:
         QScrollArea#panelScroll > QWidget > QWidget {{
             background: transparent;
         }}
+        QScrollBar:vertical {{
+            background: transparent;
+            width: 12px;
+            margin: 4px 3px 4px 3px;
+            border: none;
+        }}
+        QScrollBar:horizontal {{
+            background: transparent;
+            height: 12px;
+            margin: 3px 4px 3px 4px;
+            border: none;
+        }}
+        QScrollBar::handle:vertical,
+        QScrollBar::handle:horizontal {{
+            background: rgba(86, 72, 69, 0.36);
+            border: 1px solid rgba(255, 255, 255, 0.46);
+            border-radius: 6px;
+        }}
+        QScrollBar::handle:vertical {{
+            min-height: 34px;
+        }}
+        QScrollBar::handle:horizontal {{
+            min-width: 34px;
+        }}
+        QScrollBar::handle:vertical:hover,
+        QScrollBar::handle:horizontal:hover {{
+            background: rgba(86, 72, 69, 0.52);
+        }}
+        QScrollBar::handle:vertical:pressed,
+        QScrollBar::handle:horizontal:pressed {{
+            background: rgba(122, 2, 25, 0.54);
+        }}
+        QScrollBar::add-line:vertical,
+        QScrollBar::sub-line:vertical,
+        QScrollBar::add-line:horizontal,
+        QScrollBar::sub-line:horizontal {{
+            border: none;
+            background: transparent;
+            width: 0px;
+            height: 0px;
+        }}
+        QScrollBar::add-page:vertical,
+        QScrollBar::sub-page:vertical,
+        QScrollBar::add-page:horizontal,
+        QScrollBar::sub-page:horizontal {{
+            background: transparent;
+        }}
         QPushButton {{
             background: rgba(255, 255, 255, 0.72);
-            border: 1px solid rgba(122, 2, 25, 0.14);
+            border: 1px solid rgba(122, 2, 25, 0.45);
             border-radius: 14px;
             padding: 9px 14px;
             color: #2f2827;

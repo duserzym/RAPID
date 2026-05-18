@@ -79,10 +79,14 @@ class MotorSerialClient:
             write_timeout=timeout,
         )
         self._port = port
+        self._serial.dtr = True
+        self._serial.rts = True
         self._serial.reset_input_buffer()
         self._serial.reset_output_buffer()
         # VB6 issues this broadcast command at connect to set ACK delay.
         self.send_ascii("@255 173 416")
+        time.sleep(0.03)
+        self._serial.reset_input_buffer()
 
     def disconnect(self) -> None:
         if self._serial is not None:
@@ -94,6 +98,8 @@ class MotorSerialClient:
     def send_ascii(self, command: str) -> None:
         if not self.is_connected or self._serial is None:
             raise HardwareError("Motor serial connection is not open.")
+        self._serial.dtr = True
+        self._serial.rts = True
         payload = f"{command}\r\n".encode("ascii", errors="ignore")
         self._serial.write(payload)
         self._serial.flush()
