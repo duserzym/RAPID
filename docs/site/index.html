@@ -415,6 +415,16 @@
       border-color: rgba(123,22,40,.15);
     }
 
+    .module-card-media-link,
+    .module-card-title-link {
+      text-decoration: none;
+      color: inherit;
+    }
+
+    .module-card-media-link {
+      display: block;
+    }
+
     .module-card-image {
       width: 100%;
       aspect-ratio: 16/10;
@@ -519,6 +529,29 @@
     }
 
     .module-card-link:hover { gap: 10px; }
+
+    .module-card-actions {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-top: .95rem;
+    }
+
+    .module-card-link-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: .75rem;
+      font-size: .85rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-decoration: none;
+    }
+
+    .module-card-link-secondary:hover {
+      color: var(--maroon);
+    }
 
     /* ── Architecture diagram ─────────────────────────────────────────── */
     .arch-section {
@@ -837,13 +870,15 @@
 
     <!-- Gaussmeter -->
     <div class="module-card">
-      <img
-        class="module-card-image"
-        src="images/gaussmeter_app.png"
-        alt="RapidPy Gaussmeter Control screenshot"
-        loading="lazy"
-        onerror="this.style.display='none'"
-      />
+      <a class="module-card-media-link" href="apps/index.html#gaussmeter-control">
+        <img
+          class="module-card-image"
+          src="images/gaussmeter_app.png"
+          alt="RapidPy Gaussmeter Control screenshot"
+          loading="lazy"
+          onerror="this.style.display='none'"
+        />
+      </a>
       <div class="module-card-body">
         <div class="module-card-header">
           <div class="module-card-icon" style="background: linear-gradient(135deg,#0B2545,#061328);">
@@ -851,7 +886,7 @@
           </div>
           <span class="module-badge badge-ready">Released</span>
         </div>
-        <h3>Gaussmeter Control</h3>
+        <h3><a class="module-card-title-link" href="apps/index.html#gaussmeter-control">Gaussmeter Control</a></h3>
         <p>
           Driver-backed operator panel for the FW Bell 908A USB gaussmeter.
           Live field readings, configurable sampling sessions with alarm
@@ -862,21 +897,24 @@
           <li><span class="spec-key">Output</span>Timestamped CSV session export</li>
           <li><span class="spec-key">Bundle</span>Includes FW Bell USB driver installer</li>
         </ul>
-        <a href="https://github.com/duserzym/RAPID/blob/main/docs/gaussmeter-user-manual.md" class="module-card-link" target="_blank">
-          View documentation →
-        </a>
+        <div class="module-card-actions">
+          <a href="apps/index.html#gaussmeter-control" class="module-card-link">Open app page →</a>
+          <a href="https://github.com/duserzym/RAPID/blob/main/docs/gaussmeter-user-manual.md" class="module-card-link-secondary" target="_blank" rel="noreferrer">Manual ↗</a>
+        </div>
       </div>
     </div>
 
     <!-- VRM Logger -->
     <div class="module-card">
-      <img
-        class="module-card-image"
-        src="images/vrm_logger_app.png"
-        alt="RapidPy VRM Decay Logger screenshot"
-        loading="lazy"
-        onerror="this.style.display='none'"
-      />
+      <a class="module-card-media-link" href="apps/index.html#vrm-decay-logger">
+        <img
+          class="module-card-image"
+          src="images/vrm_logger_app.png"
+          alt="RapidPy VRM Decay Logger screenshot"
+          loading="lazy"
+          onerror="this.style.display='none'"
+        />
+      </a>
       <div class="module-card-body">
         <div class="module-card-header">
           <div class="module-card-icon" style="background: linear-gradient(135deg,#7A0219,#520012);">
@@ -884,7 +922,7 @@
           </div>
           <span class="module-badge badge-ready">Released</span>
         </div>
-        <h3>VRM Decay Logger</h3>
+        <h3><a class="module-card-title-link" href="apps/index.html#vrm-decay-logger">VRM Decay Logger</a></h3>
         <p>
           Three-axis SQUID live-view logger for viscous remanent magnetisation
           decay experiments. Configurable log/linear time steps, per-axis
@@ -895,21 +933,24 @@
           <li><span class="spec-key">Cal</span>Loads from legacy Paleomag_v3.INI</li>
           <li><span class="spec-key">Output</span>Timestamped 3-axis CSV</li>
         </ul>
-        <a href="https://github.com/duserzym/RAPID/blob/main/docs/vrm-logger-user-manual.md" class="module-card-link" target="_blank">
-          View documentation →
-        </a>
+        <div class="module-card-actions">
+          <a href="apps/index.html#vrm-decay-logger" class="module-card-link">Open app page →</a>
+          <a href="https://github.com/duserzym/RAPID/blob/main/docs/vrm-logger-user-manual.md" class="module-card-link-secondary" target="_blank" rel="noreferrer">Manual ↗</a>
+        </div>
       </div>
     </div>
 
     <!-- ADwin Comms -->
     <div class="module-card">
-      <img
-        class="module-card-image"
-        src="images/adwin-comms-overview.png"
-        alt="RapidPy ADwin Communications Tester screenshot"
-        loading="lazy"
-        onerror="this.style.display='none'"
-      />
+      <a class="module-card-media-link" href="apps/index.html#adwin-comms">
+        <img
+          class="module-card-image"
+          src="images/adwin-comms-overview.png"
+          alt="RapidPy ADwin Communications Tester screenshot"
+          loading="lazy"
+          onerror="this.style.display='none'"
+        />
+      </a>
       <div class="module-card-body">
         <div class="module-card-header">
           <div class="module-card-icon" style="background: linear-gradient(135deg,#0D3B2E,#062018);">
@@ -917,7 +958,7 @@
           </div>
           <span class="module-badge badge-ready">Released</span>
         </div>
-        <h3>ADwin Communications Tester</h3>
+        <h3><a class="module-card-title-link" href="apps/index.html#adwin-comms">ADwin Communications Tester</a></h3>
         <p>
           Diagnostic and dense-capture panel for validating ADwin digital I/O,
           direct DAC and ADC channels, and board-timed loopback waveform
@@ -928,21 +969,24 @@
           <li><span class="spec-key">Purpose</span>Pre-flight comms bench test</li>
           <li><span class="spec-key">Output</span>Dense waveform capture + PNG / CSV export</li>
         </ul>
-        <a href="https://github.com/duserzym/RAPID/blob/main/docs/adwin-comms-user-manual.md" class="module-card-link" target="_blank">
-          View documentation →
-        </a>
+        <div class="module-card-actions">
+          <a href="apps/index.html#adwin-comms" class="module-card-link">Open app page →</a>
+          <a href="https://github.com/duserzym/RAPID/blob/main/docs/adwin-comms-user-manual.md" class="module-card-link-secondary" target="_blank" rel="noreferrer">Manual ↗</a>
+        </div>
       </div>
     </div>
 
     <!-- COM Port Mapper -->
     <div class="module-card">
-      <img
-        class="module-card-image"
-        src="images/com_port_mapper_app.png"
-        alt="RapidPy COM Port Mapper screenshot"
-        loading="lazy"
-        onerror="this.style.display='none'"
-      />
+      <a class="module-card-media-link" href="apps/index.html#com-port-mapper">
+        <img
+          class="module-card-image"
+          src="images/com-port-mapper-overview.png"
+          alt="RapidPy COM Port Mapper screenshot"
+          loading="lazy"
+          onerror="this.style.display='none'"
+        />
+      </a>
       <div class="module-card-body">
         <div class="module-card-header">
           <div class="module-card-icon" style="background: linear-gradient(135deg,#1A3A5C,#0D1F35);">
@@ -950,7 +994,7 @@
           </div>
           <span class="module-badge badge-ready">Released</span>
         </div>
-        <h3>COM Port Mapper</h3>
+        <h3><a class="module-card-title-link" href="apps/index.html#com-port-mapper">COM Port Mapper</a></h3>
         <p>
           Utility for detecting and assigning serial COM ports to each
           hardware device (gaussmeter, SQUID, motor controllers) before
@@ -961,12 +1005,25 @@
           <li><span class="spec-key">Devices</span>Gaussmeter, SQUID, XY/Z motors</li>
           <li><span class="spec-key">Saves</span>JSON config read by all modules</li>
         </ul>
+        <div class="module-card-actions">
+          <a href="apps/index.html#com-port-mapper" class="module-card-link">Open app page →</a>
+          <a href="https://github.com/duserzym/RAPID/blob/main/RapidPy/com_port_mapper/README.md" class="module-card-link-secondary" target="_blank" rel="noreferrer">README ↗</a>
+        </div>
       </div>
     </div>
 
     <!-- AF Tuner — WIP -->
     <div class="module-card">
-      <div class="module-card-image-placeholder">
+      <a class="module-card-media-link" href="apps/index.html#af-tuner">
+        <img
+          class="module-card-image"
+          src="https://raw.githubusercontent.com/duserzym/RAPID/main/docs/images/af-tuner-overview.png"
+          alt="RapidPy AF Tuner screenshot"
+          loading="lazy"
+          onerror="this.style.display='none'; this.parentElement.nextElementSibling.style.display='flex';"
+        />
+      </a>
+      <div class="module-card-image-placeholder" style="display:none;">
         <div class="module-card-icon" style="background: linear-gradient(135deg,#1A237E,#0D1659); width:80px; height:80px; border-radius:20px;">
           <span style="font-size:2rem">🎛️</span>
         </div>
@@ -978,7 +1035,7 @@
           </div>
           <span class="module-badge badge-wip">In Progress</span>
         </div>
-        <h3>AF Tuner</h3>
+        <h3><a class="module-card-title-link" href="apps/index.html#af-tuner">AF Tuner</a></h3>
         <p>
           Alternating-field coil tuning panel — Python port of
           <code>frmAFTuner</code>. Manages ADwin-driven AF ramps,
@@ -988,12 +1045,25 @@
           <li><span class="spec-key">VB6 src</span>frmAFTuner.frm</li>
           <li><span class="spec-key">Backend</span>ADwin AF ramp via adwin_af.py</li>
         </ul>
+        <div class="module-card-actions">
+          <a href="apps/index.html#af-tuner" class="module-card-link">Open app page →</a>
+          <a href="https://github.com/duserzym/RAPID/blob/main/RapidPy/af_tuner/README.md" class="module-card-link-secondary" target="_blank" rel="noreferrer">README ↗</a>
+        </div>
       </div>
     </div>
 
     <!-- XY Changer — WIP -->
     <div class="module-card">
-      <div class="module-card-image-placeholder">
+      <a class="module-card-media-link" href="apps/index.html#changer-xy-control">
+        <img
+          class="module-card-image"
+          src="https://raw.githubusercontent.com/duserzym/RAPID/main/resources/x-y_stage.png"
+          alt="RAPID changer tray overview photograph"
+          loading="lazy"
+          onerror="this.style.display='none'; this.parentElement.nextElementSibling.style.display='flex';"
+        />
+      </a>
+      <div class="module-card-image-placeholder" style="display:none;">
         <div class="module-card-icon" style="background: linear-gradient(135deg,#4A148C,#2D0A5A); width:80px; height:80px; border-radius:20px;">
           <span style="font-size:2rem">📐</span>
         </div>
@@ -1005,23 +1075,36 @@
           </div>
           <span class="module-badge badge-wip">In Progress</span>
         </div>
-        <h3>XY Sample Changer</h3>
+        <h3><a class="module-card-title-link" href="apps/index.html#changer-xy-control">XY Sample Changer</a></h3>
         <p>
-          Sample queue prep and XY table control panel — port of
-          <code>frmChanger</code>. Handles
+          Sample queue prep and XY table control panel aligned to
+          <code>frmDCMotors</code>. Handles
           <code>HomeToCenter</code> and <code>MoveToCorner</code>
           routines with limit-switch guidance.
         </p>
         <ul class="module-specs">
-          <li><span class="spec-key">VB6 src</span>frmChanger.frm</li>
+          <li><span class="spec-key">VB6 src</span>frmDCMotors.frm</li>
           <li><span class="spec-key">Motor</span>Quicksilver XY via hardware.py</li>
         </ul>
+        <div class="module-card-actions">
+          <a href="apps/index.html#changer-xy-control" class="module-card-link">Open app page →</a>
+          <a href="https://github.com/duserzym/RAPID/blob/main/docs/changer-xy-control-user-manual.md" class="module-card-link-secondary" target="_blank" rel="noreferrer">Manual ↗</a>
+        </div>
       </div>
     </div>
 
     <!-- System Shell — In Progress -->
     <div class="module-card">
-      <div class="module-card-image-placeholder">
+      <a class="module-card-media-link" href="apps/index.html#rapid-v4-main-shell">
+        <img
+          class="module-card-image"
+          src="images/rapid-v4-main-shell-overview.png"
+          alt="RapidPy system shell screenshot"
+          loading="lazy"
+          onerror="this.style.display='none'; this.parentElement.nextElementSibling.style.display='flex';"
+        />
+      </a>
+      <div class="module-card-image-placeholder" style="display:none;">
         <div class="module-card-icon" style="background: linear-gradient(135deg,#4a0111,#7A0219); width:80px; height:80px; border-radius:20px;">
           <span style="font-size:2rem">⚗️</span>
         </div>
@@ -1033,7 +1116,7 @@
           </div>
           <span class="module-badge badge-wip">In Progress</span>
         </div>
-        <h3>RAPID v4 Main Shell</h3>
+        <h3><a class="module-card-title-link" href="apps/index.html#rapid-v4-main-shell">RAPID v4 Main Shell</a></h3>
         <p>
           Unified operator interface replacing the VB6 MDI shell. Sidebar navigation
           across Sample Queue, Sequence Builder, Live Measurement, and System Settings.
@@ -1045,12 +1128,25 @@
           <li><span class="spec-key">Phase</span>2 of 4 — UI complete, backend Phase 3</li>
           <li><span class="spec-key">Panels</span>Dashboard, Queue, Sequence, Measure, Settings</li>
         </ul>
+        <div class="module-card-actions">
+          <a href="apps/index.html#rapid-v4-main-shell" class="module-card-link">Open app page →</a>
+          <a href="https://github.com/duserzym/RAPID/blob/main/RapidPy/system_shell/README.md" class="module-card-link-secondary" target="_blank" rel="noreferrer">README ↗</a>
+        </div>
       </div>
     </div>
 
     <!-- Zijderveld Viewer — Released -->
     <div class="module-card">
-      <div class="module-card-image-placeholder">
+      <a class="module-card-media-link" href="apps/index.html#zijderveld-viewer">
+        <img
+          class="module-card-image"
+          src="images/zijderveld-viewer-overview.png"
+          alt="RapidPy Zijderveld Viewer screenshot"
+          loading="lazy"
+          onerror="this.style.display='none'; this.parentElement.nextElementSibling.style.display='flex';"
+        />
+      </a>
+      <div class="module-card-image-placeholder" style="display:none;">
         <div class="module-card-icon" style="background: linear-gradient(135deg,#1a3a5c,#0d2035); width:80px; height:80px; border-radius:20px;">
           <span style="font-size:2rem">📐</span>
         </div>
@@ -1062,7 +1158,7 @@
           </div>
           <span class="module-badge badge-ready">Released</span>
         </div>
-        <h3>Zijderveld Viewer</h3>
+        <h3><a class="module-card-title-link" href="apps/index.html#zijderveld-viewer">Zijderveld Viewer</a></h3>
         <p>
           Standalone demagnetisation data viewer: Zijderveld diagram, Lambert equal-area
           stereonet, and intensity-decay curve. Loads CSV files or uses built-in
@@ -1073,6 +1169,10 @@
           <li><span class="spec-key">Input</span>CSV (label, N, E, U columns)</li>
           <li><span class="spec-key">Deps</span>PySide6 + pyqtgraph</li>
         </ul>
+        <div class="module-card-actions">
+          <a href="apps/index.html#zijderveld-viewer" class="module-card-link">Open app page →</a>
+          <a href="https://github.com/duserzym/RAPID/blob/main/RapidPy/zijderveld_viewer/README.md" class="module-card-link-secondary" target="_blank" rel="noreferrer">README ↗</a>
+        </div>
       </div>
     </div>
 
