@@ -580,7 +580,7 @@
         title: "Changer XY Control",
         status: "In Progress",
         statusClass: "wip",
-        summary: "Stage-centric X/Y/Z changer operator panel with VB6-compatible motion, switch readback, cup calibration editing, and live raw-to-cm speed estimates.",
+        summary: "Stage-centric changer operator panel with optional XY-only mode, VB6-compatible motion, Active Cup calibration editing, and live raw-to-cm speed estimates.",
         screenshot: "https://raw.githubusercontent.com/duserzym/RAPID/main/resources/x-y_stage.png",
         screenshotAlt: "RAPID changer tray overview photograph",
         placeholderIcon: "📐",
@@ -590,13 +590,14 @@
           ["Settings", "INI + section JSON"]
         ],
         description: [
-          "Built around the photographed acrylic stage geometry and the VB6 motion routines for HomeToCenter and MoveToCorner.",
-          "The current app keeps raw controller velocity inputs for compatibility, but now derives estimated cm/s using the loaded turning-motor scale, XYTable cup spacing, and UpDownMotor1cm."
+          "Built around the photographed acrylic stage geometry and the VB6 motion routines for HomeToCenter and MoveToCorner, with click and double-click tray interaction for cups, LOAD, and center.",
+          "The current app keeps raw controller velocity inputs for compatibility, derives estimated cm/s using the loaded turning-motor scale, XYTable cup spacing, and UpDownMotor1cm, and now uses one Active Cup control for both motion and calibration capture."
         ],
         launch: "conda activate paleomag\npython RapidPy/changer_xy_control/main.py",
         notes: [
           "Default startup settings come from VB6/settings/Paleomag_v3.INI.",
           "COM assignments remain machine-local and are intentionally not overwritten by settings imports.",
+          "Disable Up/Down (XY-only mode) lets operators home and move X/Y without a connected Z axis after an explicit safety confirmation.",
           "The current web page uses the high-resolution tray photograph as the published visual reference until a dedicated UI capture is checked in."
         ],
         links: [

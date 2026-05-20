@@ -56,10 +56,11 @@ The app starts by loading `VB6/settings/Paleomag_v3.INI` unless another settings
 The window is organized around a large central stage cartoon and surrounding operator cards.
 
 - Left side: connections, loaded settings profile, and main stage actions
-- Center: stage view with cup layout, target selection, current position indication, and special load/center targets
+- Center: stage view with cup layout, Active Cup selection, current position indication, and special load/center targets
 - Right side: raw jog velocity inputs, live estimated cm/s text, calibration capture, and editable cup-position sheet
 
 Single-click selects a cup or special target. Double-click activates motion to that target.
+Drag-to-scrub selection is no longer supported; stage interaction is intentionally constrained to clicks and double-clicks.
 
 ---
 
@@ -75,6 +76,8 @@ Typical Berkeley defaults currently used in this project are:
 - reference / light-gauge input: machine-dependent
 
 The app keeps COM assignments in the local machine config file and does not overwrite them when you load an INI. This is intentional: the INI describes the stage and controller configuration, while COM mappings are workstation-specific.
+
+For bench testing, the `Disable Up/Down (XY-only mode)` checkbox disconnects the Z slice from the operator workflow. With that mode enabled, X/Y homing and cup moves can still run after a confirmation prompt reminding the operator to verify the sample rod is safely above the stage.
 
 ---
 
@@ -148,8 +151,10 @@ The stage view includes two special targets besides the numbered cups:
 Operator interactions:
 
 - single-click selects the target
+- the Stage Controls card keeps one `Active Cup` value for both move commands and calibration capture
 - double-click `LOAD` triggers the VB6-style move-to-corner routine
 - double-click the center hole triggers the VB6-style home-to-center routine
+- double-click a numbered cup triggers the same move as the `Move To Cup` button
 
 The jog panel uses conservative startup defaults even when the loaded INI allows much higher motion limits.
 
@@ -159,7 +164,7 @@ The jog panel uses conservative startup defaults even when the loaded INI allows
 
 The cup table is live and directly tied to the current stage model.
 
-- capture the current X/Y position into the selected cup
+- capture the current X/Y position into the Active Cup
 - edit X/Y counts directly in the table
 - clear a cup by leaving both coordinates blank
 - save the current map back to INI or export it through JSON

@@ -1,6 +1,6 @@
 # RapidPy Changer XY Control
 
-RapidPy Changer XY Control is now a lightweight operator panel for the RAPID X/Y stage, built around the VB6 changer behavior but focused on motion, homing, switch state, and cup calibration rather than sample-list management.
+RapidPy Changer XY Control is now a lightweight operator panel for the RAPID X/Y stage, built around the VB6 changer behavior but focused on motion, homing, switch state, cup calibration, and practical XY-only testing rather than sample-list management.
 
 ## Velocity Clarification
 
@@ -17,9 +17,10 @@ This matters because adjacent cups are only separated by a few thousand position
 ## Current UI
 
 - Large center stage cartoon based on the photographed acrylic holder
-- Left-side hardware cards for COM selection, connection state, homing, and stage control
-- Right-side cards for jog velocities, calibration capture, and a compact editable cup-position sheet
-- Single-click cup selection and double-click move-to-cup interaction
+- Side cards for COM selection, connection state, homing, jog speeds, calibration capture, and a compact editable cup-position sheet
+- Single Active Cup selector shared by move commands and calibration capture
+- Single-click selection and double-click activation for numbered cups, `LOAD`, and the center drop hole
+- `Disable Up/Down (XY-only mode)` lets X/Y homing and cup moves proceed without a connected Z axis after operator confirmation
 - VB6-correct limit switch interpretation, including the Z-top switch
 - Default startup profile loaded from `VB6/settings/Paleomag_v3.INI`
 - Active profile badges showing the loaded INI name, X/Y/Z motor IDs, and VB6 motion limits
@@ -27,7 +28,7 @@ This matters because adjacent cups are only separated by a few thousand position
 
 ## Calibration Workflow
 
-- Capture the current X/Y counts into a cup calibration
+- Capture the current X/Y counts into the Active Cup calibration
 - Edit cup X/Y counts directly in the built-in position sheet
 - Clear a cup by leaving both X and Y cells blank
 - Use the stage view and the table together to inspect and refine stored positions

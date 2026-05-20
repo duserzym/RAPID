@@ -91,7 +91,6 @@ class AppConfig:
     updown_disabled: bool = False
     settings_path: str = str(DEFAULT_SETTINGS_PATH)
     selected_hole: int = 1
-    drag_moves_enabled: bool = False
     calibrations: list[HoleCalibration] = field(default_factory=list)
 
 
@@ -622,7 +621,6 @@ class ChangerStageController:
 
 class StageScene(QtWidgets.QWidget):
     holeSelected = QtCore.Signal(int)
-    holeDragged = QtCore.Signal(int)
     holeActivated = QtCore.Signal(int)
     specialTargetSelected = QtCore.Signal(str)
     specialTargetActivated = QtCore.Signal(str)
@@ -639,7 +637,6 @@ class StageScene(QtWidgets.QWidget):
         self._current_xy: tuple[int | None, int | None] = (None, None)
         self._calibrations: dict[int, tuple[int, int]] = {}
         self._hole_points: dict[int, QtCore.QPointF] = {}
-        self._dragging = False
         self._loading_position_active = False
         self._special_target: str | None = None
         self._logical_positions = tray_logical_hole_positions(slot_min, slot_max)
@@ -802,22 +799,14 @@ class StageScene(QtWidgets.QWidget):
             return
         special_target = self._special_target_at(event.position())
         if special_target is not None:
-            self._dragging = False
             self.specialTargetSelected.emit(special_target)
             event.accept()
             return
-        self._dragging = True
         self.holeSelected.emit(self._nearest_hole(event.position()))
-
-    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
-        if not self._dragging:
-            return
-        self.holeDragged.emit(self._nearest_hole(event.position()))
 
     def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
         if event.button() != QtCore.Qt.LeftButton:
             return
-        self._dragging = False
         special_target = self._special_target_at(event.position())
         if special_target is not None:
             self.specialTargetSelected.emit(special_target)
@@ -828,10 +817,6 @@ class StageScene(QtWidgets.QWidget):
         self.holeSelected.emit(hole)
         self.holeActivated.emit(hole)
         event.accept()
-
-    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
-        self._dragging = False
-        super().mouseReleaseEvent(event)
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         del event
@@ -1002,7 +987,6 @@ class MainWindow(QtWidgets.QMainWindow):
             updown_disabled=bool(payload.get("updown_disabled", False)),
             settings_path=str(payload.get("settings_path", str(DEFAULT_SETTINGS_PATH))),
             selected_hole=int(payload.get("selected_hole", 1)),
-            drag_moves_enabled=bool(payload.get("drag_moves_enabled", False)),
             calibrations=calibrations,
         )
 
@@ -1014,7 +998,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.config.updown_disabled = self._xy_only_mode_enabled()
         self.config.settings_path = self.settings_path_edit.text().strip() or str(DEFAULT_SETTINGS_PATH)
         self.config.selected_hole = self.target_hole.value()
-        self.config.drag_moves_enabled = self.drag_move_check.isChecked()
         self.config.calibrations = [
             HoleCalibration(hole=hole, x=x_pos, y=y_pos)
             for hole, (x_pos, y_pos) in sorted(self._calibration_map().items())
@@ -1101,6 +1084,45 @@ class MainWindow(QtWidgets.QMainWindow):
                 border: 1px solid rgba(122, 2, 25, 0.14);
                 border-radius: 12px;
                 padding: 6px 9px;
+            }
+            QPlainTextEdit#console {
+                background: rgba(255, 255, 255, 0.94);
+                color: #2f2827;
+                border-radius: 16px;
+                border: 1px solid rgba(122, 2, 25, 0.16);
+                padding: 8px;
+                selection-background-color: rgba(122, 2, 25, 0.18);
+                selection-color: #2f2827;
+            }
+            QCheckBox#updownModeCheckBox {
+                color: #4d302c;
+                font-size: 12.5px;
+                font-weight: 700;
+                background: rgba(255, 249, 244, 0.96);
+                border: 1px solid rgba(122, 2, 25, 0.26);
+                border-radius: 14px;
+                padding: 10px 12px;
+                spacing: 10px;
+            }
+            QCheckBox#updownModeCheckBox:hover {
+                background: rgba(255, 245, 238, 0.98);
+                border: 1px solid rgba(122, 2, 25, 0.38);
+            }
+            QCheckBox#updownModeCheckBox::indicator {
+                width: 22px;
+                height: 22px;
+                border-radius: 7px;
+                border: 2px solid rgba(122, 2, 25, 0.58);
+                background: rgba(255, 255, 255, 0.98);
+            }
+            QCheckBox#updownModeCheckBox::indicator:unchecked {
+                background: rgba(255, 255, 255, 0.98);
+                border: 2px solid rgba(122, 2, 25, 0.58);
+            }
+            QCheckBox#updownModeCheckBox::indicator:checked {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #7A0219, stop:1 #5a0013);
+                border: 2px solid rgba(122, 2, 25, 0.88);
+                image: url(none);
             }
             """
         )
@@ -1505,7 +1527,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_velocity_estimates()
         if hasattr(self, "target_hole"):
             self.target_hole.setRange(self.SLOT_MIN, self.SLOT_MAX)
-            self.calibration_hole.setRange(self.SLOT_MIN, self.SLOT_MAX)
         if hasattr(self, "stage_scene"):
             self._update_stage_calibrations()
             self.stage_scene.set_target_hole(self.target_hole.value())
@@ -1818,6 +1839,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_port_row(grid, 3, "sensor", "Reference")
         connections_layout.addLayout(grid)
         self.disable_updown_check = QtWidgets.QCheckBox("Disable Up/Down (XY-only mode)")
+        self.disable_updown_check.setObjectName("updownModeCheckBox")
         self.disable_updown_check.setToolTip(
             "Isolate XY control from the Z axis for testing. This disables Z connection and Z jog/home controls and lets XY motion proceed without Z."
         )
@@ -1868,10 +1890,7 @@ class MainWindow(QtWidgets.QMainWindow):
         selection = QtWidgets.QFormLayout()
         self.target_hole = QtWidgets.QSpinBox()
         self.target_hole.setRange(self.SLOT_MIN, self.SLOT_MAX)
-        self.calibration_hole = QtWidgets.QSpinBox()
-        self.calibration_hole.setRange(self.SLOT_MIN, self.SLOT_MAX)
-        selection.addRow("Target Cup", self.target_hole)
-        selection.addRow("Calibration Cup", self.calibration_hole)
+        selection.addRow("Active Cup", self.target_hole)
         motion_layout.addLayout(selection)
 
         commands = QtWidgets.QGridLayout()
@@ -1928,7 +1947,7 @@ class MainWindow(QtWidgets.QMainWindow):
         stage_help_text = (
             "Click a cup to choose the next target. Double-click a cup to run the same move as the Move To Cup button. "
             "Click the LOAD marker to select the loading corner and double-click it to move there. Click the center drop hole to select center and double-click it to home XY to center. "
-            "Drag across cups only when you want to scrub through selections. Use the side panels for connections, motion tuning, jogs, and calibration. "
+            "Use clicks and double-clicks to work between LOAD, center, and the numbered cups. Use the side panels for connections, motion tuning, jogs, and calibration. "
             + self._stage_limit_instructions()
         )
 
@@ -2031,13 +2050,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.capture_btn = QtWidgets.QPushButton("Capture XY")
         self.capture_btn.setObjectName("accent")
         self.clear_calibration_btn = QtWidgets.QPushButton("Clear Cup")
-        self.drag_move_check = QtWidgets.QCheckBox("Enable drag selection to also move stage")
-        self.drag_move_check.setChecked(False)
         self.calibration_summary = QtWidgets.QLabel("0 calibrated cups")
         self.calibration_summary.setWordWrap(True)
         calibration_layout.addWidget(self.capture_btn)
         calibration_layout.addWidget(self.clear_calibration_btn)
-        calibration_layout.addWidget(self.drag_move_check)
         calibration_layout.addWidget(self.calibration_summary)
         right.addWidget(calibration_card)
 
@@ -2065,12 +2081,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.capture_btn.clicked.connect(self._capture_calibration)
         self.clear_calibration_btn.clicked.connect(self._clear_calibration)
         self.target_hole.valueChanged.connect(self._sync_selected_hole)
-        self.calibration_hole.valueChanged.connect(self._sync_calibration_hole)
-        self.drag_move_check.toggled.connect(self._save_config)
         self.cup_table.itemChanged.connect(self._on_cup_table_item_changed)
         self.cup_table.currentCellChanged.connect(self._on_cup_table_current_cell_changed)
         self.stage_scene.holeSelected.connect(self._on_scene_hole_selected)
-        self.stage_scene.holeDragged.connect(self._on_scene_hole_dragged)
         self.stage_scene.holeActivated.connect(self._on_scene_hole_activated)
         self.stage_scene.specialTargetSelected.connect(self._on_scene_special_selected)
         self.stage_scene.specialTargetActivated.connect(self._on_scene_special_activated)
@@ -2118,8 +2131,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.disable_updown_check.blockSignals(False)
         self.settings_path_edit.setText(str(self.settings_profile.path))
         self.target_hole.setValue(self.config.selected_hole)
-        self.calibration_hole.setValue(self.config.selected_hole)
-        self.drag_move_check.setChecked(self.config.drag_moves_enabled)
         self._apply_settings_profile(self.settings_profile)
         self._update_stage_calibrations()
         self._apply_updown_mode()
@@ -2171,19 +2182,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._poll_stage_state()
 
     def _sync_selected_hole(self, value: int) -> None:
-        if self.calibration_hole.value() != value:
-            self.calibration_hole.blockSignals(True)
-            self.calibration_hole.setValue(value)
-            self.calibration_hole.blockSignals(False)
-        self.stage_scene.set_target_hole(value)
-        self._sync_cup_table_selection(value)
-        self._save_config()
-
-    def _sync_calibration_hole(self, value: int) -> None:
-        if self.target_hole.value() != value:
-            self.target_hole.blockSignals(True)
-            self.target_hole.setValue(value)
-            self.target_hole.blockSignals(False)
         self.stage_scene.set_target_hole(value)
         self._sync_cup_table_selection(value)
         self._save_config()
@@ -2209,7 +2207,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._save_config()
 
     def _clear_calibration(self) -> None:
-        hole = self.calibration_hole.value()
+        hole = self.target_hole.value()
         self.config.calibrations = [item for item in self.config.calibrations if item.hole != hole]
         self._append(f"Cleared cup {hole} calibration.")
         self._update_stage_calibrations()
@@ -2280,8 +2278,6 @@ class MainWindow(QtWidgets.QMainWindow):
         hole = self.SLOT_MIN + current_row
         if self.target_hole.value() != hole:
             self.target_hole.setValue(hole)
-        elif self.calibration_hole.value() != hole:
-            self.calibration_hole.setValue(hole)
 
     def _on_cup_table_item_changed(self, item: QtWidgets.QTableWidgetItem) -> None:
         if item.column() not in (1, 2):
@@ -2493,7 +2489,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._last_live_positions["x"] = x_pos
         self._last_live_positions["y"] = y_pos
-        hole = self.calibration_hole.value()
+        hole = self.target_hole.value()
         self._set_calibration(hole, x_pos, y_pos)
         self._append(f"Captured cup {hole} calibration: x={x_pos}, y={y_pos}.")
         self.stage_status.setText(f"Cup {hole} calibration updated from the live stage position.")
@@ -2501,20 +2497,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _select_scene_hole(self, hole: int) -> str:
         self.target_hole.setValue(hole)
-        self.calibration_hole.setValue(hole)
         return "measurement drop-off" if hole == StageScene.CENTER_DROP_HOLE else f"cup {hole}"
 
     def _on_scene_hole_selected(self, hole: int) -> None:
         label = self._select_scene_hole(hole)
         self.stage_status.setText(f"Selected {label}. Double-click to move there.")
-
-    def _on_scene_hole_dragged(self, hole: int) -> None:
-        label = self._select_scene_hole(hole)
-        if self.drag_move_check.isChecked():
-            self.stage_status.setText(f"Dragging across {label}. Moving because drag-move is enabled.")
-            self._move_to_selected_hole()
-        else:
-            self.stage_status.setText(f"Scrubbing target over {label}. Double-click to move there.")
 
     def _on_scene_hole_activated(self, hole: int) -> None:
         label = self._select_scene_hole(hole)
