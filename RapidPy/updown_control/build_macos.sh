@@ -5,8 +5,8 @@ cd "$(dirname "$0")"
 python tools/generate_icon.py
 
 ICON_ARG=()
-if [[ -f "assets/updown_icon.icns" ]]; then
-  ICON_ARG=(--icon "assets/updown_icon.icns")
+if [[ -f "assets/updown_control_icon.icns" ]]; then
+  ICON_ARG=(--icon "assets/updown_control_icon.icns")
 fi
 
 python -m PyInstaller \

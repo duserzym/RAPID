@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import platform
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -16,66 +17,79 @@ def draw_icon(output_png: Path, output_ico: Path) -> None:
     painter.setRenderHint(QtGui.QPainter.Antialiasing)
 
     gradient = QtGui.QLinearGradient(0, 0, size, size)
-    gradient.setColorAt(0.0, QtGui.QColor("#7A0219"))
-    gradient.setColorAt(1.0, QtGui.QColor("#520012"))
+    gradient.setColorAt(0.0, QtGui.QColor("#6b1220"))
+    gradient.setColorAt(1.0, QtGui.QColor("#430914"))
 
     painter.setBrush(QtGui.QBrush(gradient))
     painter.setPen(QtCore.Qt.NoPen)
-    painter.drawRoundedRect(48, 48, 928, 928, 210, 210)
+    painter.drawRoundedRect(0, 0, size, size, 256, 256)
 
-    gloss = QtGui.QLinearGradient(88, 88, 88, 560)
-    gloss.setColorAt(0.0, QtGui.QColor(255, 255, 255, 76))
-    gloss.setColorAt(1.0, QtGui.QColor(255, 255, 255, 0))
-    painter.setBrush(QtGui.QBrush(gloss))
-    painter.drawRoundedRect(88, 88, 848, 420, 170, 170)
+    title_font = QtGui.QFont("Avenir Next", 104)
+    title_font.setBold(True)
+    title_font.setLetterSpacing(QtGui.QFont.PercentageSpacing, 104)
+    painter.setFont(title_font)
+    painter.setPen(QtGui.QColor("#f4ede0"))
+    painter.drawText(QtCore.QRectF(0, 92, size, 108), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, "Z")
 
-    # Cartoon servo body.
-    body = QtGui.QPainterPath()
-    body.addRoundedRect(QtCore.QRectF(286, 320, 452, 392), 72, 72)
-    painter.fillPath(body, QtGui.QColor("#fff6e4"))
-    body_pen = QtGui.QPen(QtGui.QColor("#6F0A1F"), 12)
-    painter.setPen(body_pen)
-    painter.drawPath(body)
+    tray_rect = QtCore.QRectF(238, 226, 548, 548)
+    painter.setBrush(QtGui.QColor("#050505"))
+    painter.drawRoundedRect(tray_rect, 66, 66)
 
-    # Mounting ears.
-    painter.setPen(QtCore.Qt.NoPen)
-    painter.setBrush(QtGui.QColor("#E8B72B"))
-    painter.drawRoundedRect(QtCore.QRectF(230, 434, 72, 170), 26, 26)
-    painter.drawRoundedRect(QtCore.QRectF(722, 434, 72, 170), 26, 26)
+    inner_rect = tray_rect.adjusted(30, 30, -30, -30)
+    plate_gradient = QtGui.QLinearGradient(inner_rect.topLeft(), inner_rect.bottomRight())
+    plate_gradient.setColorAt(0.0, QtGui.QColor("#fbf5ea"))
+    plate_gradient.setColorAt(1.0, QtGui.QColor("#e7ddd0"))
+    painter.setBrush(plate_gradient)
+    painter.drawRoundedRect(inner_rect, 42, 42)
 
-    # Servo top cap and horn.
-    painter.setBrush(QtGui.QColor("#7A0219"))
-    painter.drawRoundedRect(QtCore.QRectF(360, 250, 304, 104), 34, 34)
-    painter.setBrush(QtGui.QColor("#FFCD34"))
-    painter.drawEllipse(QtCore.QRectF(448, 200, 128, 128))
-    painter.setBrush(QtGui.QColor("#6F0A1F"))
-    painter.drawEllipse(QtCore.QRectF(490, 242, 44, 44))
+    painter.setBrush(QtGui.QColor("#050505"))
+    notch_rects = (
+        QtCore.QRectF(inner_rect.center().x() - 104, inner_rect.top() - 10, 208, 18),
+        QtCore.QRectF(inner_rect.center().x() - 104, inner_rect.bottom() - 8, 208, 18),
+        QtCore.QRectF(inner_rect.left() - 10, inner_rect.center().y() - 76, 18, 152),
+        QtCore.QRectF(inner_rect.right() - 8, inner_rect.center().y() - 76, 18, 152),
+    )
+    for rect in notch_rects:
+        painter.drawRoundedRect(rect, 9, 9)
 
-    # Label band.
-    painter.setBrush(QtGui.QColor("#7A0219"))
-    painter.drawRoundedRect(QtCore.QRectF(344, 456, 336, 120), 30, 30)
+    top_y = inner_rect.top() + inner_rect.height() * 0.23
+    mid_y = inner_rect.top() + inner_rect.height() * 0.50
+    bottom_y = inner_rect.top() + inner_rect.height() * 0.77
+    left_x = inner_rect.left() + inner_rect.width() * 0.24
+    center_x = inner_rect.left() + inner_rect.width() * 0.50
+    right_x = inner_rect.left() + inner_rect.width() * 0.76
+    mid_left_x = inner_rect.left() + inner_rect.width() * 0.31
+    mid_right_x = inner_rect.left() + inner_rect.width() * 0.69
 
-    # Vertical motion arrows.
-    accent_pen = QtGui.QPen(QtGui.QColor("#FFCD34"), 24)
-    accent_pen.setCapStyle(QtCore.Qt.RoundCap)
-    painter.setPen(accent_pen)
-    painter.drawLine(178, 396, 178, 632)
-    painter.drawLine(846, 396, 846, 632)
+    cup_positions = [
+        (left_x, top_y),
+        (center_x, top_y),
+        (right_x, top_y),
+        (mid_left_x, mid_y),
+        (center_x, mid_y),
+        (mid_right_x, mid_y),
+        (left_x, bottom_y),
+        (center_x, bottom_y),
+        (right_x, bottom_y),
+    ]
+    cup_radius = 30
+    for index, (x_pos, y_pos) in enumerate(cup_positions):
+        if index == 4:
+            painter.setBrush(QtGui.QColor("#6a4b35"))
+            painter.drawEllipse(QtCore.QPointF(x_pos, y_pos), cup_radius + 6, cup_radius + 6)
+            painter.setBrush(QtGui.QColor("#221914"))
+            painter.drawEllipse(QtCore.QPointF(x_pos, y_pos), cup_radius - 4, cup_radius - 4)
+            continue
 
-    arrow_pen = QtGui.QPen(QtGui.QColor("#FFCD34"), 28)
-    arrow_pen.setCapStyle(QtCore.Qt.RoundCap)
-    arrow_pen.setJoinStyle(QtCore.Qt.RoundJoin)
-    painter.setPen(arrow_pen)
+        painter.setBrush(QtGui.QColor("#2c2c2f"))
+        painter.drawEllipse(QtCore.QPointF(x_pos, y_pos), cup_radius, cup_radius)
+        painter.setBrush(QtGui.QColor("#6b6b70"))
+        painter.drawEllipse(QtCore.QPointF(x_pos - 8, y_pos - 8), 10, 10)
 
-    up_arrow = QtGui.QPainterPath(QtCore.QPointF(124, 458))
-    up_arrow.lineTo(178, 396)
-    up_arrow.lineTo(232, 458)
-    painter.drawPath(up_arrow)
-
-    down_arrow = QtGui.QPainterPath(QtCore.QPointF(792, 570))
-    down_arrow.lineTo(846, 632)
-    down_arrow.lineTo(900, 570)
-    painter.drawPath(down_arrow)
+    target_x, target_y = cup_positions[4]
+    painter.setPen(QtGui.QPen(QtGui.QColor("#ffb14d"), 16))
+    painter.setBrush(QtCore.Qt.NoBrush)
+    painter.drawEllipse(QtCore.QPointF(target_x, target_y), 48, 48)
     painter.end()
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
@@ -92,7 +106,9 @@ def generate_icns(output_png: Path, output_icns: Path) -> bool:
     if iconutil.returncode != 0 or sips.returncode != 0:
         return False
 
-    iconset_dir = output_icns.parent / "updown.iconset"
+    iconset_dir = output_icns.parent / "updown_control.iconset"
+    if iconset_dir.exists():
+        shutil.rmtree(iconset_dir)
     iconset_dir.mkdir(parents=True, exist_ok=True)
 
     sizes = [16, 32, 64, 128, 256, 512]
@@ -107,15 +123,16 @@ def generate_icns(output_png: Path, output_icns: Path) -> bool:
         )
 
     subprocess.run(["iconutil", "-c", "icns", str(iconset_dir), "-o", str(output_icns)], check=True)
+    shutil.rmtree(iconset_dir, ignore_errors=True)
     return output_icns.exists()
 
 
 def main() -> int:
     app = QtGui.QGuiApplication([])
     root = Path(__file__).resolve().parent.parent
-    output_png = root / "assets" / "updown_icon.png"
-    output_ico = root / "assets" / "updown_icon.ico"
-    output_icns = root / "assets" / "updown_icon.icns"
+    output_png = root / "assets" / "updown_control_icon.png"
+    output_ico = root / "assets" / "updown_control_icon.ico"
+    output_icns = root / "assets" / "updown_control_icon.icns"
 
     draw_icon(output_png, output_ico)
     generated_icns = generate_icns(output_png, output_icns)
