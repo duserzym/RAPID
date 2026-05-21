@@ -78,12 +78,43 @@ class SettingsProfile:
 
 
 @dataclass(slots=True)
-class ProfileMarker:
+class ProfileBand:
+    label: str
+    raw_top: int
+    raw_bottom: int
+    width: float
+    fill_color: str
+    outline_color: str
+    side: str = "right"
+    value_text: str | None = None
+
+
+@dataclass(slots=True)
+class ProfileIndicator:
     label: str
     raw_position: int
     side: str
     color: str
+    value_text: str | None = None
+    style: str = "bar"
+    symbol: str = "dot"
+    bar_half_width: float = 18.0
     emphasis: bool = False
+
+
+@dataclass(slots=True)
+class ProfileModel:
+    range_top: int
+    range_bottom: int
+    top_switch_raw: int
+    holder_bottom_raw: int
+    sample_top_raw: int
+    sample_bottom_raw: int
+    zero_raw: int
+    floor_raw: int
+    live_raw: int | None
+    bands: tuple[ProfileBand, ...]
+    indicators: tuple[ProfileIndicator, ...]
 
 
 @dataclass(slots=True)
@@ -135,6 +166,83 @@ def _parse_ini_int(raw_value: str | None, default: int) -> int:
     return int(round(_parse_ini_number(raw_value, float(default))))
 
 
+def _new_settings_config() -> configparser.ConfigParser:
+    config = configparser.ConfigParser(interpolation=None)
+    config.optionxform = str
+    return config
+
+
+def _settings_json_payload_from_config(config: configparser.ConfigParser) -> dict[str, object]:
+    return {
+        "sections": [
+            {
+                "name": section,
+                "entries": [{"key": key, "value": value} for key, value in config.items(section)],
+            }
+            for section in config.sections()
+        ]
+    }
+
+
+def _settings_config_from_json_payload(payload: object) -> configparser.ConfigParser:
+    if not isinstance(payload, dict):
+        raise ValueError("JSON root must be an object.")
+
+    if "sections" in payload:
+        section_payloads = payload.get("sections")
+        if not isinstance(section_payloads, list):
+            raise ValueError("The 'sections' field must be a list.")
+    else:
+        section_payloads = [
+            {
+                "name": name,
+                "entries": [{"key": key, "value": value} for key, value in values.items()],
+            }
+            for name, values in payload.items()
+            if isinstance(values, dict)
+        ]
+
+    config = _new_settings_config()
+    seen_sections: set[str] = set()
+    for section_payload in section_payloads:
+        if not isinstance(section_payload, dict):
+            raise ValueError("Each section must be an object.")
+        name = str(section_payload.get("name", "")).strip()
+        if not name:
+            raise ValueError("Each section needs a non-empty name.")
+        if name in seen_sections:
+            raise ValueError(f"Duplicate section name: {name}")
+        seen_sections.add(name)
+        config.add_section(name)
+        entry_payloads = section_payload.get("entries", [])
+        if not isinstance(entry_payloads, list):
+            raise ValueError(f"Section {name} has an invalid entries list.")
+        seen_keys: set[str] = set()
+        for entry_payload in entry_payloads:
+            if not isinstance(entry_payload, dict):
+                raise ValueError(f"Section {name} has a non-object entry.")
+            key = str(entry_payload.get("key", "")).strip()
+            if not key:
+                raise ValueError(f"Section {name} contains an empty key.")
+            if key in seen_keys:
+                raise ValueError(f"Section {name} contains duplicate key {key}.")
+            seen_keys.add(key)
+            value = entry_payload.get("value", "")
+            config[name][key] = "" if value is None else str(value)
+    return config
+
+
+def _load_settings_config(settings_path: Path) -> configparser.ConfigParser:
+    if not settings_path.exists():
+        raise FileNotFoundError(f"Settings file not found: {settings_path}")
+    if settings_path.suffix.lower() == ".json":
+        payload = json.loads(settings_path.read_text(encoding="utf-8"))
+        return _settings_config_from_json_payload(payload)
+    config = _new_settings_config()
+    config.read(settings_path, encoding="utf-8")
+    return config
+
+
 def load_settings(path: Path = APP_SETTINGS_PATH) -> UpDownSettings:
     if not path.exists():
         return UpDownSettings()
@@ -158,9 +266,7 @@ def save_settings(settings: UpDownSettings, path: Path = APP_SETTINGS_PATH) -> N
 
 
 def _load_settings_profile(settings_path: Path) -> SettingsProfile:
-    config = configparser.ConfigParser(interpolation=None)
-    config.optionxform = str
-    config.read(settings_path, encoding="utf-8")
+    config = _load_settings_config(settings_path)
 
     motor_section = config["SteppingMotor"] if config.has_section("SteppingMotor") else {}
     program_section = config["MotorPrograms"] if config.has_section("MotorPrograms") else {}
@@ -221,16 +327,32 @@ def _load_settings_profile(settings_path: Path) -> SettingsProfile:
 class VerticalProfileWidget(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self._markers: list[ProfileMarker] = []
-        self._range_top = 0
-        self._range_bottom = -1
-        self.setMinimumHeight(590)
+        self._model: ProfileModel | None = None
+        self._scan_points: tuple[ScanPoint, ...] = ()
+        self._scan_center_cm = 0.0
+        self._scan_half_range_cm = 0.25
+        self._suggested_z_cm: float | None = None
+        self._suggested_target_raw: int | None = None
+        self.setMinimumHeight(560)
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
 
-    def set_profile(self, markers: list[ProfileMarker], range_top: int, range_bottom: int) -> None:
-        self._markers = list(markers)
-        self._range_top = range_top
-        self._range_bottom = range_bottom
+    def set_profile(self, model: ProfileModel) -> None:
+        self._model = model
+        self.update()
+
+    def set_scan_detail(
+        self,
+        points: list[ScanPoint],
+        center_z_cm: float,
+        half_range_cm: float,
+        suggested_z_cm: float | None,
+        suggested_target_raw: int | None,
+    ) -> None:
+        self._scan_points = tuple(points)
+        self._scan_center_cm = center_z_cm
+        self._scan_half_range_cm = max(half_range_cm, 0.05)
+        self._suggested_z_cm = suggested_z_cm
+        self._suggested_target_raw = suggested_target_raw
         self.update()
 
     def _adjust_label_positions(self, targets: list[float], top: float, bottom: float, gap: float) -> list[float]:
@@ -254,9 +376,13 @@ class VerticalProfileWidget(QtWidgets.QWidget):
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
         del event
+        model = self._model
+        if model is None or model.range_top == model.range_bottom:
+            return
+
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-        rect = self.rect().adjusted(16, 12, -16, -12)
+        rect = self.rect().adjusted(12, 10, -18, -10)
         painter.fillRect(self.rect(), QtCore.Qt.GlobalColor.transparent)
 
         panel = QtCore.QRectF(rect)
@@ -264,122 +390,368 @@ class VerticalProfileWidget(QtWidgets.QWidget):
         painter.setBrush(QtGui.QColor("#fffaf4"))
         painter.drawRoundedRect(panel, 24, 24)
 
-        chart_top = panel.top() + 24
-        chart_bottom = panel.bottom() - 24
-        center_x = panel.center().x()
-        body_rect = QtCore.QRectF(center_x - 72, chart_top, 144, chart_bottom - chart_top)
+        range_span = float(max(1, model.range_top - model.range_bottom))
+        chart_top = panel.top() + 18
+        chart_bottom = panel.bottom() - 18
+        usable_top = chart_top + 20
+        usable_bottom = chart_bottom - 18
+        center_x = panel.center().x() - 38
+
+        def to_y(raw_position: float) -> float:
+            ratio = (model.range_top - raw_position) / range_span
+            return usable_top + ratio * (usable_bottom - usable_top)
+
+        top_band_raw = max(band.raw_top for band in model.bands)
+        bottom_band_raw = min(band.raw_bottom for band in model.bands)
+        top_margin_raw = max(1400, int(abs(top_band_raw - model.holder_bottom_raw) * 0.12))
+        bottom_margin_raw = max(900, int(abs(bottom_band_raw - top_band_raw) * 0.08))
+        outer_top_raw = top_band_raw + top_margin_raw
+        outer_bottom_raw = bottom_band_raw - bottom_margin_raw
+        outer_top_y = to_y(outer_top_raw)
+        outer_bottom_y = to_y(outer_bottom_raw)
+        outer_body = QtCore.QRectF(center_x - 68, outer_top_y, 136, max(outer_bottom_y - outer_top_y, 140.0))
+        body_rect = outer_body.adjusted(10, 0, -10, 0)
         painter.setBrush(QtGui.QColor("#111111"))
         painter.drawRoundedRect(body_rect, 62, 62)
 
-        shield_rect = body_rect.adjusted(20, 16, -20, -16)
+        shield_rect = body_rect.adjusted(18, 14, -18, -14)
         shield_gradient = QtGui.QLinearGradient(shield_rect.topLeft(), shield_rect.bottomRight())
         shield_gradient.setColorAt(0.0, QtGui.QColor("#fbf5ea"))
         shield_gradient.setColorAt(1.0, QtGui.QColor("#eadfce"))
         painter.setBrush(shield_gradient)
         painter.drawRoundedRect(shield_rect, 40, 40)
 
-        bore_rect = QtCore.QRectF(center_x - 14, chart_top + 18, 28, chart_bottom - chart_top - 36)
+        bore_rect = QtCore.QRectF(center_x - 13, outer_top_y + 18, 26, max(outer_bottom_y - outer_top_y - 36, 120.0))
         painter.setBrush(QtGui.QColor("#2b1d18"))
         painter.drawRoundedRect(bore_rect, 14, 14)
         painter.setBrush(QtGui.QColor("#4a3128"))
         painter.drawRoundedRect(bore_rect.adjusted(6, 10, -6, -10), 8, 8)
 
-        if self._range_top == self._range_bottom:
-            painter.end()
-            return
+        zone_bands = sorted(model.bands, key=lambda band: band.raw_bottom, reverse=True)
+        band_height = 9.0
+        for band in zone_bands:
+            center_y = to_y(band.raw_bottom)
+            band_rect = QtCore.QRectF(center_x - band.width / 2.0, center_y - band_height / 2.0, band.width, band_height)
+            fill = QtGui.QLinearGradient(band_rect.topLeft(), band_rect.bottomLeft())
+            fill.setColorAt(0.0, QtGui.QColor(band.fill_color).lighter(112))
+            fill.setColorAt(1.0, QtGui.QColor(band.fill_color).darker(112))
+            painter.setPen(QtGui.QPen(QtGui.QColor(band.outline_color), 1.2))
+            painter.setBrush(fill)
+            painter.drawRoundedRect(band_rect, 3.0, 3.0)
 
-        usable_height = bore_rect.height() - 16
-        top_anchor = bore_rect.top() + 8
-        range_span = max(1, self._range_top - self._range_bottom)
+        zero_y = to_y(model.zero_raw)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#8a6a44"), 1.0, QtCore.Qt.PenStyle.DashLine))
+        painter.drawLine(QtCore.QPointF(bore_rect.left() - 18, zero_y), QtCore.QPointF(bore_rect.right() + 18, zero_y))
 
-        def to_y(raw_position: int) -> float:
-            ratio = (self._range_top - raw_position) / range_span
-            return top_anchor + ratio * usable_height
+        holder_top_y = to_y(model.top_switch_raw) + 10
+        holder_bottom_y = to_y(model.holder_bottom_raw)
+        holder_rect = QtCore.QRectF(center_x - 5.5, holder_top_y, 11.0, max(holder_bottom_y - holder_top_y - 6.0, 18.0))
+        painter.setPen(QtGui.QPen(QtGui.QColor("#725243"), 1.0))
+        painter.setBrush(QtGui.QColor("#bea48f"))
+        painter.drawRoundedRect(holder_rect, 5.5, 5.5)
 
-        left_markers = [marker for marker in self._markers if marker.side == "left"]
-        right_markers = [marker for marker in self._markers if marker.side != "left"]
-        left_markers.sort(key=lambda marker: marker.raw_position, reverse=True)
-        right_markers.sort(key=lambda marker: marker.raw_position, reverse=True)
+        sample_bottom_y = to_y(model.sample_bottom_raw)
+        stage_rect = QtCore.QRectF(center_x - 23.0, sample_bottom_y - 4.5, 46.0, 9.0)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#31566d"), 1.1))
+        painter.setBrush(QtGui.QColor("#7fa2b7"))
+        painter.drawRoundedRect(stage_rect, 4.5, 4.5)
 
-        label_height = 36.0
+        measurement_band = next((band for band in model.bands if "Measurement" in band.label), None)
+        if measurement_band is not None:
+            measurement_y = to_y(measurement_band.raw_bottom)
+            plot_width = min(104.0, max(84.0, body_rect.left() - panel.left() - 146.0))
+            plot_height = min(
+                222.0,
+                max(156.0, abs(to_y(measurement_band.raw_top) - measurement_y) * 3.4),
+            )
+            plot_left = max(panel.left() + 112.0, body_rect.left() - plot_width - 34.0)
+            plot_top = min(
+                max(measurement_y - plot_height / 2.0, panel.top() + 116.0),
+                panel.bottom() - plot_height - 28.0,
+            )
+            plot_rect = QtCore.QRectF(plot_left, plot_top, plot_width, plot_height)
+            plot_inner = plot_rect.adjusted(24.0, 18.0, -10.0, -24.0)
+
+            moments = [point.moment_emu for point in self._scan_points]
+            x_min = min(moments, default=0.0)
+            x_max = max(moments, default=0.45)
+            x_min = min(0.0, x_min)
+            if math.isclose(x_max, x_min):
+                x_max = x_min + max(abs(x_max) * 0.35, 0.35)
+            else:
+                x_max += max((x_max - x_min) * 0.12, 0.05)
+            if x_max - x_min < 0.18:
+                x_max = x_min + 0.18
+
+            y_min = self._scan_center_cm - self._scan_half_range_cm
+            y_max = self._scan_center_cm + self._scan_half_range_cm
+
+            def to_plot(moment_emu: float, z_cm: float) -> QtCore.QPointF:
+                x_ratio = (moment_emu - x_min) / max(x_max - x_min, 1e-6)
+                y_ratio = (y_max - z_cm) / max(y_max - y_min, 1e-6)
+                return QtCore.QPointF(
+                    plot_inner.left() + x_ratio * plot_inner.width(),
+                    plot_inner.top() + y_ratio * plot_inner.height(),
+                )
+
+            connector_anchor = QtCore.QPointF(body_rect.left() - 4.0, measurement_y)
+            painter.setPen(QtGui.QPen(QtGui.QColor(180, 143, 103, 184), 1.05))
+            painter.drawLine(plot_rect.topRight(), connector_anchor)
+            painter.drawLine(plot_rect.bottomRight(), connector_anchor)
+
+            painter.setPen(QtGui.QPen(QtGui.QColor("#d7c6b8"), 1.0))
+            painter.setBrush(QtGui.QColor(255, 252, 248, 236))
+            painter.drawRoundedRect(plot_rect, 16, 16)
+
+            grid_pen = QtGui.QPen(QtGui.QColor(145, 124, 112, 52), 0.9)
+            for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
+                y_line = plot_inner.top() + fraction * plot_inner.height()
+                painter.setPen(grid_pen)
+                painter.drawLine(QtCore.QPointF(plot_inner.left(), y_line), QtCore.QPointF(plot_inner.right(), y_line))
+            for fraction in (0.0, 0.5, 1.0):
+                x_line = plot_inner.left() + fraction * plot_inner.width()
+                painter.setPen(grid_pen)
+                painter.drawLine(QtCore.QPointF(x_line, plot_inner.top()), QtCore.QPointF(x_line, plot_inner.bottom()))
+
+            painter.setPen(QtGui.QPen(QtGui.QColor("#6f5a52"), 1.05))
+            painter.drawLine(plot_inner.bottomLeft(), plot_inner.topLeft())
+            painter.drawLine(plot_inner.bottomLeft(), plot_inner.bottomRight())
+
+            axis_font = QtGui.QFont(self.font())
+            axis_font.setPointSizeF(max(6.6, axis_font.pointSizeF() - 1.2))
+            painter.setFont(axis_font)
+            painter.setPen(QtGui.QColor("#6f5a52"))
+            painter.drawText(
+                QtCore.QRectF(plot_rect.left() + 4, plot_rect.top() + 4, plot_rect.width() - 8, 12),
+                QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                "Meas zone",
+            )
+            painter.drawText(
+                QtCore.QRectF(plot_inner.left() - 36, plot_inner.top() - 4, 32, 12),
+                QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                f"{y_max:+.2f}",
+            )
+            painter.drawText(
+                QtCore.QRectF(plot_inner.left() - 36, plot_inner.bottom() - 8, 32, 12),
+                QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                f"{y_min:+.2f}",
+            )
+            painter.drawText(
+                QtCore.QRectF(plot_inner.left() - 6, plot_inner.bottom() + 6, 20, 12),
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                f"{x_min:.1f}",
+            )
+            painter.drawText(
+                QtCore.QRectF(plot_inner.right() - 20, plot_inner.bottom() + 6, 28, 12),
+                QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                f"{x_max:.1f}",
+            )
+            painter.drawText(
+                QtCore.QRectF(plot_inner.left(), plot_inner.bottom() + 18, plot_inner.width(), 12),
+                QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                "Moment",
+            )
+            painter.save()
+            painter.translate(plot_rect.left() + 8, plot_inner.center().y())
+            painter.rotate(-90)
+            painter.drawText(
+                QtCore.QRectF(-plot_inner.height() / 2.0, -10.0, plot_inner.height(), 12.0),
+                QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                "Z position",
+            )
+            painter.restore()
+
+            if self._scan_points:
+                ordered_points = sorted(self._scan_points, key=lambda point: point.z_cm)
+                polyline = QtGui.QPainterPath()
+                first_point = to_plot(ordered_points[0].moment_emu, ordered_points[0].z_cm)
+                polyline.moveTo(first_point)
+                for point in ordered_points[1:]:
+                    polyline.lineTo(to_plot(point.moment_emu, point.z_cm))
+                painter.setPen(QtGui.QPen(QtGui.QColor("#7a0219"), 1.9))
+                painter.drawPath(polyline)
+                painter.setBrush(QtGui.QColor("#ffca3a"))
+                painter.setPen(QtGui.QPen(QtGui.QColor("#7a0219"), 0.9))
+                for point in ordered_points:
+                    painter.drawEllipse(to_plot(point.moment_emu, point.z_cm), 2.8, 2.8)
+            else:
+                painter.setPen(QtGui.QColor(111, 90, 82, 140))
+                painter.drawText(plot_inner, QtCore.Qt.AlignmentFlag.AlignCenter, "No scan")
+
+            if self._suggested_z_cm is not None and y_min <= self._suggested_z_cm <= y_max:
+                suggested_y = to_plot(x_min, self._suggested_z_cm).y()
+                painter.setPen(QtGui.QPen(QtGui.QColor("#31566d"), 1.15, QtCore.Qt.PenStyle.DashLine))
+                painter.drawLine(
+                    QtCore.QPointF(plot_inner.left(), suggested_y),
+                    QtCore.QPointF(plot_inner.right(), suggested_y),
+                )
+                painter.setPen(QtGui.QColor("#31566d"))
+                painter.drawText(
+                    QtCore.QRectF(plot_inner.left() + 4, suggested_y - 14, plot_inner.width() - 8, 12),
+                    QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                    "Opt",
+                )
+
+        label_height = 58.0
         gap = 12.0
-        left_targets = [to_y(marker.raw_position) - label_height / 2 for marker in left_markers]
-        right_targets = [to_y(marker.raw_position) - label_height / 2 for marker in right_markers]
+        left_indicators = [indicator for indicator in model.indicators if indicator.side == "left"]
+        right_entries: list[tuple[str, object, float]] = [
+            ("indicator", indicator, float(indicator.raw_position)) for indicator in model.indicators if indicator.side != "left"
+        ]
+        right_entries.extend(("band", band, (band.raw_top + band.raw_bottom) / 2.0) for band in model.bands)
+        right_entries.sort(key=lambda item: item[2], reverse=True)
+        left_indicators.sort(key=lambda indicator: indicator.raw_position, reverse=True)
+
+        left_targets = [to_y(indicator.raw_position) - label_height / 2.0 for indicator in left_indicators]
+        right_targets = [to_y(position) - label_height / 2.0 for _, _, position in right_entries]
         left_y = self._adjust_label_positions(left_targets, panel.top() + 6, panel.bottom() - label_height - 6, label_height + gap)
         right_y = self._adjust_label_positions(right_targets, panel.top() + 6, panel.bottom() - label_height - 6, label_height + gap)
 
         title_font = QtGui.QFont(self.font())
-        title_font.setPointSizeF(max(8.3, title_font.pointSizeF() - 0.4))
+        title_font.setPointSizeF(max(7.9, title_font.pointSizeF() - 0.5))
         title_font.setBold(True)
         meta_font = QtGui.QFont(title_font)
         meta_font.setBold(False)
-        meta_font.setPointSizeF(max(7.4, meta_font.pointSizeF() - 0.8))
+        meta_font.setPointSizeF(max(7.0, meta_font.pointSizeF() - 0.7))
 
-        def draw_marker(marker: ProfileMarker, y_value: float, label_y: float) -> None:
-            color = QtGui.QColor(marker.color)
-            dot_radius = 5.0 if marker.emphasis else 3.2
-            if marker.side == "left":
-                tick_end = bore_rect.left() - 20
-                label_rect = QtCore.QRectF(panel.left() + 8, label_y, tick_end - panel.left() - 22, label_height)
+        def draw_indicator(indicator: ProfileIndicator, y_value: float, label_y: float) -> None:
+            color = QtGui.QColor(indicator.color)
+            if indicator.side == "left":
+                anchor_x = center_x - indicator.bar_half_width
+                tick_end = body_rect.left() - 18
+                label_rect = QtCore.QRectF(panel.left() + 8, label_y, tick_end - panel.left() - 16, label_height)
                 line_end = label_rect.right() + 4
                 text_align = QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
             else:
-                tick_end = bore_rect.right() + 20
-                label_rect = QtCore.QRectF(tick_end + 18, label_y, panel.right() - tick_end - 26, label_height)
+                anchor_x = center_x + indicator.bar_half_width
+                tick_end = body_rect.right() + 18
+                label_rect = QtCore.QRectF(tick_end + 14, label_y, panel.right() - tick_end - 22, label_height)
                 line_end = label_rect.left() - 4
                 text_align = QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
 
-            painter.setPen(QtGui.QPen(color, 1.6 if marker.emphasis else 1.15))
-            painter.drawLine(QtCore.QPointF(center_x, y_value), QtCore.QPointF(tick_end, y_value))
+            painter.setPen(QtGui.QPen(color, 1.55 if indicator.emphasis else 1.15))
+            if indicator.style == "bar":
+                painter.drawLine(QtCore.QPointF(center_x - indicator.bar_half_width, y_value), QtCore.QPointF(center_x + indicator.bar_half_width, y_value))
+            painter.drawLine(QtCore.QPointF(anchor_x, y_value), QtCore.QPointF(tick_end, y_value))
             painter.drawLine(QtCore.QPointF(tick_end, y_value), QtCore.QPointF(line_end, label_rect.center().y()))
             painter.setBrush(color)
-            painter.drawEllipse(QtCore.QPointF(center_x, y_value), dot_radius, dot_radius)
+            if indicator.symbol == "rect":
+                painter.drawRoundedRect(QtCore.QRectF(center_x - 7.0, y_value - 4.5, 14.0, 9.0), 3.0, 3.0)
+            else:
+                dot_radius = 4.2 if indicator.emphasis else 3.0
+                painter.drawEllipse(QtCore.QPointF(center_x, y_value), dot_radius, dot_radius)
 
-            painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 220), 1))
-            painter.setBrush(QtGui.QColor(255, 255, 255, 228))
+            painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 224), 1))
+            painter.setBrush(QtGui.QColor(255, 255, 255, 232))
             painter.drawRoundedRect(label_rect, 10, 10)
             painter.setPen(QtGui.QColor("#402f2b"))
             painter.setFont(title_font)
-            painter.drawText(label_rect.adjusted(8, 4, -8, -14), text_align, marker.label)
+            painter.drawText(
+                label_rect.adjusted(8, 4, -8, -18),
+                text_align | QtCore.Qt.TextFlag.TextWordWrap,
+                indicator.label,
+            )
             painter.setPen(QtGui.QColor("#7a625c"))
             painter.setFont(meta_font)
-            painter.drawText(label_rect.adjusted(8, 16, -8, -4), text_align, f"{marker.raw_position:,}")
+            painter.drawText(label_rect.adjusted(8, 34, -8, -4), text_align, indicator.value_text or f"{indicator.raw_position:,}")
 
-        for marker, label_y in zip(left_markers, left_y):
-            draw_marker(marker, to_y(marker.raw_position), label_y)
-        for marker, label_y in zip(right_markers, right_y):
-            draw_marker(marker, to_y(marker.raw_position), label_y)
+        def draw_band_label(band: ProfileBand, label_y: float) -> None:
+            center_y = to_y((band.raw_top + band.raw_bottom) / 2.0)
+            band_edge_x = center_x + band.width / 2.0
+            tick_end = body_rect.right() + 18
+            label_rect = QtCore.QRectF(tick_end + 14, label_y, panel.right() - tick_end - 22, label_height)
+            painter.setPen(QtGui.QPen(QtGui.QColor(band.outline_color), 1.1))
+            painter.drawLine(QtCore.QPointF(band_edge_x, center_y), QtCore.QPointF(tick_end, center_y))
+            painter.drawLine(QtCore.QPointF(tick_end, center_y), QtCore.QPointF(label_rect.left() - 4, label_rect.center().y()))
+            painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 224), 1))
+            painter.setBrush(QtGui.QColor(255, 255, 255, 232))
+            painter.drawRoundedRect(label_rect, 10, 10)
+            painter.setPen(QtGui.QColor("#402f2b"))
+            painter.setFont(title_font)
+            painter.drawText(
+                label_rect.adjusted(8, 4, -8, -18),
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.TextFlag.TextWordWrap,
+                band.label,
+            )
+            painter.setPen(QtGui.QColor("#7a625c"))
+            painter.setFont(meta_font)
+            painter.drawText(label_rect.adjusted(8, 34, -8, -4), QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter, band.value_text or f"{band.raw_bottom:,}")
+
+        for indicator, label_y in zip(left_indicators, left_y):
+            draw_indicator(indicator, to_y(indicator.raw_position), label_y)
+
+        for (entry_type, entry, position), label_y in zip(right_entries, right_y):
+            if entry_type == "indicator":
+                draw_indicator(entry, to_y(position), label_y)
+            else:
+                draw_band_label(entry, label_y)
         painter.end()
 
 
-def read_calibration_from_ini(ini_path: Path) -> SquidCalibration:
+def read_calibration_from_settings(settings_path: Path) -> SquidCalibration:
     try:
-        text = ini_path.read_text(encoding="latin-1")
-    except OSError:
+        config = _load_settings_config(settings_path)
+    except Exception:
         return SquidCalibration()
 
-    in_section = False
-    values: dict[str, str] = {}
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.lower() == "[magnetometercalibration]":
-            in_section = True
-            continue
-        if in_section:
-            if stripped.startswith("["):
-                break
-            if "=" in stripped:
-                key, _, value = stripped.partition("=")
-                values[key.strip().lower()] = value.strip()
+    section = config["MagnetometerCalibration"] if config.has_section("MagnetometerCalibration") else {}
     try:
         return SquidCalibration(
-            xcal=float(values.get("xcal", "-3.410")),
-            ycal=float(values.get("ycal", "-3.470")),
-            zcal=float(values.get("zcal", "-2.516")),
-            range_fact=float(values.get("rangefact", "0.00001")),
+            xcal=float(section.get("XCal", "-3.410")),
+            ycal=float(section.get("YCal", "-3.470")),
+            zcal=float(section.get("ZCal", "-2.516")),
+            range_fact=float(section.get("RangeFact", "0.00001")),
         )
     except ValueError:
         return SquidCalibration()
+
+
+def read_calibration_from_ini(ini_path: Path) -> SquidCalibration:
+    return read_calibration_from_settings(ini_path)
+
+
+def _probe_squid_port(port: str) -> bool:
+    try:
+        with serial.Serial(
+            port=port,
+            baudrate=1200,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE,
+            timeout=0.25,
+            write_timeout=0.25,
+        ) as ser:
+            ser.reset_input_buffer()
+            ser.reset_output_buffer()
+            ser.write(b"\rALC\r")
+            ser.flush()
+            time.sleep(0.08)
+            ser.write(b"\rALD\r")
+            ser.flush()
+            time.sleep(0.12)
+
+            def query(command: str, timeout_s: float = 0.35) -> str:
+                ser.reset_input_buffer()
+                ser.write(f"\r{command}\r".encode("ascii", errors="ignore"))
+                ser.flush()
+                deadline = time.monotonic() + timeout_s
+                chunks = bytearray()
+                while time.monotonic() < deadline:
+                    byte = ser.read(1)
+                    if not byte:
+                        continue
+                    if byte == b"\r":
+                        if chunks:
+                            break
+                        continue
+                    chunks.extend(byte)
+                return chunks.decode("ascii", errors="ignore").strip()
+
+            count_response = query("XSC")
+            data_response = query("XSD")
+            return FLOAT_RE.search(count_response) is not None and FLOAT_RE.search(data_response) is not None
+    except (OSError, serial.SerialException):
+        return False
 
 
 def _moment_magnitude(x_emu: float, y_emu: float, z_emu: float) -> float:
@@ -729,22 +1101,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings_profile = self._load_profile(Path(self._settings.settings_path))
         self.controller = UpDownController(self.settings_profile)
         self.squid = SquidMomentReader()
-        self._calibration = read_calibration_from_ini(self.settings_profile.path)
+        self._calibration = read_calibration_from_settings(self.settings_profile.path)
         self._baseline_raw: tuple[float, float, float] | None = None
         self._scan_worker: ScanWorker | None = None
         self._scan_points: list[ScanPoint] = []
+        self._plot_suggested_z_cm: float | None = None
+        self._plot_suggested_target_raw: int | None = None
         self._poll_timer = QtCore.QTimer(self)
         self._poll_timer.setInterval(500)
         self._poll_timer.timeout.connect(self._poll_live_state)
         self._suppress_speed_confirm = False
         self._last_confirmed_speed = 0
         self._last_live_raw: int | None = None
+        self._pending_meas_pos_suggestion: int | None = None
         self._build_ui()
         self._apply_local_style()
-        self.setMinimumSize(1260, 820)
-        self.resize(1380, 900)
+        self.setMinimumSize(1560, 820)
+        self.resize(1640, 920)
         self._refresh_ports()
+        self._populate_squid_ports()
         self._load_settings_into_widgets()
+        self._autodetect_squid_port()
         self._apply_profile_to_ui(reset_motion=True)
         self._poll_timer.start()
 
@@ -798,12 +1175,31 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_position_pill = self._make_pill("Z -- raw")
         self.top_switch_pill = self._make_pill("Z TOP --")
         self.meas_pos_pill = self._make_pill("MeasPos --")
-        pill_row = QtWidgets.QHBoxLayout()
-        pill_row.setSpacing(8)
-        pill_row.addWidget(self.current_position_pill)
-        pill_row.addWidget(self.top_switch_pill)
-        pill_row.addWidget(self.meas_pos_pill)
-        header_layout.addLayout(pill_row)
+        self.live_raw_label = self._make_pill("Raw --")
+        self.live_cm_label = self._make_pill("Z -- cm")
+        self.live_target_label = self._make_pill("Target --")
+        self.safety_label = QtWidgets.QLabel()
+        self.safety_label.setObjectName("tableHint")
+        self.safety_label.setWordWrap(True)
+        header_status = QtWidgets.QVBoxLayout()
+        header_status.setObjectName("headerStatusHost")
+        header_status.setSpacing(8)
+        pill_grid = QtWidgets.QGridLayout()
+        pill_grid.setContentsMargins(0, 0, 0, 0)
+        pill_grid.setHorizontalSpacing(10)
+        pill_grid.setVerticalSpacing(8)
+        pill_grid.addWidget(self.current_position_pill, 0, 0)
+        pill_grid.addWidget(self.top_switch_pill, 0, 1)
+        pill_grid.addWidget(self.meas_pos_pill, 0, 2)
+        pill_grid.addWidget(self.live_raw_label, 1, 0)
+        pill_grid.addWidget(self.live_cm_label, 1, 1)
+        pill_grid.addWidget(self.live_target_label, 1, 2)
+        pill_grid.setColumnStretch(0, 1)
+        pill_grid.setColumnStretch(1, 1)
+        pill_grid.setColumnStretch(2, 1)
+        header_status.addLayout(pill_grid)
+        header_status.addWidget(self.safety_label)
+        header_layout.addLayout(header_status, 2)
         outer.addWidget(header)
         apply_card_shadow(header)
 
@@ -812,31 +1208,35 @@ class MainWindow(QtWidgets.QMainWindow):
         outer.addLayout(shell, 1)
 
         left_host = QtWidgets.QWidget()
-        left_host.setMinimumWidth(318)
-        left_host.setMaximumWidth(348)
+        left_host.setObjectName("columnHost")
+        left_host.setMinimumWidth(296)
+        left_host.setMaximumWidth(328)
         left_host_layout = QtWidgets.QVBoxLayout(left_host)
         left_host_layout.setContentsMargins(0, 0, 0, 0)
         left_host_layout.setSpacing(10)
         shell.addWidget(left_host)
 
         center_host = QtWidgets.QWidget()
-        center_host.setMinimumWidth(430)
+        center_host.setObjectName("columnHost")
+        center_host.setMinimumWidth(660)
         center_layout = QtWidgets.QVBoxLayout(center_host)
         center_layout.setContentsMargins(0, 0, 0, 0)
         center_layout.setSpacing(10)
-        shell.addWidget(center_host, 1)
+        shell.addWidget(center_host, 2)
 
         motion_host = QtWidgets.QWidget()
-        motion_host.setMinimumWidth(300)
-        motion_host.setMaximumWidth(330)
+        motion_host.setObjectName("columnHost")
+        motion_host.setMinimumWidth(270)
+        motion_host.setMaximumWidth(296)
         motion_layout = QtWidgets.QVBoxLayout(motion_host)
         motion_layout.setContentsMargins(0, 0, 0, 0)
         motion_layout.setSpacing(10)
         shell.addWidget(motion_host)
 
         scan_host = QtWidgets.QWidget()
-        scan_host.setMinimumWidth(330)
-        scan_host.setMaximumWidth(370)
+        scan_host.setObjectName("columnHost")
+        scan_host.setMinimumWidth(276)
+        scan_host.setMaximumWidth(302)
         scan_layout = QtWidgets.QVBoxLayout(scan_host)
         scan_layout.setContentsMargins(0, 0, 0, 0)
         scan_layout.setSpacing(10)
@@ -849,12 +1249,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_profile_card(center_layout)
 
         self._build_motion_card(motion_layout)
-        self._build_live_card(motion_layout)
+        self._build_console_card(motion_layout)
         motion_layout.addStretch(1)
 
         self._build_scan_card(scan_layout)
-        self._build_plot_card(scan_layout)
-        self._build_console_card(scan_layout)
         scan_layout.addStretch(1)
 
     def _build_connections_card(self, parent: QtWidgets.QVBoxLayout) -> None:
@@ -874,18 +1272,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self.disconnect_squid_btn = QtWidgets.QPushButton("Disconnect")
 
         motor_row = QtWidgets.QHBoxLayout()
+        motor_row.setContentsMargins(0, 0, 0, 0)
+        motor_row.setSpacing(4)
         motor_row.addWidget(self.motor_port_combo, 1)
         motor_row.addWidget(self.refresh_ports_btn)
         layout.addRow("Motor port", self._layout_widget(motor_row))
         motor_btn_row = QtWidgets.QHBoxLayout()
+        motor_btn_row.setContentsMargins(0, 0, 0, 0)
+        motor_btn_row.setSpacing(4)
         motor_btn_row.addWidget(self.connect_motor_btn)
         motor_btn_row.addWidget(self.disconnect_motor_btn)
         layout.addRow("", self._layout_widget(motor_btn_row))
 
         squid_row = QtWidgets.QHBoxLayout()
+        squid_row.setContentsMargins(0, 0, 0, 0)
+        squid_row.setSpacing(4)
         squid_row.addWidget(self.squid_port_combo, 1)
         layout.addRow("SQUID port", self._layout_widget(squid_row))
         squid_btn_row = QtWidgets.QHBoxLayout()
+        squid_btn_row.setContentsMargins(0, 0, 0, 0)
+        squid_btn_row.setSpacing(4)
         squid_btn_row.addWidget(self.connect_squid_btn)
         squid_btn_row.addWidget(self.disconnect_squid_btn)
         layout.addRow("", self._layout_widget(squid_btn_row))
@@ -904,13 +1310,13 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_settings_card(self, parent: QtWidgets.QVBoxLayout) -> None:
         card, layout = self._build_card(
             "Settings And References",
-            "INI path, MeasPos, and VB6 reference heights for the center profile.",
+            "Settings file, MeasPos, and VB6 reference heights for the center profile.",
         )
         self.settings_path_edit = QtWidgets.QLineEdit(str(self.settings_profile.path))
         self.settings_browse_btn = QtWidgets.QPushButton("Browse")
         self.settings_reload_btn = QtWidgets.QPushButton("Reload")
-        self.save_ini_btn = QtWidgets.QPushButton("Save INI")
-        self.save_ini_btn.setObjectName("accent")
+        self.save_settings_btn = QtWidgets.QPushButton("Save File")
+        self.save_settings_btn.setObjectName("accent")
 
         self.meas_pos_spin = QtWidgets.QSpinBox()
         self.meas_pos_spin.setRange(-2_000_000_000, 2_000_000_000)
@@ -923,23 +1329,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.reference_positions_label.setObjectName("tableHint")
         self.reference_positions_label.setWordWrap(True)
 
-        layout.addRow("Settings INI", self.settings_path_edit)
+        layout.addRow("Settings file", self.settings_path_edit)
         settings_btn_row = QtWidgets.QHBoxLayout()
+        settings_btn_row.setContentsMargins(0, 0, 0, 0)
+        settings_btn_row.setSpacing(4)
         settings_btn_row.addWidget(self.settings_browse_btn)
         settings_btn_row.addWidget(self.settings_reload_btn)
         layout.addRow("", self._layout_widget(settings_btn_row))
-        layout.addRow("Current MeasPos", self.meas_pos_spin)
+        layout.addRow("MeasPos", self.meas_pos_spin)
         layout.addRow("", self.assumed_target_label)
         layout.addRow("", self.reference_positions_label)
         save_row = QtWidgets.QHBoxLayout()
+        save_row.setContentsMargins(0, 0, 0, 0)
+        save_row.setSpacing(4)
         save_row.addWidget(self.apply_suggestion_btn)
-        save_row.addWidget(self.save_ini_btn)
+        save_row.addWidget(self.save_settings_btn)
         layout.addRow("", self._layout_widget(save_row))
         parent.addWidget(card)
 
         self.settings_browse_btn.clicked.connect(self._browse_settings_path)
         self.settings_reload_btn.clicked.connect(self._reload_settings_profile)
-        self.save_ini_btn.clicked.connect(self._save_ini)
+        self.save_settings_btn.clicked.connect(self._save_settings_file)
         self.apply_suggestion_btn.clicked.connect(self._apply_scan_suggestion)
         self.meas_pos_spin.valueChanged.connect(self._update_assumed_target_text)
 
@@ -953,7 +1363,7 @@ class MainWindow(QtWidgets.QMainWindow):
         title = QtWidgets.QLabel("Magnetometer Z Profile")
         title.setObjectName("consoleTitle")
         subtitle = QtWidgets.QLabel(
-            "Scaled vertical bore cartoon using VB6 Z references."
+            "Holder-bottom referenced bore cartoon using VB6 Z references."
         )
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
@@ -961,6 +1371,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.profile_caption = QtWidgets.QLabel()
         self.profile_caption.setObjectName("tableHint")
         self.profile_caption.setWordWrap(True)
+
         layout.addWidget(title)
         layout.addWidget(subtitle)
         layout.addWidget(self.profile_scene, 1)
@@ -995,10 +1406,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.target_raw_hint.setObjectName("tableHint")
         self.target_raw_hint.setWordWrap(True)
 
-        self.move_target_btn = QtWidgets.QPushButton("Move To Target")
+        self.move_target_btn = QtWidgets.QPushButton("Go Target")
         self.move_target_btn.setObjectName("accent")
-        self.move_meas_btn = QtWidgets.QPushButton("Move To Assumed Z")
-        self.home_top_btn = QtWidgets.QPushButton("Home To Top")
+        self.move_meas_btn = QtWidgets.QPushButton("Go Meas Z")
+        self.home_top_btn = QtWidgets.QPushButton("Home Top")
         self.pickup_btn = QtWidgets.QPushButton("Pickup")
         self.dropoff_btn = QtWidgets.QPushButton("Dropoff")
         self.susceptibility_btn = QtWidgets.QPushButton("Susc. Meter")
@@ -1102,10 +1513,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scan_result_label.setWordWrap(True)
 
         form = QtWidgets.QFormLayout()
-        form.addRow("Sample height", self.sample_height_spin)
+        form.addRow("Sample ht", self.sample_height_spin)
         form.addRow("Half-range", self.scan_half_range_spin)
-        form.addRow("Step interval", self.scan_step_spin)
-        form.addRow("Settle time", self.scan_settle_spin)
+        form.addRow("Step", self.scan_step_spin)
+        form.addRow("Settle", self.scan_settle_spin)
         form.addRow("", self.scan_window_hint)
         form.addRow("", self.take_baseline_btn)
         form.addRow("", self.baseline_label)
@@ -1178,8 +1589,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.suggestion_line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("#31566D", width=2, style=QtCore.Qt.PenStyle.DashLine))
             self.scan_plot.addItem(self.suggestion_line)
             self.suggestion_line.hide()
+            self.suggestion_label = pg.TextItem(anchor=(0, 1), color="#31566D", fill=pg.mkBrush(255, 255, 255, 228))
+            self.scan_plot.addItem(self.suggestion_label)
+            self.suggestion_label.hide()
             layout.addWidget(self.scan_plot, 1)
-        parent.addWidget(card, 1)
+        parent.addWidget(card, 2)
 
     def _build_console_card(self, parent: QtWidgets.QVBoxLayout) -> None:
         card = QtWidgets.QFrame()
@@ -1194,8 +1608,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.console = QtWidgets.QPlainTextEdit()
         self.console.setObjectName("console")
         self.console.setReadOnly(True)
-        self.console.setMinimumHeight(108)
-        self.console.setMaximumHeight(180)
+        self.console.setMinimumHeight(92)
+        self.console.setMaximumHeight(132)
         layout.addWidget(self.console, 1)
         parent.addWidget(card)
 
@@ -1204,8 +1618,8 @@ class MainWindow(QtWidgets.QMainWindow):
         card.setObjectName("card")
         apply_card_shadow(card)
         outer = QtWidgets.QVBoxLayout(card)
-        outer.setContentsMargins(14, 14, 14, 14)
-        outer.setSpacing(8)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(6)
         title = QtWidgets.QLabel(title_text)
         title.setObjectName("consoleTitle")
         subtitle = QtWidgets.QLabel(subtitle_text)
@@ -1217,8 +1631,8 @@ class MainWindow(QtWidgets.QMainWindow):
         form.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         form.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
         form.setFormAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
-        form.setContentsMargins(0, 6, 0, 0)
-        form.setSpacing(6)
+        form.setContentsMargins(0, 4, 0, 0)
+        form.setSpacing(4)
         outer.addLayout(form)
         return card, form
 
@@ -1227,10 +1641,12 @@ class MainWindow(QtWidgets.QMainWindow):
         label.setObjectName("valuePill")
         label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
+        label.setMinimumHeight(38)
         return label
 
     def _layout_widget(self, layout: QtWidgets.QLayout) -> QtWidgets.QWidget:
         widget = QtWidgets.QWidget()
+        widget.setObjectName("layoutWrapper")
         widget.setLayout(layout)
         return widget
 
@@ -1243,11 +1659,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setStyleSheet(
             self.styleSheet()
             + """
+            QWidget#columnHost, QWidget#layoutWrapper {
+                background: transparent;
+            }
             QScrollArea#panelScroll { background: transparent; border: none; }
             QScrollArea#panelScroll > QWidget > QWidget { background: transparent; }
             QLabel#subtitle {
                 color: #6d5a55;
-                font-size: 11px;
+                font-size: 10px;
             }
             QLabel#tableHint {
                 color: #5e4b47;
@@ -1255,7 +1674,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 border: 1px solid rgba(122, 2, 25, 0.10);
                 border-radius: 12px;
                 padding: 6px 8px;
-                font-size: 11px;
+                font-size: 10px;
             }
             QLabel#consoleTitle {
                 color: #5d0013;
@@ -1272,22 +1691,27 @@ class MainWindow(QtWidgets.QMainWindow):
                 selection-color: #2f2827;
             }
             QPushButton {
-                min-height: 24px;
-                padding: 4px 8px;
+                min-height: 26px;
+                padding: 4px 9px;
                 font-size: 11px;
             }
             QPushButton#accent {
-                min-height: 24px;
+                min-height: 26px;
                 padding: 4px 10px;
                 font-size: 11px;
             }
             QSpinBox, QDoubleSpinBox, QLineEdit, QComboBox {
-                min-height: 26px;
-                font-size: 11px;
+                min-height: 24px;
+                font-size: 10px;
             }
             QLabel#valuePill {
+                background: rgba(255, 255, 255, 0.90);
+                border: 1px solid rgba(122, 2, 25, 0.14);
+                border-radius: 18px;
                 font-size: 11px;
-                padding: 4px 8px;
+                font-weight: 650;
+                padding: 8px 12px;
+                min-width: 116px;
             }
             QFrame#card {
                 margin: 0px;
@@ -1298,21 +1722,45 @@ class MainWindow(QtWidgets.QMainWindow):
     def _append(self, message: str) -> None:
         self.console.appendPlainText(message)
 
+    def _available_ports(self) -> list[str]:
+        return sorted(port.device for port in list_ports.comports())
+
+    def _populate_port_combo(self, combo: QtWidgets.QComboBox, ports: list[str], wanted: str = "") -> None:
+        current = combo.currentText().strip()
+        combo.clear()
+        combo.addItem("")
+        combo.addItems(ports)
+        target = wanted.strip() or current
+        if target:
+            if combo.findText(target) < 0:
+                combo.addItem(target)
+            combo.setCurrentText(target)
+        else:
+            combo.setCurrentIndex(0)
+
     def _refresh_ports(self) -> None:
-        current_motor = self.motor_port_combo.currentText().strip() if hasattr(self, "motor_port_combo") else ""
-        current_squid = self.squid_port_combo.currentText().strip() if hasattr(self, "squid_port_combo") else ""
-        ports = sorted(port.device for port in list_ports.comports())
-        for combo, current, preferred in (
-            (self.motor_port_combo, current_motor, self._settings.motor_port),
-            (self.squid_port_combo, current_squid, self._settings.squid_port),
-        ):
-            combo.clear()
-            combo.addItems(ports)
-            wanted = preferred or current
-            if wanted:
-                if combo.findText(wanted) < 0:
-                    combo.addItem(wanted)
-                combo.setCurrentText(wanted)
+        if not hasattr(self, "motor_port_combo"):
+            return
+        self._populate_port_combo(self.motor_port_combo, self._available_ports(), self._settings.motor_port)
+
+    def _populate_squid_ports(self) -> None:
+        if not hasattr(self, "squid_port_combo"):
+            return
+        self._populate_port_combo(self.squid_port_combo, self._available_ports(), self._settings.squid_port)
+
+    def _autodetect_squid_port(self) -> None:
+        if not hasattr(self, "squid_port_combo"):
+            return
+        ports = self._available_ports()
+        existing = self.squid_port_combo.currentText().strip() or self._settings.squid_port.strip()
+        if existing and existing in ports and _probe_squid_port(existing):
+            self._populate_port_combo(self.squid_port_combo, ports, existing)
+            return
+
+        detected = next((port for port in ports if _probe_squid_port(port)), "")
+        self._populate_port_combo(self.squid_port_combo, ports, detected)
+        if detected:
+            self._settings.squid_port = detected
 
     def _load_settings_into_widgets(self) -> None:
         self.motor_port_combo.setCurrentText(self._settings.motor_port)
@@ -1340,7 +1788,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.target_raw_spin.setValue(self.settings_profile.meas_pos)
         self.meas_pos_spin.setValue(self.settings_profile.meas_pos)
         self.meas_pos_pill.setText(f"MeasPos {self.settings_profile.meas_pos:,}")
-        self._calibration = read_calibration_from_ini(self.settings_profile.path)
+        self._calibration = read_calibration_from_settings(self.settings_profile.path)
+        self._pending_meas_pos_suggestion = None
+        self.apply_suggestion_btn.setEnabled(False)
         self._update_motion_hints()
         self._update_assumed_target_text()
         self._update_scan_window_hint()
@@ -1399,12 +1849,19 @@ class MainWindow(QtWidgets.QMainWindow):
     def _browse_settings_path(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
-            "Select VB6 Settings INI",
+            "Select Settings File",
             self.settings_path_edit.text().strip() or str(DEFAULT_SETTINGS_PATH),
-            "INI Files (*.INI *.ini)",
+            "Settings Files (*.ini *.json);;INI Files (*.ini);;JSON Files (*.json);;All Files (*)",
         )
         if path:
             self.settings_path_edit.setText(path)
+
+    def _build_current_settings_config(self, source_path: Path) -> configparser.ConfigParser:
+        config = _load_settings_config(source_path) if source_path.exists() else _new_settings_config()
+        if not config.has_section("SteppingMotor"):
+            config.add_section("SteppingMotor")
+        config["SteppingMotor"]["MeasPos"] = str(self.meas_pos_spin.value())
+        return config
 
     def _reload_settings_profile(self) -> None:
         path = Path(self.settings_path_edit.text().strip())
@@ -1422,26 +1879,30 @@ class MainWindow(QtWidgets.QMainWindow):
         self._append(f"Loaded settings from {path}")
         self._apply_profile_to_ui(reset_motion=True)
 
-    def _save_ini(self) -> None:
+    def _save_settings_file(self) -> None:
         path = Path(self.settings_path_edit.text().strip())
-        if not path.exists():
-            QtWidgets.QMessageBox.warning(self, "Missing Settings", f"Could not find settings file:\n{path}")
+        if not path.suffix:
+            path = path.with_suffix(".ini")
+            self.settings_path_edit.setText(str(path))
+        source_path = path if path.exists() else self.settings_profile.path
+        try:
+            config = self._build_current_settings_config(source_path)
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, "Save Failed", str(exc))
             return
-        config = configparser.ConfigParser(interpolation=None)
-        config.optionxform = str
-        config.read(path, encoding="utf-8")
-        if not config.has_section("SteppingMotor"):
-            config.add_section("SteppingMotor")
-        config["SteppingMotor"]["MeasPos"] = str(self.meas_pos_spin.value())
         snapshot = self._create_settings_snapshot(path)
         try:
-            with path.open("w", encoding="utf-8") as handle:
-                config.write(handle)
+            if path.suffix.lower() == ".json":
+                path.write_text(json.dumps(_settings_json_payload_from_config(config), indent=2), encoding="utf-8")
+            else:
+                with path.open("w", encoding="utf-8", newline="\n") as handle:
+                    config.write(handle)
         except OSError as exc:
             QtWidgets.QMessageBox.warning(self, "Save Failed", str(exc))
             return
         self.settings_profile = _load_settings_profile(path)
         self.controller.apply_settings_profile(self.settings_profile)
+        self._settings.settings_path = str(path)
         self._append(f"Saved MeasPos {self.meas_pos_spin.value():,} to {path}")
         if snapshot is not None:
             self._append(f"Snapshot saved to {snapshot}")
@@ -1522,24 +1983,21 @@ class MainWindow(QtWidgets.QMainWindow):
     def _format_z_velocity_estimate(self, raw_velocity: int) -> str:
         speed_cm_s = self._estimated_speed_cm_per_second(raw_velocity)
         if speed_cm_s is None:
-            return "Estimated Z speed unavailable because UpDownMotor1cm is not set in the loaded INI."
+            return "Estimated Z speed is unavailable until UpDownMotor1cm is loaded from the INI."
         return f"Estimated Z actual speed: ~{speed_cm_s:.2f} cm/s from {raw_velocity:,} raw counts/s."
 
     def _format_jog_step_estimate(self, step_counts: int) -> str:
         cm_value = self._raw_to_cm(step_counts)
         if cm_value is None:
-            return f"Jog step: {step_counts:,} raw counts. Centimeter translation becomes available once UpDownMotor1cm is loaded."
+            return f"Jog step: {step_counts:,} raw counts. Centimeter translation appears after UpDownMotor1cm loads."
         return f"Jog step: {step_counts:,} raw counts (~{abs(cm_value):.3f} cm)."
 
     def _format_target_hint(self, raw_target: int) -> str:
         cm_value = self._raw_to_cm(raw_target)
         low, high = self._safe_raw_bounds()
         if cm_value is None:
-            return f"Target {raw_target:,} raw counts. Current enforced scan-safe range is [{low:,}, {high:,}]."
-        return (
-            f"Target {raw_target:,} raw counts (~{cm_value:+.3f} cm). "
-            f"Current enforced scan-safe range is [{low:,}, {high:,}] raw counts."
-        )
+            return f"Target {raw_target:,} raw counts. Safe range [{low:,}, {high:,}]."
+        return f"Target {raw_target:,} raw counts (~{cm_value:+.3f} cm). Safe range [{low:,}, {high:,}]."
 
     def _sample_top_for_length_cm(self, length_cm: float) -> int | None:
         sample_length_raw = self._cm_to_raw(length_cm)
@@ -1565,55 +2023,112 @@ class MainWindow(QtWidgets.QMainWindow):
         motor_status = "connected" if self.controller.is_connected else "disconnected"
         squid_status = "connected" if self.squid.is_connected else "disconnected"
         self.connections_status.setText(
-            f"Motor {motor_status}; SQUID {squid_status}. Top switch uses status bit 4, and the center profile redraws from the loaded VB6 INI references."
+            f"Motor {motor_status}; SQUID {squid_status}. Top switch reads status bit 4."
         )
 
-    def _profile_markers(self, current_raw: int | None) -> list[ProfileMarker]:
-        markers: list[ProfileMarker] = [
-            ProfileMarker("Top switch", 0, "left", "#7a0219", True),
-            ProfileMarker("Holder bottom / XY stage", self.settings_profile.sample_bottom, "left", "#31566d"),
-            ProfileMarker("Holder top", self.settings_profile.sample_top, "left", "#31566d"),
-            ProfileMarker("Zero baseline", self.settings_profile.zero_pos, "right", "#8a6a44"),
-            ProfileMarker("Meas bottom", self.meas_pos_spin.value(), "right", "#7a0219", True),
-            ProfileMarker("AF bottom", self.settings_profile.af_pos, "right", "#c16b32"),
-            ProfileMarker("IRM bottom", self.settings_profile.irm_pos, "right", "#88624d"),
-            ProfileMarker("S coil bottom", self.settings_profile.scoil_pos, "right", "#2d6a4f"),
-            ProfileMarker("Floor", self.settings_profile.floor_pos, "left", "#4a2a2a"),
+    def _profile_model(self, current_raw: int | None) -> ProfileModel:
+        counts_per_cm = abs(self._counts_per_cm()) or 961
+        susc_height = max(int(round(counts_per_cm * 0.80)), 4200)
+        af_height = max(int(round(counts_per_cm * 1.15)), 5600)
+        meas_height = max(self.settings_profile.sample_height_counts, int(round(counts_per_cm * 1.35)), 7600)
+        measurement_cutoff_margin = max(int(round(counts_per_cm * 0.55)), 900)
+        bands = (
+            ProfileBand(
+                "Susc.\nmeter",
+                self.settings_profile.scoil_pos + susc_height,
+                self.settings_profile.scoil_pos,
+                18.0,
+                "#6c9f7a",
+                "#2d6a4f",
+                value_text=f"{self.settings_profile.scoil_pos:,}",
+            ),
+            ProfileBand(
+                "AF\ncoils",
+                self.settings_profile.af_pos + af_height,
+                self.settings_profile.af_pos,
+                18.0,
+                "#c99864",
+                "#8c5b34",
+                value_text=f"{self.settings_profile.af_pos:,}",
+            ),
+            ProfileBand(
+                "Measurement\nzone",
+                self.meas_pos_spin.value() + meas_height,
+                self.meas_pos_spin.value(),
+                18.0,
+                "#d68d72",
+                "#7a2c26",
+                value_text=f"{self.meas_pos_spin.value():,}",
+            ),
+        )
+        indicators = [
+            ProfileIndicator("Top switch\nmotor 0", 0, "left", "#7a0219", "0", bar_half_width=18.0, emphasis=True),
+            ProfileIndicator(
+                "1.0 in\ntop",
+                self.settings_profile.sample_top,
+                "right",
+                "#8f4b45",
+                f"{self.settings_profile.sample_top:,}",
+                symbol="rect",
+                bar_half_width=18.0,
+                emphasis=True,
+            ),
+            ProfileIndicator(
+                "XY stage\nholder bottom",
+                self.settings_profile.sample_bottom,
+                "left",
+                "#31566d",
+                f"{self.settings_profile.sample_bottom:,}",
+                bar_half_width=18.0,
+            ),
+            ProfileIndicator(
+                "Zero\nbaseline",
+                self.settings_profile.zero_pos,
+                "right",
+                "#8a6a44",
+                f"{self.settings_profile.zero_pos:,}",
+                bar_half_width=18.0,
+            ),
         ]
-        half_in_top = self._sample_top_for_length_cm(1.27)
-        one_in_top = self._sample_top_for_length_cm(2.54)
-        if half_in_top is not None:
-            markers.append(ProfileMarker("0.5 in top @ Meas", half_in_top, "left", "#5b7c99"))
-        if one_in_top is not None:
-            markers.append(ProfileMarker("1.0 in top @ Meas", one_in_top, "left", "#375d7a"))
-        assumed_meas_center = self._assumed_measurement_target_raw()
-        if assumed_meas_center is not None:
-            markers.append(ProfileMarker("Assumed meas center", assumed_meas_center, "right", "#ffb14d", True))
-            markers.append(
-                ProfileMarker(
-                    "Assumed susc center",
-                    self.settings_profile.scoil_pos + (assumed_meas_center - self.meas_pos_spin.value()),
-                    "right",
-                    "#4aa36a",
-                )
-            )
         if current_raw is not None:
-            markers.append(ProfileMarker("Live Z", current_raw, "right", "#31566d", True))
-        return markers
+            indicators.append(
+                ProfileIndicator("Live Z", current_raw, "right", "#31566d", f"{current_raw:,}", bar_half_width=18.0, emphasis=True)
+            )
+        range_bottom = self.meas_pos_spin.value() - measurement_cutoff_margin
+        return ProfileModel(
+            range_top=0,
+            range_bottom=range_bottom,
+            top_switch_raw=0,
+            holder_bottom_raw=self.settings_profile.sample_bottom,
+            sample_top_raw=self.settings_profile.sample_top,
+            sample_bottom_raw=self.settings_profile.sample_bottom,
+            zero_raw=self.settings_profile.zero_pos,
+            floor_raw=self.settings_profile.floor_pos,
+            live_raw=current_raw,
+            bands=bands,
+            indicators=tuple(indicators),
+        )
 
     def _refresh_profile_model(self, current_raw: int | None) -> None:
         self._last_live_raw = current_raw
-        markers = self._profile_markers(current_raw)
-        raw_values = [marker.raw_position for marker in markers]
-        low, high = self._safe_raw_bounds()
-        raw_values.extend((low, high))
-        range_top = 0
-        range_bottom = min(raw_values)
-        self.profile_scene.set_profile(markers, range_top, range_bottom)
+        model = self._profile_model(current_raw)
+        self.profile_scene.set_profile(model)
+        center_cm = self._raw_to_cm(self.meas_pos_spin.value())
+        self.profile_scene.set_scan_detail(
+            self._scan_points,
+            0.0 if center_cm is None else center_cm,
+            float(self.scan_half_range_spin.value()),
+            self._plot_suggested_z_cm,
+            self._plot_suggested_target_raw,
+        )
         counts_per_cm = self._counts_per_cm()
-        caption = f"Top switch = 0; holder span = {self.settings_profile.sample_bottom:,} to {self.settings_profile.sample_top:,}."
+        caption = (
+            f"Reference is holder bottom / XY stage at {self.settings_profile.sample_bottom:,} raw. "
+            f"Top switch is motor 0 above the bore; stage bands mark S coil {self.settings_profile.scoil_pos:,}, "
+            f"AF {self.settings_profile.af_pos:,}, and measurement zone {self.meas_pos_spin.value():,}. The profile is cropped just below the measurement region."
+        )
         if counts_per_cm:
-            caption += f" UpDownMotor1cm = {counts_per_cm:,} counts/cm, so the 0.5 in and 1 in sample-top overlays keep the VB6 physical spacing."
+            caption += f" UpDownMotor1cm = {counts_per_cm:,} counts/cm."
         self.profile_caption.setText(caption)
 
     def _confirm_speed_if_needed(self, raw_velocity: int) -> bool:
@@ -1669,7 +2184,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         target_cm = self._raw_to_cm(target)
         self.assumed_target_label.setText(
-            f"Assumed holder target for MeasPos {self.meas_pos_spin.value():,}: {target:,} raw counts"
+            f"Assumed holder target for MeasPos {self.meas_pos_spin.value():,}: {target:,} raw"
             + ("" if target_cm is None else f" (~{target_cm:+.3f} cm).")
         )
         self.meas_pos_pill.setText(f"MeasPos {self.meas_pos_spin.value():,}")
@@ -1690,8 +2205,8 @@ class MainWindow(QtWidgets.QMainWindow):
         end = center + half_range_counts
         low, high = self._safe_raw_bounds()
         self.scan_window_hint.setText(
-            f"Assumed center: {center:,}. Requested scan window: {start:,} to {end:,} in steps of {abs(step_counts):,} raw counts. "
-            f"Enforced safety range: [{low:,}, {high:,}] using top-zero and VB6 1.15×MeasPos bottom protection."
+            f"Assumed center {center:,}. Scan {start:,} to {end:,} in steps of {abs(step_counts):,} raw. "
+            f"Safe range [{low:,}, {high:,}]."
         )
         self._settings.sample_height_cm = float(self.sample_height_spin.value())
         self._settings.scan_half_range_cm = float(self.scan_half_range_spin.value())
@@ -1700,11 +2215,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _update_safety_label(self, current_raw: int | None) -> None:
         low, high = self._safe_raw_bounds()
-        message = (
-            f"VB6-style safety envelope: top is switch bit 4 / zero target; downward scan limit is clipped to 1.15 × |MeasPos| = {max(abs(low), abs(high)):,} raw counts."
-        )
+        message = f"Safe envelope: top switch / zero at 0, lower scan clip at {max(abs(low), abs(high)):,} raw (1.15 x |MeasPos|)."
         if current_raw is not None:
-            message += f" Current live Z = {current_raw:,}."
+            message += f" Live Z {current_raw:,}."
         self.safety_label.setText(message)
 
     def _poll_live_state(self) -> None:
@@ -1949,7 +2462,7 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.Slot(object)
     def _handle_scan_complete(self, result: ScanResult) -> None:
         self._scan_points = list(result.points)
-        self._refresh_plot(result.suggested_z_cm)
+        self._refresh_plot(result.suggested_z_cm, result.suggested_target_raw)
         if result.suggested_meas_pos_raw is not None:
             self._pending_meas_pos_suggestion = result.suggested_meas_pos_raw
             self.apply_suggestion_btn.setEnabled(True)
@@ -1959,8 +2472,8 @@ class MainWindow(QtWidgets.QMainWindow):
         summary = "No suggestion available."
         if result.suggested_z_cm is not None and result.suggested_meas_pos_raw is not None and result.suggested_target_raw is not None:
             summary = (
-                f"Best fit ({result.fit_method}) suggests holder target {result.suggested_target_raw:,} "
-                f"(~{result.suggested_z_cm:+.3f} cm), which maps to MeasPos {result.suggested_meas_pos_raw:,}."
+                f"Best fit ({result.fit_method}) gives optimal Z {result.suggested_z_cm:+.3f} cm "
+                f"at holder target {result.suggested_target_raw:,} raw, mapping to MeasPos {result.suggested_meas_pos_raw:,}."
             )
         if result.note:
             summary = summary + " " + result.note
@@ -1979,24 +2492,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self._scan_worker = None
         self._poll_live_state()
 
-    def _refresh_plot(self, suggested_z_cm: float | None = None) -> None:
-        if self.scan_plot is None or pg is None:
-            return
-        xs = [point.z_cm for point in self._scan_points]
-        ys = [point.moment_emu for point in self._scan_points]
-        self.scan_curve.setData(xs, ys)
-        if suggested_z_cm is None:
-            self.suggestion_line.hide()
-        else:
-            self.suggestion_line.setValue(suggested_z_cm)
-            self.suggestion_line.show()
+    def _refresh_plot(self, suggested_z_cm: float | None = None, suggested_target_raw: int | None = None) -> None:
+        self._plot_suggested_z_cm = suggested_z_cm
+        self._plot_suggested_target_raw = suggested_target_raw
+        center_cm = self._raw_to_cm(self.meas_pos_spin.value())
+        self.profile_scene.set_scan_detail(
+            self._scan_points,
+            0.0 if center_cm is None else center_cm,
+            float(self.scan_half_range_spin.value()),
+            suggested_z_cm,
+            suggested_target_raw,
+        )
 
     def _apply_scan_suggestion(self) -> None:
         suggested = getattr(self, "_pending_meas_pos_suggestion", None)
         if suggested is None:
             return
         self.meas_pos_spin.setValue(int(suggested))
-        self._append(f"Accepted suggested MeasPos {suggested:,}. Save INI when ready.")
+        self._append(f"Accepted suggested MeasPos {suggested:,}. Save the settings file when ready.")
         self._update_assumed_target_text()
         self.apply_suggestion_btn.setEnabled(False)
 
