@@ -91,13 +91,28 @@
     }
 
     .sidebar-link {
-      display: block;
+      display: flex;
+      align-items: center;
+      gap: .85rem;
       padding: 1rem 1rem 1rem 1.05rem;
       border-radius: var(--radius-md);
       text-decoration: none;
       background: rgba(255,255,255,.06);
       border: 1px solid rgba(255,255,255,.08);
       transition: transform .2s ease, background .2s ease, border-color .2s ease;
+    }
+
+    .sidebar-link-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      object-fit: cover;
+      flex-shrink: 0;
+      box-shadow: 0 6px 16px rgba(0,0,0,.18);
+    }
+
+    .sidebar-link-copy {
+      min-width: 0;
     }
 
     .sidebar-link:hover,
@@ -172,6 +187,22 @@
       background: rgba(123,22,40,.08);
       color: var(--maroon);
       margin-bottom: 1rem;
+    }
+
+    .hero-brand {
+      display: flex;
+      align-items: center;
+      gap: .85rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+
+    .hero-brand-icon {
+      width: 56px;
+      height: 56px;
+      border-radius: 16px;
+      object-fit: cover;
+      box-shadow: 0 10px 24px rgba(123,22,40,.16);
     }
 
     .status {
@@ -272,6 +303,16 @@
       display: block;
       font-size: 3rem;
       margin-bottom: .75rem;
+    }
+
+    .shot-placeholder-icon {
+      width: min(160px, 42%);
+      aspect-ratio: 1;
+      display: block;
+      margin: 0 auto .95rem;
+      object-fit: cover;
+      border-radius: 28px;
+      box-shadow: 0 18px 36px rgba(0,0,0,.14);
     }
 
     .facts {
@@ -404,7 +445,10 @@
     <main>
       <section class="hero">
         <div class="hero-copy">
-          <div class="eyebrow">RapidPy subsystem page</div>
+          <div class="hero-brand">
+            <img id="app-icon" class="hero-brand-icon" src="https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/gaussmeter_control/assets/gaussmeter_icon.png" alt="RapidPy app icon" />
+            <div class="eyebrow">RapidPy subsystem page</div>
+          </div>
           <div id="status-pill" class="status wip">In progress</div>
           <h2 id="app-title">RapidPy app</h2>
           <p id="app-summary"></p>
@@ -443,6 +487,7 @@
         status: "Released",
         statusClass: "ready",
         summary: "Driver-backed operator panel for the FW Bell 908A gaussmeter with session logging, alarm thresholds, and live plotting.",
+        icon: "https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/gaussmeter_control/assets/gaussmeter_icon.png",
         screenshot: "../images/gaussmeter_app.png",
         screenshotAlt: "RapidPy Gaussmeter Control screenshot",
         placeholderIcon: "🧲",
@@ -471,6 +516,7 @@
         status: "Released",
         statusClass: "ready",
         summary: "Three-axis SQUID live-view logger for viscous remanent magnetisation decay experiments.",
+        icon: "https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/vrm_logger/assets/vrm_icon.png",
         screenshot: "../images/vrm_logger_app.png",
         screenshotAlt: "RapidPy VRM Decay Logger screenshot",
         placeholderIcon: "📉",
@@ -499,6 +545,7 @@
         status: "Released",
         statusClass: "ready",
         summary: "Diagnostic panel for ADwin digital I/O, DAC and ADC validation, and dense loopback waveform capture.",
+        icon: "https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/adwin_comms/assets/adwin_icon.png",
         screenshot: "../images/adwin-comms-overview.png",
         screenshotAlt: "RapidPy ADwin Communications Tester screenshot",
         placeholderIcon: "⚡",
@@ -527,7 +574,8 @@
         status: "Released",
         statusClass: "ready",
         summary: "Utility for identifying RAPID serial devices on Windows before opening a subsystem control app.",
-        screenshot: "../images/com-port-mapper-overview.png",
+        icon: "https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/com_port_mapper/assets/com_port_mapper_icon.png",
+        screenshot: "../images/com_port_mapper_app.png",
         screenshotAlt: "RapidPy COM Port Mapper screenshot",
         placeholderIcon: "🔌",
         facts: [
@@ -554,6 +602,7 @@
         status: "In Progress",
         statusClass: "wip",
         summary: "Alternating-field coil tuning panel for ADwin-driven AF ramps, relay selection, and field calibration workflows.",
+        icon: "https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/af_tuner/assets/af_tuner_icon.png",
         screenshot: "https://raw.githubusercontent.com/duserzym/RAPID/main/docs/images/af-tuner-overview.png",
         screenshotAlt: "RapidPy AF Tuner screenshot",
         placeholderIcon: "🎛️",
@@ -578,9 +627,10 @@
       },
       "changer-xy-control": {
         title: "Changer XY Control",
-        status: "In Progress",
-        statusClass: "wip",
+        status: "Released",
+        statusClass: "ready",
         summary: "Stage-centric changer operator panel with optional XY-only mode, VB6-compatible motion, Active Cup calibration editing, and live raw-to-cm speed estimates.",
+        icon: "https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/changer_xy_control/assets/changer_xy_control_icon.png",
         screenshot: "https://raw.githubusercontent.com/duserzym/RAPID/main/resources/x-y_stage.png",
         screenshotAlt: "RAPID changer tray overview photograph",
         placeholderIcon: "📐",
@@ -608,9 +658,10 @@
       },
       "updown-control": {
         title: "Up/Down Control",
-        status: "In Progress",
-        statusClass: "wip",
+        status: "Released",
+        statusClass: "ready",
         summary: "Z-axis operator panel with VB6-compatible raw motion, live top-switch readback, vacuum control, and SQUID-guided MeasPos optimization.",
+        icon: "https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/updown_control/assets/updown_control_icon.png",
         screenshot: "../images/updown-control-overview.png",
         screenshotAlt: "RapidPy Up/Down Control screenshot",
         placeholderIcon: "↕️",
@@ -696,6 +747,7 @@
     const statusPill = document.getElementById("status-pill");
     const appTitle = document.getElementById("app-title");
     const appSummary = document.getElementById("app-summary");
+    const appIcon = document.getElementById("app-icon");
     const heroActions = document.getElementById("hero-actions");
     const heroShot = document.getElementById("hero-shot");
     const facts = document.getElementById("facts");
@@ -712,8 +764,11 @@
     function buildSidebar(activeSlug) {
       sidebar.innerHTML = Object.entries(apps).map(([slug, app]) => `
         <a class="sidebar-link ${slug === activeSlug ? "active" : ""}" href="#${slug}">
-          <strong>${app.title}</strong>
-          <span>${app.status}</span>
+          ${app.icon ? `<img class="sidebar-link-icon" src="${app.icon}" alt="${app.title} icon" />` : ""}
+          <span class="sidebar-link-copy">
+            <strong>${app.title}</strong>
+            <span>${app.status}</span>
+          </span>
         </a>
       `).join("");
     }
@@ -721,12 +776,22 @@
     function render() {
       const slug = selectedSlug();
       const app = apps[slug];
-      const placeholderMarkup = `<div class="shot-placeholder"><div><strong>${app.placeholderIcon}</strong><div>Screenshot asset not published yet for this module.</div></div></div>`;
+      const placeholderVisual = app.icon
+        ? `<img class="shot-placeholder-icon" src="${app.icon}" alt="${app.title} icon" />`
+        : `<strong>${app.placeholderIcon}</strong>`;
+      const placeholderMarkup = `<div class="shot-placeholder"><div>${placeholderVisual}<div>Screenshot asset not published yet for this module.</div></div></div>`;
       document.title = `${app.title} | RapidPy App Page`;
       appTitle.textContent = app.title;
       appSummary.textContent = app.summary;
       statusPill.textContent = app.status;
       statusPill.className = `status ${app.statusClass}`;
+      if (app.icon) {
+        appIcon.src = app.icon;
+        appIcon.alt = `${app.title} icon`;
+        appIcon.hidden = false;
+      } else {
+        appIcon.hidden = true;
+      }
 
       heroActions.innerHTML = [
         `<a class="button" href="${app.links[0][2]}" target="_blank" rel="noreferrer">Open source folder ↗</a>`,

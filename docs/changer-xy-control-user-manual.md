@@ -21,6 +21,7 @@ The published website currently uses the high-resolution tray photograph above a
 9. [INI and JSON Settings Workflow](#9-ini-and-json-settings-workflow)
 10. [Files Written by the App](#10-files-written-by-the-app)
 11. [Troubleshooting](#11-troubleshooting)
+12. [VB6 Transition Sheet](#12-vb6-transition-sheet)
 
 ---
 
@@ -227,3 +228,19 @@ The local machine config stores serial-port preferences and operator state. It i
 
 - look under `.rapidpy_history/<ini-stem>/` next to the overwritten INI
 - each overwrite creates a timestamped snapshot before saving the new file
+
+---
+
+## 12. VB6 Transition Sheet
+
+| Operator task | Legacy VB6 reference | Python app control |
+| --- | --- | --- |
+| Home the tray to center | `frmDCMotors.frm` `HomeToCenter` / `HomeToCenterButton` | center target double-click and the stage action controls |
+| Send the tray to the load corner | `frmDCMotors.frm` `MoveToCorner` | `LOAD` target double-click and load move actions |
+| Move to a numbered cup | `ConvertHoletoPosX`, `ConvertHoletoPosY`, `ChangerMotortoHole`, and `SetChangerHole` in `frmDCMotors.frm` / `frmChanger.frm` | click or double-click cup targets, `Active Cup`, and `Move To Cup` |
+| Edit or capture XY cup coordinates | `XYTablePositions` updates in `frmDCMotors.frm` and the VB6 settings grids | `Cup Calibration Table` and `Capture Active Cup` |
+| Work with only X/Y connected during bench checks | careful partial-machine use around `frmDCMotors.frm` | `Disable Up/Down (XY-only mode)` confirmation workflow |
+| Save updated changer geometry and motion settings | VB6 `modConfig` INI save path | `Save INI`, JSON import/export, and snapshot-backed overwrite history |
+| Interpret raw stage speed inputs | raw controller values in VB6 motion forms | raw velocity entry plus estimated `cm/s` helper text |
+
+This mapping is the quickest way to translate the old changer routines into the Python UI. The machine references are still VB6-aligned, but the Python app surfaces the stage geometry, cup calibration, and safety prompts more directly.

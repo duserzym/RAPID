@@ -6,12 +6,12 @@ This index tracks the compiled RapidPy operator apps, the current manual source,
 
 | App | Build output | Manual source | Website app page | VB6 transition sheet |
 | --- | --- | --- | --- | --- |
-| Gaussmeter Control | `dist/RapidPy_Gaussmeter.exe` | `docs/gaussmeter-user-manual.md` | `docs/site/apps/index.html#gaussmeter-control` | Not yet |
+| Gaussmeter Control | `dist/RapidPy_Gaussmeter.exe` | `docs/gaussmeter-user-manual.md` | `docs/site/apps/index.html#gaussmeter-control` | Yes |
 | VRM Decay Logger | `dist/RapidPyVRM.exe` | `docs/vrm-logger-user-manual.md` | `docs/site/apps/index.html#vrm-decay-logger` | Not yet |
 | ADwin Communications Tester | `dist/RapidPyADWin.exe` | `docs/adwin-comms-user-manual.md` | `docs/site/apps/index.html#adwin-comms` | Not yet |
 | COM Port Mapper | `dist/RapidPyCOMMapper.exe` | README only | `docs/site/apps/index.html#com-port-mapper` | Not applicable yet |
 | AF Tuner | `dist/RapidPyAFTuner.exe` | README today; long-form manual pending | `docs/site/apps/index.html#af-tuner` | Planned |
-| XY Sample Changer | `dist/RapidPyChangerXY.exe` | `docs/changer-xy-control-user-manual.md` | `docs/site/apps/index.html#changer-xy-control` | Not yet |
+| XY Sample Changer | `dist/RapidPyChangerXY.exe` | `docs/changer-xy-control-user-manual.md` | `docs/site/apps/index.html#changer-xy-control` | Yes |
 | Up/Down Control | `dist/RapidPyUpDown.exe` | `docs/updown-control-user-manual.md` | `docs/site/apps/index.html#updown-control` | Yes |
 
 The current compiled-app index intentionally excludes developer or migration-only launchers that still depend on adjacent source trees at runtime.

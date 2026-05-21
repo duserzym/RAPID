@@ -451,6 +451,23 @@
       align-items: center;
       justify-content: center;
       font-size: 1.8rem;
+      overflow: hidden;
+      flex-shrink: 0;
+      background: transparent;
+    }
+
+    .module-card-icon-large {
+      width: 80px;
+      height: 80px;
+      border-radius: 20px;
+    }
+
+    .module-card-icon-asset {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+      border-radius: inherit;
     }
 
     .module-card-body {
@@ -881,8 +898,8 @@
       </a>
       <div class="module-card-body">
         <div class="module-card-header">
-          <div class="module-card-icon" style="background: linear-gradient(135deg,#0B2545,#061328);">
-            <span style="font-size:1.4rem">🧲</span>
+          <div class="module-card-icon">
+            <img class="module-card-icon-asset" src="https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/gaussmeter_control/assets/gaussmeter_icon.png" alt="RapidPy Gaussmeter Control icon" loading="lazy" />
           </div>
           <span class="module-badge badge-ready">Released</span>
         </div>
@@ -917,8 +934,8 @@
       </a>
       <div class="module-card-body">
         <div class="module-card-header">
-          <div class="module-card-icon" style="background: linear-gradient(135deg,#7A0219,#520012);">
-            <span style="font-size:1.4rem">📉</span>
+          <div class="module-card-icon">
+            <img class="module-card-icon-asset" src="https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/vrm_logger/assets/vrm_icon.png" alt="RapidPy VRM Decay Logger icon" loading="lazy" />
           </div>
           <span class="module-badge badge-ready">Released</span>
         </div>
@@ -953,8 +970,8 @@
       </a>
       <div class="module-card-body">
         <div class="module-card-header">
-          <div class="module-card-icon" style="background: linear-gradient(135deg,#0D3B2E,#062018);">
-            <span style="font-size:1.4rem">⚡</span>
+          <div class="module-card-icon">
+            <img class="module-card-icon-asset" src="https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/adwin_comms/assets/adwin_icon.png" alt="RapidPy ADwin Communications Tester icon" loading="lazy" />
           </div>
           <span class="module-badge badge-ready">Released</span>
         </div>
@@ -981,16 +998,21 @@
       <a class="module-card-media-link" href="apps/index.html#com-port-mapper">
         <img
           class="module-card-image"
-          src="images/com-port-mapper-overview.png"
+          src="images/com_port_mapper_app.png"
           alt="RapidPy COM Port Mapper screenshot"
           loading="lazy"
-          onerror="this.style.display='none'"
+          onerror="this.style.display='none'; this.parentElement.nextElementSibling.style.display='flex';"
         />
       </a>
+      <div class="module-card-image-placeholder" style="display:none;">
+        <div class="module-card-icon module-card-icon-large">
+          <img class="module-card-icon-asset" src="https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/com_port_mapper/assets/com_port_mapper_icon.png" alt="RapidPy COM Port Mapper icon" loading="lazy" />
+        </div>
+      </div>
       <div class="module-card-body">
         <div class="module-card-header">
-          <div class="module-card-icon" style="background: linear-gradient(135deg,#1A3A5C,#0D1F35);">
-            <span style="font-size:1.4rem">🔌</span>
+          <div class="module-card-icon">
+            <img class="module-card-icon-asset" src="https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/com_port_mapper/assets/com_port_mapper_icon.png" alt="RapidPy COM Port Mapper icon" loading="lazy" />
           </div>
           <span class="module-badge badge-ready">Released</span>
         </div>
@@ -1024,14 +1046,14 @@
         />
       </a>
       <div class="module-card-image-placeholder" style="display:none;">
-        <div class="module-card-icon" style="background: linear-gradient(135deg,#1A237E,#0D1659); width:80px; height:80px; border-radius:20px;">
-          <span style="font-size:2rem">🎛️</span>
+        <div class="module-card-icon module-card-icon-large">
+          <img class="module-card-icon-asset" src="https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/af_tuner/assets/af_tuner_icon.png" alt="RapidPy AF Tuner icon" loading="lazy" />
         </div>
       </div>
       <div class="module-card-body">
         <div class="module-card-header">
-          <div class="module-card-icon" style="background: linear-gradient(135deg,#1A237E,#0D1659);">
-            <span style="font-size:1.4rem">🎛️</span>
+          <div class="module-card-icon">
+            <img class="module-card-icon-asset" src="https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/af_tuner/assets/af_tuner_icon.png" alt="RapidPy AF Tuner icon" loading="lazy" />
           </div>
           <span class="module-badge badge-wip">In Progress</span>
         </div>
@@ -1064,16 +1086,16 @@
         />
       </a>
       <div class="module-card-image-placeholder" style="display:none;">
-        <div class="module-card-icon" style="background: linear-gradient(135deg,#4A148C,#2D0A5A); width:80px; height:80px; border-radius:20px;">
-          <span style="font-size:2rem">📐</span>
+        <div class="module-card-icon module-card-icon-large">
+          <img class="module-card-icon-asset" src="https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/changer_xy_control/assets/changer_xy_control_icon.png" alt="RapidPy Changer XY Control icon" loading="lazy" />
         </div>
       </div>
       <div class="module-card-body">
         <div class="module-card-header">
-          <div class="module-card-icon" style="background: linear-gradient(135deg,#4A148C,#2D0A5A);">
-            <span style="font-size:1.4rem">📐</span>
+          <div class="module-card-icon">
+            <img class="module-card-icon-asset" src="https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/changer_xy_control/assets/changer_xy_control_icon.png" alt="RapidPy Changer XY Control icon" loading="lazy" />
           </div>
-          <span class="module-badge badge-wip">In Progress</span>
+          <span class="module-badge badge-ready">Released</span>
         </div>
         <h3><a class="module-card-title-link" href="apps/index.html#changer-xy-control">XY Sample Changer</a></h3>
         <p>
@@ -1105,16 +1127,16 @@
         />
       </a>
       <div class="module-card-image-placeholder" style="display:none;">
-        <div class="module-card-icon" style="background: linear-gradient(135deg,#4A148C,#2D0A5A); width:80px; height:80px; border-radius:20px;">
-          <span style="font-size:2rem">↕️</span>
+        <div class="module-card-icon module-card-icon-large">
+          <img class="module-card-icon-asset" src="https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/updown_control/assets/updown_control_icon.png" alt="RapidPy Up/Down Control icon" loading="lazy" />
         </div>
       </div>
       <div class="module-card-body">
         <div class="module-card-header">
-          <div class="module-card-icon" style="background: linear-gradient(135deg,#4A148C,#2D0A5A);">
-            <span style="font-size:1.4rem">↕️</span>
+          <div class="module-card-icon">
+            <img class="module-card-icon-asset" src="https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/updown_control/assets/updown_control_icon.png" alt="RapidPy Up/Down Control icon" loading="lazy" />
           </div>
-          <span class="module-badge badge-wip">In Progress</span>
+          <span class="module-badge badge-ready">Released</span>
         </div>
         <h3><a class="module-card-title-link" href="apps/index.html#updown-control">Up/Down Control</a></h3>
         <p>
@@ -1256,8 +1278,8 @@
     <div class="module-card">
       <div class="module-card-body">
         <div class="module-card-header">
-          <div class="module-card-icon" style="background: linear-gradient(135deg,#4A148C,#2D0A5A);">
-            <span style="font-size:1.4rem">↕️</span>
+          <div class="module-card-icon">
+            <img class="module-card-icon-asset" src="https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/updown_control/assets/updown_control_icon.png" alt="RapidPy Up/Down Control icon" loading="lazy" />
           </div>
           <span class="module-badge badge-wip">Transition Sheet Live</span>
         </div>
@@ -1292,7 +1314,7 @@
         </p>
         <ul class="module-specs">
           <li><span class="spec-key">README-only</span>COM Port Mapper, AF Tuner, Main Shell</li>
-          <li><span class="spec-key">Next target</span>Extend transition sheets beyond Up/Down</li>
+          <li><span class="spec-key">Transition sheets</span>Up/Down, Gaussmeter, XY Changer</li>
         </ul>
         <div class="module-card-actions">
           <a href="https://github.com/duserzym/RAPID/blob/main/docs/changer-xy-control-user-manual.md" class="module-card-link" target="_blank" rel="noreferrer">Changer manual ↗</a>

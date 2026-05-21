@@ -20,6 +20,7 @@ This manual covers the complete workflow for installing the FW Bell USB gaussmet
 12. [Sampling Workflows](#12-sampling-workflows)
 13. [Saving Session Data](#13-saving-session-data)
 14. [Troubleshooting](#14-troubleshooting)
+15. [VB6 Transition Sheet](#15-vb6-transition-sheet)
 
 ---
 
@@ -418,6 +419,22 @@ The driver status box shows "Driver unavailable". The app disables **Connect** w
 ### "openUSB5100 failed" after the driver was previously working
 
 The USB kernel driver binding can be lost after a Windows Update. Re-run Zadig to rebind `libusb-win32` to the FW Bell device.
+
+---
+
+## 15. VB6 Transition Sheet
+
+| Operator task | Legacy VB6 reference | Python app control |
+| --- | --- | --- |
+| Open the dedicated gaussmeter panel | `frmADWIN_AF.frm` / `frmAF_DAQ.frm` `cmdTestGaussMeter_Click` -> `frm908AGaussmeter.Show` | standalone RapidPy Gaussmeter Control app |
+| Connect to the gaussmeter and watch live field | `frm908AGaussmeter.frm` main form and `mod908AGaussmeter.ConnectStatus` | `Connect`, `Disconnect`, and the live reading panel |
+| Change measurement mode, units, or range | gm0-backed controls in `frm908AGaussmeter.frm` such as `setrange` | left-panel `Mode`, `Units`, and `Range` selectors |
+| Run instrument cleanup commands | `doaz`, `donull`, and `resetpeak` actions in `frm908AGaussmeter.frm` | `Auto Zero`, `Auto Null`, and `Reset Peak` |
+| Read or write the gaussmeter clock | `getgmtime` and `setsystime` buttons in `frm908AGaussmeter.frm` | `Get Time` and `Set System Time` |
+| Capture timed or alarm-window field series | `DataArray` collection and alarm checks in `frm908AGaussmeter.frm` | `Sampling Session`, `Start Sampling`, and `Sample On Alarm` |
+| Export captured readings for later analysis | VB6 gaussmeter array/logging path | `Save Session` CSV export plus the session plot |
+
+This sheet is meant for operators who remember the old VB6 gaussmeter form names better than the Python labels. The workflow is still recognizable, but the Python app consolidates the status view, session plotting, and export path into one window.
 
 ### RS-232 mode: cannot connect
 
