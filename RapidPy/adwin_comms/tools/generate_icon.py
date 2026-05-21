@@ -28,7 +28,7 @@ def draw_icon(glyph_png: Path, output_png: Path, output_ico: Path) -> None:
         raise RuntimeError(f"No visible glyph pixels found in {glyph_png}")
 
     glyph = source.copy(left, top, right - left + 1, bottom - top + 1)
-    target = 390
+    target = 420
     scale = target / max(glyph.width(), glyph.height())
     glyph = glyph.scaled(
         max(1, int(round(glyph.width() * scale))),

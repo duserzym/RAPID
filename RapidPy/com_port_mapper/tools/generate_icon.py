@@ -7,6 +7,18 @@ from pathlib import Path
 from PySide6 import QtCore, QtGui
 
 
+def tint_glyph(image: QtGui.QImage, color: QtGui.QColor) -> QtGui.QImage:
+    tinted = QtGui.QImage(image.size(), QtGui.QImage.Format_ARGB32)
+    tinted.fill(QtCore.Qt.transparent)
+
+    painter = QtGui.QPainter(tinted)
+    painter.drawImage(0, 0, image)
+    painter.setCompositionMode(QtGui.QPainter.CompositionMode_SourceIn)
+    painter.fillRect(tinted.rect(), color)
+    painter.end()
+    return tinted
+
+
 def draw_icon(glyph_png: Path, output_png: Path, output_ico: Path) -> None:
     source = QtGui.QImage(str(glyph_png)).convertToFormat(QtGui.QImage.Format_ARGB32)
     if source.isNull():
@@ -28,6 +40,7 @@ def draw_icon(glyph_png: Path, output_png: Path, output_ico: Path) -> None:
         raise RuntimeError(f"No visible glyph pixels found in {glyph_png}")
 
     glyph = source.copy(left, top, right - left + 1, bottom - top + 1)
+    glyph = tint_glyph(glyph, QtGui.QColor("#8C96A3"))
     target = 450
     scale = target / max(glyph.width(), glyph.height())
     glyph = glyph.scaled(
