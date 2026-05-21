@@ -44,6 +44,7 @@ FLOAT_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
 class UpDownSettings:
     motor_port: str = ""
     squid_port: str = ""
+    vacuum_port: str = ""
     squid_baud: int = 1200
     settings_path: str = str(DEFAULT_SETTINGS_PATH)
     min_raw_count: int = 0
@@ -58,6 +59,7 @@ class UpDownSettings:
     scan_half_range_cm: float = 2.0
     scan_step_cm: float = 0.1
     scan_settle_s: float = 1.0
+    vacuum_enabled: bool = False
 
 
 @dataclass(slots=True)
@@ -255,6 +257,15 @@ def load_settings(path: Path = APP_SETTINGS_PATH) -> UpDownSettings:
     for key in merged:
         if key in payload:
             merged[key] = payload[key]
+    half_range = payload.get("scan_half_range_cm")
+    if isinstance(half_range, (int, float)) and (math.isclose(float(half_range), 0.1) or math.isclose(float(half_range), 0.2)):
+        merged["scan_half_range_cm"] = 2.0
+    step_cm = payload.get("scan_step_cm")
+    if isinstance(step_cm, (int, float)) and math.isclose(float(step_cm), 0.01, rel_tol=0.0, abs_tol=1e-9):
+        merged["scan_step_cm"] = 0.1
+    settle_s = payload.get("scan_settle_s")
+    if isinstance(settle_s, (int, float)) and math.isclose(float(settle_s), 0.1, rel_tol=0.0, abs_tol=1e-9):
+        merged["scan_settle_s"] = 1.0
     return UpDownSettings(**merged)
 
 
@@ -325,15 +336,21 @@ def _load_settings_profile(settings_path: Path) -> SettingsProfile:
 
 
 class VerticalProfileWidget(QtWidgets.QWidget):
+    targetSelected = QtCore.Signal(str, int)
+    targetActivated = QtCore.Signal(str, int)
+
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._model: ProfileModel | None = None
         self._scan_points: tuple[ScanPoint, ...] = ()
         self._scan_center_cm = 0.0
-        self._scan_half_range_cm = 0.25
+        self._scan_half_range_cm = 2.0
         self._suggested_z_cm: float | None = None
         self._suggested_target_raw: int | None = None
+        self._hit_regions: list[tuple[QtCore.QRectF, str, str, int]] = []
+        self._selected_target_key: str | None = None
         self.setMinimumHeight(560)
+        self.setMouseTracking(True)
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
 
     def set_profile(self, model: ProfileModel) -> None:
@@ -354,6 +371,46 @@ class VerticalProfileWidget(QtWidgets.QWidget):
         self._suggested_z_cm = suggested_z_cm
         self._suggested_target_raw = suggested_target_raw
         self.update()
+
+    def _hit_target_at(self, pos: QtCore.QPointF) -> tuple[str, str, int] | None:
+        for rect, key, label, raw_position in reversed(self._hit_regions):
+            if rect.contains(pos):
+                return key, label, raw_position
+        return None
+
+    def _select_target(self, key: str | None) -> None:
+        if self._selected_target_key == key:
+            return
+        self._selected_target_key = key
+        self.update()
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() != QtCore.Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        target = self._hit_target_at(event.position())
+        if target is None:
+            self._select_target(None)
+            event.accept()
+            return
+        key, label, raw_position = target
+        self._select_target(key)
+        self.targetSelected.emit(label, raw_position)
+        event.accept()
+
+    def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() != QtCore.Qt.MouseButton.LeftButton:
+            super().mouseDoubleClickEvent(event)
+            return
+        target = self._hit_target_at(event.position())
+        if target is None:
+            event.accept()
+            return
+        key, label, raw_position = target
+        self._select_target(key)
+        self.targetSelected.emit(label, raw_position)
+        self.targetActivated.emit(label, raw_position)
+        event.accept()
 
     def _adjust_label_positions(self, targets: list[float], top: float, bottom: float, gap: float) -> list[float]:
         adjusted: list[float] = []
@@ -380,6 +437,8 @@ class VerticalProfileWidget(QtWidgets.QWidget):
         if model is None or model.range_top == model.range_bottom:
             return
 
+        self._hit_regions = []
+
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         rect = self.rect().adjusted(12, 10, -18, -10)
@@ -395,7 +454,7 @@ class VerticalProfileWidget(QtWidgets.QWidget):
         chart_bottom = panel.bottom() - 18
         usable_top = chart_top + 20
         usable_bottom = chart_bottom - 18
-        center_x = panel.center().x() - 38
+        center_x = panel.center().x() - 34
 
         def to_y(raw_position: float) -> float:
             ratio = (model.range_top - raw_position) / range_span
@@ -414,12 +473,14 @@ class VerticalProfileWidget(QtWidgets.QWidget):
         painter.setBrush(QtGui.QColor("#111111"))
         painter.drawRoundedRect(body_rect, 62, 62)
 
-        shield_rect = body_rect.adjusted(18, 14, -18, -14)
+        shell_thickness = 4.5
+        shield_rect = body_rect.adjusted(shell_thickness, shell_thickness, -shell_thickness, -shell_thickness)
+        shield_radius = max(12.0, body_rect.width() / 2.0 - shell_thickness)
         shield_gradient = QtGui.QLinearGradient(shield_rect.topLeft(), shield_rect.bottomRight())
         shield_gradient.setColorAt(0.0, QtGui.QColor("#fbf5ea"))
         shield_gradient.setColorAt(1.0, QtGui.QColor("#eadfce"))
         painter.setBrush(shield_gradient)
-        painter.drawRoundedRect(shield_rect, 40, 40)
+        painter.drawRoundedRect(shield_rect, shield_radius, shield_radius)
 
         bore_rect = QtCore.QRectF(center_x - 13, outer_top_y + 18, 26, max(outer_bottom_y - outer_top_y - 36, 120.0))
         painter.setBrush(QtGui.QColor("#2b1d18"))
@@ -456,21 +517,22 @@ class VerticalProfileWidget(QtWidgets.QWidget):
         painter.setBrush(QtGui.QColor("#7fa2b7"))
         painter.drawRoundedRect(stage_rect, 4.5, 4.5)
 
-        measurement_band = next((band for band in model.bands if "Measurement" in band.label), None)
+        measurement_band = model.bands[-1] if model.bands else None
         if measurement_band is not None:
             measurement_y = to_y(measurement_band.raw_bottom)
-            plot_width = min(104.0, max(84.0, body_rect.left() - panel.left() - 146.0))
+            plot_left = panel.left() + 24.0
+            plot_right = body_rect.left() - 10.0
+            plot_width = max(208.0, plot_right - plot_left)
             plot_height = min(
-                222.0,
-                max(156.0, abs(to_y(measurement_band.raw_top) - measurement_y) * 3.4),
+                438.0,
+                max(344.0, abs(to_y(measurement_band.raw_top) - measurement_y) * 5.5),
             )
-            plot_left = max(panel.left() + 112.0, body_rect.left() - plot_width - 34.0)
             plot_top = min(
-                max(measurement_y - plot_height / 2.0, panel.top() + 116.0),
-                panel.bottom() - plot_height - 28.0,
+                max(measurement_y - plot_height / 2.0, panel.top() + 84.0),
+                panel.bottom() - plot_height - 24.0,
             )
             plot_rect = QtCore.QRectF(plot_left, plot_top, plot_width, plot_height)
-            plot_inner = plot_rect.adjusted(24.0, 18.0, -10.0, -24.0)
+            plot_inner = plot_rect.adjusted(38.0, 10.0, -6.0, -26.0)
 
             moments = [point.moment_emu for point in self._scan_points]
             x_min = min(moments, default=0.0)
@@ -496,12 +558,8 @@ class VerticalProfileWidget(QtWidgets.QWidget):
 
             connector_anchor = QtCore.QPointF(body_rect.left() - 4.0, measurement_y)
             painter.setPen(QtGui.QPen(QtGui.QColor(180, 143, 103, 184), 1.05))
-            painter.drawLine(plot_rect.topRight(), connector_anchor)
-            painter.drawLine(plot_rect.bottomRight(), connector_anchor)
-
-            painter.setPen(QtGui.QPen(QtGui.QColor("#d7c6b8"), 1.0))
-            painter.setBrush(QtGui.QColor(255, 252, 248, 236))
-            painter.drawRoundedRect(plot_rect, 16, 16)
+            painter.drawLine(plot_inner.topRight(), connector_anchor)
+            painter.drawLine(plot_inner.bottomRight(), connector_anchor)
 
             grid_pen = QtGui.QPen(QtGui.QColor(145, 124, 112, 52), 0.9)
             for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
@@ -518,14 +576,9 @@ class VerticalProfileWidget(QtWidgets.QWidget):
             painter.drawLine(plot_inner.bottomLeft(), plot_inner.bottomRight())
 
             axis_font = QtGui.QFont(self.font())
-            axis_font.setPointSizeF(max(6.6, axis_font.pointSizeF() - 1.2))
+            axis_font.setPointSizeF(max(7.2, axis_font.pointSizeF() - 0.7))
             painter.setFont(axis_font)
             painter.setPen(QtGui.QColor("#6f5a52"))
-            painter.drawText(
-                QtCore.QRectF(plot_rect.left() + 4, plot_rect.top() + 4, plot_rect.width() - 8, 12),
-                QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter,
-                "Meas zone",
-            )
             painter.drawText(
                 QtCore.QRectF(plot_inner.left() - 36, plot_inner.top() - 4, 32, 12),
                 QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter,
@@ -549,15 +602,15 @@ class VerticalProfileWidget(QtWidgets.QWidget):
             painter.drawText(
                 QtCore.QRectF(plot_inner.left(), plot_inner.bottom() + 18, plot_inner.width(), 12),
                 QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter,
-                "Moment",
+                "Moment (emu)",
             )
             painter.save()
-            painter.translate(plot_rect.left() + 8, plot_inner.center().y())
+            painter.translate(plot_rect.left() + 10, plot_inner.center().y())
             painter.rotate(-90)
             painter.drawText(
                 QtCore.QRectF(-plot_inner.height() / 2.0, -10.0, plot_inner.height(), 12.0),
                 QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter,
-                "Z position",
+                "Z position (cm)",
             )
             painter.restore()
 
@@ -592,13 +645,13 @@ class VerticalProfileWidget(QtWidgets.QWidget):
                     "Opt",
                 )
 
-        label_height = 58.0
-        gap = 12.0
+        label_height = 64.0
+        gap = 10.0
         left_indicators = [indicator for indicator in model.indicators if indicator.side == "left"]
         right_entries: list[tuple[str, object, float]] = [
             ("indicator", indicator, float(indicator.raw_position)) for indicator in model.indicators if indicator.side != "left"
         ]
-        right_entries.extend(("band", band, (band.raw_top + band.raw_bottom) / 2.0) for band in model.bands)
+        right_entries.extend(("band", band, float(band.raw_bottom)) for band in model.bands)
         right_entries.sort(key=lambda item: item[2], reverse=True)
         left_indicators.sort(key=lambda indicator: indicator.raw_position, reverse=True)
 
@@ -608,13 +661,19 @@ class VerticalProfileWidget(QtWidgets.QWidget):
         right_y = self._adjust_label_positions(right_targets, panel.top() + 6, panel.bottom() - label_height - 6, label_height + gap)
 
         title_font = QtGui.QFont(self.font())
-        title_font.setPointSizeF(max(7.9, title_font.pointSizeF() - 0.5))
+        title_font.setPointSizeF(max(8.0, title_font.pointSizeF() - 0.2))
         title_font.setBold(True)
-        meta_font = QtGui.QFont(title_font)
-        meta_font.setBold(False)
-        meta_font.setPointSizeF(max(7.0, meta_font.pointSizeF() - 0.7))
+        value_font = QtGui.QFont(title_font)
+        value_font.setBold(False)
+        value_font.setPointSizeF(title_font.pointSizeF() + 0.2)
+
+        def register_target(key: str, label: str, raw_position: int, *rects: QtCore.QRectF) -> None:
+            for rect_value in rects:
+                self._hit_regions.append((QtCore.QRectF(rect_value), key, label, int(raw_position)))
 
         def draw_indicator(indicator: ProfileIndicator, y_value: float, label_y: float) -> None:
+            key = f"indicator:{indicator.label}"
+            is_selected = self._selected_target_key == key
             color = QtGui.QColor(indicator.color)
             if indicator.side == "left":
                 anchor_x = center_x - indicator.bar_half_width
@@ -628,6 +687,7 @@ class VerticalProfileWidget(QtWidgets.QWidget):
                 label_rect = QtCore.QRectF(tick_end + 14, label_y, panel.right() - tick_end - 22, label_height)
                 line_end = label_rect.left() - 4
                 text_align = QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+            symbol_rect = QtCore.QRectF(center_x - 13.0, y_value - 11.0, 26.0, 22.0)
 
             painter.setPen(QtGui.QPen(color, 1.55 if indicator.emphasis else 1.15))
             if indicator.style == "bar":
@@ -641,41 +701,64 @@ class VerticalProfileWidget(QtWidgets.QWidget):
                 dot_radius = 4.2 if indicator.emphasis else 3.0
                 painter.drawEllipse(QtCore.QPointF(center_x, y_value), dot_radius, dot_radius)
 
+            if is_selected:
+                painter.setPen(QtGui.QPen(QtGui.QColor("#7a0219"), 2.0))
+                painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(symbol_rect, 8.0, 8.0)
+
             painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 224), 1))
             painter.setBrush(QtGui.QColor(255, 255, 255, 232))
             painter.drawRoundedRect(label_rect, 10, 10)
+            if is_selected:
+                painter.setPen(QtGui.QPen(QtGui.QColor("#7a0219"), 1.8))
+                painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(label_rect.adjusted(0.7, 0.7, -0.7, -0.7), 10, 10)
             painter.setPen(QtGui.QColor("#402f2b"))
             painter.setFont(title_font)
             painter.drawText(
-                label_rect.adjusted(8, 4, -8, -18),
-                text_align | QtCore.Qt.TextFlag.TextWordWrap,
+                label_rect.adjusted(8, 6, -8, -30),
+                text_align,
                 indicator.label,
             )
             painter.setPen(QtGui.QColor("#7a625c"))
-            painter.setFont(meta_font)
-            painter.drawText(label_rect.adjusted(8, 34, -8, -4), text_align, indicator.value_text or f"{indicator.raw_position:,}")
+            painter.setFont(value_font)
+            painter.drawText(label_rect.adjusted(8, 32, -8, -6), text_align, indicator.value_text or f"{indicator.raw_position:,}")
+            if indicator.label != "Live Z":
+                register_target(key, indicator.label, indicator.raw_position, label_rect, symbol_rect)
 
         def draw_band_label(band: ProfileBand, label_y: float) -> None:
-            center_y = to_y((band.raw_top + band.raw_bottom) / 2.0)
+            key = f"band:{band.label}"
+            is_selected = self._selected_target_key == key
+            center_y = to_y(band.raw_bottom)
             band_edge_x = center_x + band.width / 2.0
             tick_end = body_rect.right() + 18
             label_rect = QtCore.QRectF(tick_end + 14, label_y, panel.right() - tick_end - 22, label_height)
+            band_rect = QtCore.QRectF(center_x - band.width / 2.0 - 7.0, center_y - 8.0, band.width + 14.0, 16.0)
             painter.setPen(QtGui.QPen(QtGui.QColor(band.outline_color), 1.1))
             painter.drawLine(QtCore.QPointF(band_edge_x, center_y), QtCore.QPointF(tick_end, center_y))
             painter.drawLine(QtCore.QPointF(tick_end, center_y), QtCore.QPointF(label_rect.left() - 4, label_rect.center().y()))
+            if is_selected:
+                painter.setPen(QtGui.QPen(QtGui.QColor("#7a0219"), 1.8))
+                painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(band_rect, 7.0, 7.0)
             painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 224), 1))
             painter.setBrush(QtGui.QColor(255, 255, 255, 232))
             painter.drawRoundedRect(label_rect, 10, 10)
+            if is_selected:
+                painter.setPen(QtGui.QPen(QtGui.QColor("#7a0219"), 1.8))
+                painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(label_rect.adjusted(0.7, 0.7, -0.7, -0.7), 10, 10)
             painter.setPen(QtGui.QColor("#402f2b"))
             painter.setFont(title_font)
             painter.drawText(
-                label_rect.adjusted(8, 4, -8, -18),
-                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.TextFlag.TextWordWrap,
+                label_rect.adjusted(8, 6, -8, -30),
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
                 band.label,
             )
             painter.setPen(QtGui.QColor("#7a625c"))
-            painter.setFont(meta_font)
-            painter.drawText(label_rect.adjusted(8, 34, -8, -4), QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter, band.value_text or f"{band.raw_bottom:,}")
+            painter.setFont(value_font)
+            painter.drawText(label_rect.adjusted(8, 32, -8, -6), QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter, band.value_text or f"{band.raw_bottom:,}")
+            register_target(key, band.label, band.raw_bottom, label_rect, band_rect)
 
         for indicator, label_y in zip(left_indicators, left_y):
             draw_indicator(indicator, to_y(indicator.raw_position), label_y)
@@ -762,7 +845,7 @@ def fit_best_measurement_position(points: list[ScanPoint]) -> tuple[float | None
     if not points:
         return None, "no-data"
     ordered = sorted(points, key=lambda point: point.z_cm)
-    peak_index = max(range(len(ordered)), key=lambda idx: ordered[idx].moment_emu)
+    peak_index = max(range(len(ordered)), key=lambda idx: abs(ordered[idx].moment_emu))
     peak_point = ordered[peak_index]
     best_z = peak_point.z_cm
     method = "peak"
@@ -785,11 +868,11 @@ def fit_best_measurement_position(points: list[ScanPoint]) -> tuple[float | None
                     method = "quadratic"
 
     if method == "peak":
-        threshold = peak_point.moment_emu * 0.95
-        strong_points = [point for point in ordered if point.moment_emu >= threshold]
-        weight_sum = sum(point.moment_emu for point in strong_points)
+        threshold = abs(peak_point.moment_emu) * 0.95
+        strong_points = [point for point in ordered if abs(point.moment_emu) >= threshold]
+        weight_sum = sum(abs(point.moment_emu) for point in strong_points)
         if strong_points and weight_sum > 0:
-            best_z = sum(point.z_cm * point.moment_emu for point in strong_points) / weight_sum
+            best_z = sum(point.z_cm * abs(point.moment_emu) for point in strong_points) / weight_sum
             method = "weighted"
     return best_z, method
 
@@ -906,6 +989,120 @@ class SquidMomentReader:
         return x_emu, y_emu, z_emu, _moment_magnitude(x_emu, y_emu, z_emu)
 
 
+class VacuumController:
+    def __init__(self) -> None:
+        self._serial: serial.Serial | None = None
+        self._valve_connected = False
+        self._motor_powered = False
+
+    @property
+    def is_connected(self) -> bool:
+        return self._serial is not None and self._serial.is_open
+
+    @property
+    def is_enabled(self) -> bool:
+        return self._valve_connected and self._motor_powered
+
+    def connect(self, port: str, baudrate: int = 9600) -> None:
+        self.disconnect()
+        self._serial = serial.Serial(
+            port=port,
+            baudrate=baudrate,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE,
+            timeout=0.30,
+            write_timeout=0.30,
+            dsrdtr=True,
+        )
+        self._serial.reset_input_buffer()
+        self._serial.reset_output_buffer()
+        self._valve_connected = False
+        self._motor_powered = False
+
+    def disconnect(self) -> None:
+        if self._serial is not None:
+            try:
+                self._serial.close()
+            finally:
+                self._serial = None
+        self._valve_connected = False
+        self._motor_powered = False
+
+    def _require_serial(self) -> serial.Serial:
+        if self._serial is None or not self._serial.is_open:
+            raise RuntimeError("Vacuum serial port is not connected.")
+        return self._serial
+
+    def _send_command(self, command: str) -> None:
+        port = self._require_serial()
+        port.rts = True
+        port.reset_input_buffer()
+        port.reset_output_buffer()
+        port.write(b"\r")
+        port.flush()
+        time.sleep(0.10)
+        port.write(command.encode("ascii", errors="ignore"))
+        port.flush()
+        time.sleep(0.10)
+        port.write(b"\r")
+        port.flush()
+        time.sleep(0.10)
+
+    def _read_response(self, timeout_s: float = 0.35) -> str:
+        port = self._require_serial()
+        deadline = time.monotonic() + timeout_s
+        chunks = bytearray()
+        while time.monotonic() < deadline:
+            byte = port.read(1)
+            if not byte:
+                continue
+            if byte == b"\r":
+                if chunks:
+                    break
+                continue
+            chunks.extend(byte)
+        return chunks.decode("ascii", errors="ignore").strip()
+
+    def reset(self) -> None:
+        self._send_command("10R00")
+        time.sleep(0.20)
+        self._send_command("10TFF")
+        self._read_response()
+
+    def set_motor_power(self, enabled: bool) -> None:
+        if enabled:
+            self._send_command("E")
+            self._send_command("10MFF")
+            self._read_response()
+            self._motor_powered = True
+        else:
+            self._send_command("D")
+            self._send_command("10M00")
+            self._read_response()
+            self._motor_powered = False
+
+    def set_valve_connect(self, enabled: bool) -> None:
+        if enabled:
+            self._send_command("O")
+            self._send_command("10VFF")
+            self._read_response()
+            self._valve_connected = True
+        else:
+            self._send_command("C")
+            self._send_command("10V00")
+            self._read_response()
+            self._valve_connected = False
+
+    def set_enabled(self, enabled: bool) -> None:
+        if enabled:
+            self.set_motor_power(True)
+            self.set_valve_connect(True)
+        else:
+            self.set_valve_connect(False)
+            self.set_motor_power(False)
+
+
 class UpDownController:
     def __init__(self, profile: SettingsProfile) -> None:
         self.profile = profile
@@ -934,11 +1131,14 @@ class UpDownController:
     def halt(self) -> None:
         self.motor.halt(self.profile.updown_axis)
 
+    def stop(self) -> None:
+        self.motor.stop(self.profile.updown_axis)
+
     def home_to_top(self) -> MoveResult:
         return self.motor.home_to_top(self.profile.updown_axis)
 
     def move_to_raw(self, target: int, velocity: int) -> MoveResult:
-        return self.motor.move_motor(
+        result = self.motor.move_motor(
             self.profile.updown_axis,
             target=target,
             velocity=int(velocity),
@@ -946,6 +1146,8 @@ class UpDownController:
             acceleration=96637,
             relative_mode=False,
         )
+        success = abs(result.final_position - int(target)) <= POSITION_TOLERANCE_COUNTS or int(target) == 0
+        return MoveResult(target=int(target), final_position=result.final_position, success=success)
 
     def jog_relative(self, delta: int, velocity: int) -> MoveResult:
         current = self.read_position()
@@ -957,7 +1159,9 @@ class UpDownController:
             acceleration=96637,
             relative_mode=True,
         )
-        return MoveResult(target=current + int(delta), final_position=result.final_position, success=result.success)
+        target = current + int(delta)
+        success = abs(result.final_position - target) <= POSITION_TOLERANCE_COUNTS
+        return MoveResult(target=target, final_position=result.final_position, success=success)
 
     def sample_pickup(self) -> MoveResult:
         return self.motor.sample_pickup(self.profile.updown_axis)
@@ -1101,6 +1305,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings_profile = self._load_profile(Path(self._settings.settings_path))
         self.controller = UpDownController(self.settings_profile)
         self.squid = SquidMomentReader()
+        self.vacuum = VacuumController()
         self._calibration = read_calibration_from_settings(self.settings_profile.path)
         self._baseline_raw: tuple[float, float, float] | None = None
         self._scan_worker: ScanWorker | None = None
@@ -1114,15 +1319,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._last_confirmed_speed = 0
         self._last_live_raw: int | None = None
         self._pending_meas_pos_suggestion: int | None = None
+        self._motion_fault_message = ""
         self._build_ui()
         self._apply_local_style()
-        self.setMinimumSize(1560, 820)
-        self.resize(1640, 920)
+        self.setMinimumSize(1660, 840)
+        self.resize(1720, 940)
         self._refresh_ports()
         self._populate_squid_ports()
         self._load_settings_into_widgets()
-        self._autodetect_squid_port()
         self._apply_profile_to_ui(reset_motion=True)
+        QtCore.QTimer.singleShot(350, self._autodetect_squid_port)
         self._poll_timer.start()
 
     def _load_profile(self, path: Path) -> SettingsProfile:
@@ -1166,11 +1372,14 @@ class MainWindow(QtWidgets.QMainWindow):
         subtitle = QtWidgets.QLabel(
             "Compact Z-axis control with VB6 raw-count tuning, top-switch status, and Z scanning."
         )
-        subtitle.setObjectName("subtitle")
+        subtitle.setObjectName("headerSubtitle")
         subtitle.setWordWrap(True)
         title_col.addWidget(title)
         title_col.addWidget(subtitle)
         header_layout.addLayout(title_col, 1)
+
+        connections_panel = self._build_connections_panel()
+        header_layout.addWidget(connections_panel, 2)
 
         self.current_position_pill = self._make_pill("Z -- raw")
         self.top_switch_pill = self._make_pill("Z TOP --")
@@ -1178,16 +1387,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self.live_raw_label = self._make_pill("Raw --")
         self.live_cm_label = self._make_pill("Z -- cm")
         self.live_target_label = self._make_pill("Target --")
+        for pill in (
+            self.current_position_pill,
+            self.top_switch_pill,
+            self.meas_pos_pill,
+            self.live_raw_label,
+            self.live_cm_label,
+            self.live_target_label,
+        ):
+            pill.setMinimumWidth(92)
+            pill.setMinimumHeight(34)
         self.safety_label = QtWidgets.QLabel()
         self.safety_label.setObjectName("tableHint")
         self.safety_label.setWordWrap(True)
         header_status = QtWidgets.QVBoxLayout()
         header_status.setObjectName("headerStatusHost")
-        header_status.setSpacing(8)
+        header_status.setSpacing(6)
         pill_grid = QtWidgets.QGridLayout()
         pill_grid.setContentsMargins(0, 0, 0, 0)
-        pill_grid.setHorizontalSpacing(10)
-        pill_grid.setVerticalSpacing(8)
+        pill_grid.setHorizontalSpacing(6)
+        pill_grid.setVerticalSpacing(6)
         pill_grid.addWidget(self.current_position_pill, 0, 0)
         pill_grid.addWidget(self.top_switch_pill, 0, 1)
         pill_grid.addWidget(self.meas_pos_pill, 0, 2)
@@ -1213,16 +1432,28 @@ class MainWindow(QtWidgets.QMainWindow):
         left_host.setMaximumWidth(328)
         left_host_layout = QtWidgets.QVBoxLayout(left_host)
         left_host_layout.setContentsMargins(0, 0, 0, 0)
-        left_host_layout.setSpacing(10)
+        left_host_layout.setSpacing(0)
         shell.addWidget(left_host)
 
         center_host = QtWidgets.QWidget()
         center_host.setObjectName("columnHost")
-        center_host.setMinimumWidth(660)
+        center_host.setMinimumWidth(760)
         center_layout = QtWidgets.QVBoxLayout(center_host)
         center_layout.setContentsMargins(0, 0, 0, 0)
         center_layout.setSpacing(10)
         shell.addWidget(center_host, 2)
+
+        right_host = QtWidgets.QWidget()
+        right_host.setObjectName("columnHost")
+        right_host.setMinimumWidth(580)
+        right_layout = QtWidgets.QVBoxLayout(right_host)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(10)
+        right_top = QtWidgets.QHBoxLayout()
+        right_top.setContentsMargins(0, 0, 0, 0)
+        right_top.setSpacing(10)
+        right_layout.addLayout(right_top, 1)
+        shell.addWidget(right_host)
 
         motion_host = QtWidgets.QWidget()
         motion_host.setObjectName("columnHost")
@@ -1231,7 +1462,7 @@ class MainWindow(QtWidgets.QMainWindow):
         motion_layout = QtWidgets.QVBoxLayout(motion_host)
         motion_layout.setContentsMargins(0, 0, 0, 0)
         motion_layout.setSpacing(10)
-        shell.addWidget(motion_host)
+        right_top.addWidget(motion_host)
 
         scan_host = QtWidgets.QWidget()
         scan_host.setObjectName("columnHost")
@@ -1240,78 +1471,115 @@ class MainWindow(QtWidgets.QMainWindow):
         scan_layout = QtWidgets.QVBoxLayout(scan_host)
         scan_layout.setContentsMargins(0, 0, 0, 0)
         scan_layout.setSpacing(10)
-        shell.addWidget(scan_host)
+        right_top.addWidget(scan_host)
 
-        self._build_connections_card(left_host_layout)
         self._build_settings_card(left_host_layout)
-        left_host_layout.addStretch(1)
+        self._build_console_card(left_host_layout)
 
         self._build_profile_card(center_layout)
 
         self._build_motion_card(motion_layout)
-        self._build_console_card(motion_layout)
-        motion_layout.addStretch(1)
 
         self._build_scan_card(scan_layout)
-        scan_layout.addStretch(1)
 
-    def _build_connections_card(self, parent: QtWidgets.QVBoxLayout) -> None:
-        card, layout = self._build_card(
-            "Connections",
-            "Motor and SQUID ports with live top-switch context.",
-        )
+    def _build_connections_panel(self) -> QtWidgets.QFrame:
+        panel = QtWidgets.QFrame()
+        panel.setObjectName("livePanel")
+        layout = QtWidgets.QGridLayout(panel)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setHorizontalSpacing(6)
+        layout.setVerticalSpacing(6)
         self.motor_port_combo = QtWidgets.QComboBox()
         self.motor_port_combo.setEditable(True)
         self.squid_port_combo = QtWidgets.QComboBox()
         self.squid_port_combo.setEditable(True)
+        self.vacuum_port_combo = QtWidgets.QComboBox()
+        self.vacuum_port_combo.setEditable(True)
         self.refresh_ports_btn = QtWidgets.QPushButton("Refresh")
         self.connect_motor_btn = QtWidgets.QPushButton("Connect")
         self.connect_motor_btn.setObjectName("accent")
         self.disconnect_motor_btn = QtWidgets.QPushButton("Disconnect")
         self.connect_squid_btn = QtWidgets.QPushButton("Connect")
         self.disconnect_squid_btn = QtWidgets.QPushButton("Disconnect")
+        self.vacuum_connect_btn = QtWidgets.QPushButton("Connect")
+        self.vacuum_disconnect_btn = QtWidgets.QPushButton("Disconnect")
+        self.vacuum_toggle_btn = QtWidgets.QPushButton("Vacuum OFF")
+        self.vacuum_toggle_btn.setCheckable(True)
+        self.vacuum_toggle_btn.setProperty("vacuumActive", False)
 
-        motor_row = QtWidgets.QHBoxLayout()
-        motor_row.setContentsMargins(0, 0, 0, 0)
-        motor_row.setSpacing(4)
-        motor_row.addWidget(self.motor_port_combo, 1)
-        motor_row.addWidget(self.refresh_ports_btn)
-        layout.addRow("Motor port", self._layout_widget(motor_row))
-        motor_btn_row = QtWidgets.QHBoxLayout()
-        motor_btn_row.setContentsMargins(0, 0, 0, 0)
-        motor_btn_row.setSpacing(4)
-        motor_btn_row.addWidget(self.connect_motor_btn)
-        motor_btn_row.addWidget(self.disconnect_motor_btn)
-        layout.addRow("", self._layout_widget(motor_btn_row))
+        for widget in (
+            self.motor_port_combo,
+            self.squid_port_combo,
+            self.vacuum_port_combo,
+            self.refresh_ports_btn,
+            self.connect_motor_btn,
+            self.disconnect_motor_btn,
+            self.connect_squid_btn,
+            self.disconnect_squid_btn,
+            self.vacuum_connect_btn,
+            self.vacuum_disconnect_btn,
+            self.vacuum_toggle_btn,
+        ):
+            widget.setFixedHeight(26)
 
-        squid_row = QtWidgets.QHBoxLayout()
-        squid_row.setContentsMargins(0, 0, 0, 0)
-        squid_row.setSpacing(4)
-        squid_row.addWidget(self.squid_port_combo, 1)
-        layout.addRow("SQUID port", self._layout_widget(squid_row))
-        squid_btn_row = QtWidgets.QHBoxLayout()
-        squid_btn_row.setContentsMargins(0, 0, 0, 0)
-        squid_btn_row.setSpacing(4)
-        squid_btn_row.addWidget(self.connect_squid_btn)
-        squid_btn_row.addWidget(self.disconnect_squid_btn)
-        layout.addRow("", self._layout_widget(squid_btn_row))
+        self.refresh_ports_btn.setMinimumWidth(64)
+        self.connect_motor_btn.setMinimumWidth(74)
+        self.disconnect_motor_btn.setMinimumWidth(82)
+        self.connect_squid_btn.setMinimumWidth(74)
+        self.disconnect_squid_btn.setMinimumWidth(82)
+        self.vacuum_connect_btn.setMinimumWidth(74)
+        self.vacuum_disconnect_btn.setMinimumWidth(82)
+        self.vacuum_toggle_btn.setMinimumWidth(92)
+
+        motor_label = QtWidgets.QLabel("Motor")
+        squid_label = QtWidgets.QLabel("SQUID")
+        vacuum_label = QtWidgets.QLabel("Vacuum")
+        for label in (motor_label, squid_label, vacuum_label):
+            label.setMinimumWidth(48)
+
+        layout.addWidget(motor_label, 0, 0)
+        layout.addWidget(self.motor_port_combo, 0, 1)
+        layout.addWidget(self.refresh_ports_btn, 0, 2)
+        layout.addWidget(self.connect_motor_btn, 0, 3)
+        layout.addWidget(self.disconnect_motor_btn, 0, 4)
+        layout.addWidget(squid_label, 1, 0)
+        layout.addWidget(self.squid_port_combo, 1, 1)
+        layout.addWidget(self.connect_squid_btn, 1, 3)
+        layout.addWidget(self.disconnect_squid_btn, 1, 4)
+        layout.addWidget(vacuum_label, 2, 0)
+        layout.addWidget(self.vacuum_port_combo, 2, 1)
+        layout.addWidget(self.vacuum_connect_btn, 2, 2)
+        layout.addWidget(self.vacuum_disconnect_btn, 2, 3)
+        layout.addWidget(self.vacuum_toggle_btn, 2, 4)
         self.connections_status = QtWidgets.QLabel()
         self.connections_status.setObjectName("tableHint")
         self.connections_status.setWordWrap(True)
-        layout.addRow("", self.connections_status)
-        parent.addWidget(card)
+        layout.addWidget(self.connections_status, 3, 0, 1, 5)
+        layout.setColumnStretch(1, 1)
 
         self.refresh_ports_btn.clicked.connect(self._refresh_ports)
         self.connect_motor_btn.clicked.connect(self._connect_motor)
         self.disconnect_motor_btn.clicked.connect(self._disconnect_motor)
         self.connect_squid_btn.clicked.connect(self._connect_squid)
         self.disconnect_squid_btn.clicked.connect(self._disconnect_squid)
+        self.vacuum_connect_btn.clicked.connect(self._connect_vacuum)
+        self.vacuum_disconnect_btn.clicked.connect(self._disconnect_vacuum)
+        self.vacuum_toggle_btn.toggled.connect(self._toggle_vacuum)
+
+        return panel
 
     def _build_settings_card(self, parent: QtWidgets.QVBoxLayout) -> None:
         card, layout = self._build_card(
             "Settings And References",
             "Settings file, MeasPos, and VB6 reference heights for the center profile.",
         )
+        card.setProperty("panelRole", "settings")
+        settings_font = QtGui.QFont(self.font())
+        if settings_font.pointSizeF() > 0:
+            settings_font.setPointSizeF(settings_font.pointSizeF() + 0.7)
+        card.setFont(settings_font)
+        layout.setVerticalSpacing(8)
+        layout.setHorizontalSpacing(10)
         self.settings_path_edit = QtWidgets.QLineEdit(str(self.settings_profile.path))
         self.settings_browse_btn = QtWidgets.QPushButton("Browse")
         self.settings_reload_btn = QtWidgets.QPushButton("Reload")
@@ -1329,6 +1597,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.reference_positions_label.setObjectName("tableHint")
         self.reference_positions_label.setWordWrap(True)
 
+        for widget in (
+            self.settings_path_edit,
+            self.settings_browse_btn,
+            self.settings_reload_btn,
+            self.save_settings_btn,
+            self.meas_pos_spin,
+            self.apply_suggestion_btn,
+        ):
+            widget.setMinimumHeight(30)
+
         layout.addRow("Settings file", self.settings_path_edit)
         settings_btn_row = QtWidgets.QHBoxLayout()
         settings_btn_row.setContentsMargins(0, 0, 0, 0)
@@ -1345,7 +1623,7 @@ class MainWindow(QtWidgets.QMainWindow):
         save_row.addWidget(self.apply_suggestion_btn)
         save_row.addWidget(self.save_settings_btn)
         layout.addRow("", self._layout_widget(save_row))
-        parent.addWidget(card)
+        parent.addWidget(card, 1)
 
         self.settings_browse_btn.clicked.connect(self._browse_settings_path)
         self.settings_reload_btn.clicked.connect(self._reload_settings_profile)
@@ -1378,38 +1656,48 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(self.profile_caption)
         parent.addWidget(card, 1)
 
+        self.profile_scene.targetSelected.connect(self._profile_target_selected)
+        self.profile_scene.targetActivated.connect(self._profile_target_activated)
+
     def _build_motion_card(self, parent: QtWidgets.QVBoxLayout) -> None:
         card, layout = self._build_card(
             "Velocity And Jog",
-            "Raw-count motion with live cm estimates.",
+            "Raw motion with cm estimates.",
+            compact_subtitle=True,
         )
         self.z_velocity_spin = QtWidgets.QSpinBox()
         self.z_velocity_spin.setRange(1, 50_000_000)
         self.z_velocity_spin.setSingleStep(100_000)
         self.z_velocity_spin.setGroupSeparatorShown(True)
+        self.z_velocity_spin.setFixedHeight(24)
         self.z_velocity_estimate = QtWidgets.QLabel()
         self.z_velocity_estimate.setObjectName("tableHint")
         self.z_velocity_estimate.setWordWrap(True)
+        self.z_velocity_estimate.setMinimumHeight(36)
 
         self.jog_step_spin = QtWidgets.QSpinBox()
         self.jog_step_spin.setRange(1, 2_000_000_000)
         self.jog_step_spin.setSingleStep(100)
         self.jog_step_spin.setGroupSeparatorShown(True)
+        self.jog_step_spin.setFixedHeight(24)
         self.jog_step_estimate = QtWidgets.QLabel()
         self.jog_step_estimate.setObjectName("tableHint")
         self.jog_step_estimate.setWordWrap(True)
+        self.jog_step_estimate.setMinimumHeight(34)
 
         self.target_raw_spin = QtWidgets.QSpinBox()
         self.target_raw_spin.setRange(-2_000_000_000, 2_000_000_000)
         self.target_raw_spin.setGroupSeparatorShown(True)
+        self.target_raw_spin.setFixedHeight(24)
         self.target_raw_hint = QtWidgets.QLabel()
         self.target_raw_hint.setObjectName("tableHint")
         self.target_raw_hint.setWordWrap(True)
+        self.target_raw_hint.setMinimumHeight(38)
 
         self.move_target_btn = QtWidgets.QPushButton("Go Target")
         self.move_target_btn.setObjectName("accent")
-        self.move_meas_btn = QtWidgets.QPushButton("Go Meas Z")
-        self.home_top_btn = QtWidgets.QPushButton("Home Top")
+        self.move_meas_btn = QtWidgets.QPushButton("Move To Meas Target")
+        self.home_top_btn = QtWidgets.QPushButton("Home To Top")
         self.pickup_btn = QtWidgets.QPushButton("Pickup")
         self.dropoff_btn = QtWidgets.QPushButton("Dropoff")
         self.susceptibility_btn = QtWidgets.QPushButton("Susc. Meter")
@@ -1417,19 +1705,35 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pickup_raw_spin = QtWidgets.QSpinBox()
         self.pickup_raw_spin.setRange(-2_000_000_000, 2_000_000_000)
         self.pickup_raw_spin.setGroupSeparatorShown(True)
+        self.pickup_raw_spin.setFixedHeight(24)
         self.dropoff_raw_spin = QtWidgets.QSpinBox()
         self.dropoff_raw_spin.setRange(-2_000_000_000, 2_000_000_000)
         self.dropoff_raw_spin.setGroupSeparatorShown(True)
+        self.dropoff_raw_spin.setFixedHeight(24)
         self.susceptibility_raw_spin = QtWidgets.QSpinBox()
         self.susceptibility_raw_spin.setRange(-2_000_000_000, 2_000_000_000)
         self.susceptibility_raw_spin.setGroupSeparatorShown(True)
+        self.susceptibility_raw_spin.setFixedHeight(24)
 
         self.jog_up_btn = QtWidgets.QPushButton("Jog Up")
         self.jog_down_btn = QtWidgets.QPushButton("Jog Down")
 
+        for button in (
+            self.move_target_btn,
+            self.move_meas_btn,
+            self.jog_up_btn,
+            self.jog_down_btn,
+            self.pickup_btn,
+            self.dropoff_btn,
+            self.susceptibility_btn,
+        ):
+            button.setFixedHeight(28)
+        self.home_top_btn.setFixedHeight(32)
+
         grid = QtWidgets.QGridLayout()
-        grid.setHorizontalSpacing(6)
-        grid.setVerticalSpacing(6)
+        grid.setContentsMargins(2, 4, 2, 8)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(14)
         grid.addWidget(QtWidgets.QLabel("Z velocity"), 0, 0)
         grid.addWidget(self.z_velocity_spin, 0, 1)
         grid.addWidget(self.z_velocity_estimate, 1, 0, 1, 2)
@@ -1444,14 +1748,12 @@ class MainWindow(QtWidgets.QMainWindow):
         grid.addWidget(self.jog_up_btn, 7, 0)
         grid.addWidget(self.jog_down_btn, 7, 1)
         grid.addWidget(self.home_top_btn, 8, 0, 1, 2)
-        grid.addWidget(self.pickup_btn, 9, 0)
-        grid.addWidget(self.pickup_raw_spin, 9, 1)
-        grid.addWidget(self.dropoff_btn, 10, 0)
-        grid.addWidget(self.dropoff_raw_spin, 10, 1)
-        grid.addWidget(self.susceptibility_btn, 11, 0)
-        grid.addWidget(self.susceptibility_raw_spin, 11, 1)
-        layout.addRow(self._layout_widget(grid))
-        parent.addWidget(card)
+        for row in (1, 3, 5, 6, 7, 8):
+            grid.setRowStretch(row, 1)
+        motion_body = self._layout_widget(grid)
+        motion_body.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Expanding)
+        layout.addRow(motion_body)
+        parent.addWidget(card, 1)
 
         self.z_velocity_spin.valueChanged.connect(self._on_velocity_changed)
         self.jog_step_spin.valueChanged.connect(self._update_motion_hints)
@@ -1459,18 +1761,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.move_target_btn.clicked.connect(self._move_to_target_raw)
         self.move_meas_btn.clicked.connect(self._move_to_assumed_measurement)
         self.home_top_btn.clicked.connect(self._home_to_top)
-        self.pickup_btn.clicked.connect(lambda: self._move_to_preset("pickup", self.pickup_raw_spin.value(), use_pickup=True))
-        self.dropoff_btn.clicked.connect(lambda: self._move_to_preset("dropoff", self.dropoff_raw_spin.value(), use_dropoff=True))
-        self.susceptibility_btn.clicked.connect(
-            lambda: self._move_to_preset("susceptibility", self.susceptibility_raw_spin.value())
-        )
         self.jog_up_btn.clicked.connect(lambda: self._jog_relative(upward=True))
         self.jog_down_btn.clicked.connect(lambda: self._jog_relative(upward=False))
 
     def _build_scan_card(self, parent: QtWidgets.QVBoxLayout) -> None:
         card, layout = self._build_card(
             "Measurement Z Optimization",
-            "Scan around the assumed measurement target and fit the best Z position.",
+            "Scan around MeasPos and fit best Z.",
+            compact_subtitle=True,
         )
         self.sample_height_spin = QtWidgets.QDoubleSpinBox()
         self.sample_height_spin.setRange(0.1, 20.0)
@@ -1513,20 +1811,47 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scan_result_label.setWordWrap(True)
 
         form = QtWidgets.QFormLayout()
+        form.setContentsMargins(0, 10, 0, 0)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(12)
         form.addRow("Sample ht", self.sample_height_spin)
         form.addRow("Half-range", self.scan_half_range_spin)
         form.addRow("Step", self.scan_step_spin)
         form.addRow("Settle", self.scan_settle_spin)
-        form.addRow("", self.scan_window_hint)
-        form.addRow("", self.take_baseline_btn)
-        form.addRow("", self.baseline_label)
+        lower_stack = QtWidgets.QVBoxLayout()
+        lower_stack.setContentsMargins(0, 6, 0, 0)
+        lower_stack.setSpacing(10)
+        lower_stack.addWidget(self.scan_window_hint)
+        lower_stack.addWidget(self.take_baseline_btn)
+        lower_stack.addWidget(self.baseline_label)
         scan_btn_row = QtWidgets.QHBoxLayout()
+        scan_btn_row.setContentsMargins(0, 0, 0, 0)
+        scan_btn_row.setSpacing(8)
         scan_btn_row.addWidget(self.scan_start_btn)
         scan_btn_row.addWidget(self.scan_stop_btn)
-        form.addRow("", self._layout_widget(scan_btn_row))
-        form.addRow("", self.scan_result_label)
-        layout.addRow(self._layout_widget(form))
-        parent.addWidget(card)
+        lower_stack.addWidget(self._layout_widget(scan_btn_row))
+        lower_stack.addWidget(self.scan_result_label)
+        for widget in (
+            self.sample_height_spin,
+            self.scan_half_range_spin,
+            self.scan_step_spin,
+            self.scan_settle_spin,
+            self.take_baseline_btn,
+            self.scan_start_btn,
+            self.scan_stop_btn,
+        ):
+            widget.setMinimumHeight(30)
+        self.baseline_label.setObjectName("tableHint")
+        self.baseline_label.setMinimumHeight(40)
+        self.scan_start_btn.setMinimumWidth(0)
+        self.scan_stop_btn.setMinimumWidth(0)
+        lower_body = self._layout_widget(lower_stack)
+        lower_body.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Expanding)
+        form.addRow(lower_body)
+        scan_body = self._layout_widget(form)
+        scan_body.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Expanding)
+        layout.addRow(scan_body)
+        parent.addWidget(card, 1)
 
         self.sample_height_spin.valueChanged.connect(self._update_assumed_target_text)
         self.sample_height_spin.valueChanged.connect(self._update_scan_window_hint)
@@ -1608,32 +1933,47 @@ class MainWindow(QtWidgets.QMainWindow):
         self.console = QtWidgets.QPlainTextEdit()
         self.console.setObjectName("console")
         self.console.setReadOnly(True)
-        self.console.setMinimumHeight(92)
-        self.console.setMaximumHeight(132)
+        self.console.setMinimumHeight(104)
+        self.console.setMaximumHeight(146)
         layout.addWidget(self.console, 1)
         parent.addWidget(card)
 
-    def _build_card(self, title_text: str, subtitle_text: str) -> tuple[QtWidgets.QFrame, QtWidgets.QFormLayout]:
+    def _build_card(
+        self,
+        title_text: str,
+        subtitle_text: str,
+        *,
+        compact_subtitle: bool = False,
+    ) -> tuple[QtWidgets.QFrame, QtWidgets.QFormLayout]:
         card = QtWidgets.QFrame()
         card.setObjectName("card")
         apply_card_shadow(card)
         outer = QtWidgets.QVBoxLayout(card)
-        outer.setContentsMargins(12, 12, 12, 12)
-        outer.setSpacing(6)
+        if compact_subtitle:
+            outer.setContentsMargins(12, 7, 12, 10)
+            outer.setSpacing(1)
+        else:
+            outer.setContentsMargins(12, 12, 12, 12)
+            outer.setSpacing(4)
         title = QtWidgets.QLabel(title_text)
         title.setObjectName("consoleTitle")
+        title.setContentsMargins(0, 0, 0, 0)
         subtitle = QtWidgets.QLabel(subtitle_text)
-        subtitle.setObjectName("subtitle")
+        subtitle.setObjectName("compactSubtitle" if compact_subtitle else "subtitle")
         subtitle.setWordWrap(True)
-        outer.addWidget(title)
-        outer.addWidget(subtitle)
+        subtitle.setContentsMargins(0, 0, 0, 0)
+        if compact_subtitle:
+            title.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Fixed)
+            subtitle.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Fixed)
+        outer.addWidget(title, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+        outer.addWidget(subtitle, 0, QtCore.Qt.AlignmentFlag.AlignTop)
         form = QtWidgets.QFormLayout()
         form.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         form.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
         form.setFormAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
-        form.setContentsMargins(0, 4, 0, 0)
+        form.setContentsMargins(0, 0 if compact_subtitle else 2, 0, 0)
         form.setSpacing(4)
-        outer.addLayout(form)
+        outer.addLayout(form, 1)
         return card, form
 
     def _make_pill(self, text: str) -> QtWidgets.QLabel:
@@ -1662,11 +2002,56 @@ class MainWindow(QtWidgets.QMainWindow):
             QWidget#columnHost, QWidget#layoutWrapper {
                 background: transparent;
             }
+            QFrame#card QWidget {
+                background: transparent;
+            }
+            QFrame#card QPushButton {
+                background: rgba(255, 255, 255, 0.96);
+                color: #2f2827;
+                border: 1px solid rgba(122, 2, 25, 0.45);
+                border-radius: 14px;
+            }
+            QFrame#card QPushButton:hover {
+                background: rgba(255, 255, 255, 1.0);
+            }
+            QFrame#card QPushButton:pressed {
+                background: rgba(244, 238, 231, 1.0);
+            }
+            QFrame#card QPushButton#accent {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #7a0219, stop:1 #5a0013);
+                color: #fff9eb;
+                border: 1px solid rgba(122, 2, 25, 0.85);
+                font-weight: 680;
+            }
+            QFrame#card QPushButton#accent:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #8a0220, stop:1 #650016);
+            }
+            QFrame#card QPushButton#accent:pressed {
+                background: #5a0013;
+            }
+            QFrame#card QPushButton[vacuumActive="true"] {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #7a0219, stop:1 #5a0013);
+                color: #fff9eb;
+                border: 1px solid rgba(122, 2, 25, 0.85);
+                font-weight: 680;
+            }
+            QFrame#card QPushButton[vacuumActive="true"]:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #8a0220, stop:1 #650016);
+            }
             QScrollArea#panelScroll { background: transparent; border: none; }
             QScrollArea#panelScroll > QWidget > QWidget { background: transparent; }
             QLabel#subtitle {
                 color: #6d5a55;
                 font-size: 10px;
+            }
+            QLabel#compactSubtitle {
+                color: #6d5a55;
+                font-size: 9px;
+            }
+            QLabel#headerSubtitle {
+                color: #6d5a55;
+                font-size: 11.5px;
+                font-weight: 520;
             }
             QLabel#tableHint {
                 color: #5e4b47;
@@ -1675,6 +2060,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 border-radius: 12px;
                 padding: 6px 8px;
                 font-size: 10px;
+            }
+            QLabel#tableHint[faultActive="true"] {
+                color: #6a1111;
+                background: rgba(140, 0, 0, 0.10);
+                border: 1px solid rgba(140, 0, 0, 0.35);
+                font-weight: 600;
             }
             QLabel#consoleTitle {
                 color: #5d0013;
@@ -1701,8 +2092,30 @@ class MainWindow(QtWidgets.QMainWindow):
                 font-size: 11px;
             }
             QSpinBox, QDoubleSpinBox, QLineEdit, QComboBox {
-                min-height: 24px;
-                font-size: 10px;
+                min-height: 25px;
+                font-size: 10.9px;
+            }
+            QComboBox::drop-down {
+                width: 22px;
+                margin: 3px;
+            }
+            QAbstractSpinBox {
+                padding-right: 24px;
+            }
+            QAbstractSpinBox::up-button,
+            QAbstractSpinBox::down-button {
+                width: 18px;
+            }
+            QAbstractSpinBox::up-button {
+                margin: 4px 4px 1px 0px;
+            }
+            QAbstractSpinBox::down-button {
+                margin: 1px 4px 4px 0px;
+            }
+            QAbstractSpinBox::up-arrow,
+            QAbstractSpinBox::down-arrow {
+                width: 10px;
+                height: 10px;
             }
             QLabel#valuePill {
                 background: rgba(255, 255, 255, 0.90);
@@ -1713,6 +2126,21 @@ class MainWindow(QtWidgets.QMainWindow):
                 padding: 8px 12px;
                 min-width: 116px;
             }
+            QFrame[panelRole="settings"] QLineEdit,
+            QFrame[panelRole="settings"] QSpinBox,
+            QFrame[panelRole="settings"] QDoubleSpinBox {
+                min-height: 28px;
+                font-size: 11.2px;
+            }
+            QFrame[panelRole="settings"] QPushButton {
+                min-height: 28px;
+                padding: 5px 10px;
+                font-size: 11px;
+            }
+            QFrame[panelRole="settings"] QLabel#tableHint {
+                font-size: 10.8px;
+                padding: 8px 10px;
+            }
             QFrame#card {
                 margin: 0px;
             }
@@ -1720,7 +2148,11 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def _append(self, message: str) -> None:
+        scrollbar = self.console.verticalScrollBar()
+        auto_follow = scrollbar.value() >= max(scrollbar.minimum(), scrollbar.maximum() - 4)
         self.console.appendPlainText(message)
+        if auto_follow:
+            scrollbar.setValue(scrollbar.maximum())
 
     def _available_ports(self) -> list[str]:
         return sorted(port.device for port in list_ports.comports())
@@ -1741,7 +2173,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _refresh_ports(self) -> None:
         if not hasattr(self, "motor_port_combo"):
             return
-        self._populate_port_combo(self.motor_port_combo, self._available_ports(), self._settings.motor_port)
+        ports = self._available_ports()
+        self._populate_port_combo(self.motor_port_combo, ports, self._settings.motor_port)
+        if hasattr(self, "vacuum_port_combo"):
+            self._populate_port_combo(self.vacuum_port_combo, ports, self._settings.vacuum_port)
 
     def _populate_squid_ports(self) -> None:
         if not hasattr(self, "squid_port_combo"):
@@ -1753,7 +2188,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         ports = self._available_ports()
         existing = self.squid_port_combo.currentText().strip() or self._settings.squid_port.strip()
-        if existing and existing in ports and _probe_squid_port(existing):
+        if existing and existing in ports:
             self._populate_port_combo(self.squid_port_combo, ports, existing)
             return
 
@@ -1762,9 +2197,92 @@ class MainWindow(QtWidgets.QMainWindow):
         if detected:
             self._settings.squid_port = detected
 
+    def _set_vacuum_toggle_visual(self, enabled: bool) -> None:
+        self.vacuum_toggle_btn.setText("Vacuum ON" if enabled else "Vacuum OFF")
+        self.vacuum_toggle_btn.setProperty("vacuumActive", enabled)
+        self.vacuum_toggle_btn.style().unpolish(self.vacuum_toggle_btn)
+        self.vacuum_toggle_btn.style().polish(self.vacuum_toggle_btn)
+        self.vacuum_toggle_btn.update()
+
+    def _update_vacuum_status(self) -> None:
+        if not hasattr(self, "connections_status"):
+            return
+        self._update_connections_status()
+
+    def _connect_vacuum(self) -> None:
+        port = self.vacuum_port_combo.currentText().strip()
+        if not port:
+            QtWidgets.QMessageBox.warning(self, "Missing Port", "Select the vacuum COM port first.")
+            return
+        try:
+            self.vacuum.connect(port)
+            self.vacuum.reset()
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "Vacuum Connection Error", str(exc))
+            return
+        self._settings.vacuum_port = port
+        self._append(f"Connected vacuum on {port}")
+        self._update_vacuum_status()
+
+    def _disconnect_vacuum(self) -> None:
+        if self.vacuum.is_connected:
+            try:
+                if self.vacuum_toggle_btn.isChecked():
+                    self.vacuum.set_enabled(False)
+            except Exception:
+                pass
+        self.vacuum.disconnect()
+        with QtCore.QSignalBlocker(self.vacuum_toggle_btn):
+            self.vacuum_toggle_btn.setChecked(False)
+        self._settings.vacuum_enabled = False
+        self._set_vacuum_toggle_visual(False)
+        self._append("Disconnected vacuum")
+        self._update_vacuum_status()
+
+    def _toggle_vacuum(self, enabled: bool) -> None:
+        if not self.vacuum.is_connected:
+            with QtCore.QSignalBlocker(self.vacuum_toggle_btn):
+                self.vacuum_toggle_btn.setChecked(False)
+            self._set_vacuum_toggle_visual(False)
+            QtWidgets.QMessageBox.warning(self, "Vacuum Not Connected", "Connect the vacuum COM port first.")
+            return
+        try:
+            self.vacuum.set_enabled(enabled)
+        except Exception as exc:
+            with QtCore.QSignalBlocker(self.vacuum_toggle_btn):
+                self.vacuum_toggle_btn.setChecked(not enabled)
+            self._set_vacuum_toggle_visual(not enabled)
+            QtWidgets.QMessageBox.warning(self, "Vacuum Error", str(exc))
+            return
+        self._settings.vacuum_enabled = enabled
+        self._set_vacuum_toggle_visual(enabled)
+        self._append("Vacuum enabled" if enabled else "Vacuum disabled")
+        self._update_vacuum_status()
+
     def _load_settings_into_widgets(self) -> None:
+        blockers = [
+            QtCore.QSignalBlocker(widget)
+            for widget in (
+                self.motor_port_combo,
+                self.squid_port_combo,
+                self.vacuum_port_combo,
+                self.vacuum_toggle_btn,
+                self.meas_pos_spin,
+                self.pickup_raw_spin,
+                self.dropoff_raw_spin,
+                self.susceptibility_raw_spin,
+                self.z_velocity_spin,
+                self.jog_step_spin,
+                self.target_raw_spin,
+                self.sample_height_spin,
+                self.scan_half_range_spin,
+                self.scan_step_spin,
+                self.scan_settle_spin,
+            )
+        ]
         self.motor_port_combo.setCurrentText(self._settings.motor_port)
         self.squid_port_combo.setCurrentText(self._settings.squid_port)
+        self.vacuum_port_combo.setCurrentText(self._settings.vacuum_port)
         self.settings_path_edit.setText(self._settings.settings_path)
         self.meas_pos_spin.setValue(self.settings_profile.meas_pos)
         self.pickup_raw_spin.setValue(self._settings.pickup_raw)
@@ -1777,8 +2295,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scan_half_range_spin.setValue(self._settings.scan_half_range_cm)
         self.scan_step_spin.setValue(self._settings.scan_step_cm)
         self.scan_settle_spin.setValue(self._settings.scan_settle_s)
+        self.vacuum_toggle_btn.setChecked(bool(self._settings.vacuum_enabled))
+        self._set_vacuum_toggle_visual(bool(self._settings.vacuum_enabled))
+        self._update_vacuum_status()
+        del blockers
 
     def _apply_profile_to_ui(self, reset_motion: bool = False) -> None:
+        blockers = [
+            QtCore.QSignalBlocker(widget)
+            for widget in (
+                self.meas_pos_spin,
+                self.pickup_raw_spin,
+                self.dropoff_raw_spin,
+                self.susceptibility_raw_spin,
+                self.z_velocity_spin,
+                self.jog_step_spin,
+                self.target_raw_spin,
+            )
+        ]
         if reset_motion:
             self.pickup_raw_spin.setValue(self.settings_profile.sample_bottom)
             self.dropoff_raw_spin.setValue(self.settings_profile.sample_bottom + int(self.settings_profile.sample_height_counts * 0.9))
@@ -1787,6 +2321,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.jog_step_spin.setValue(self._safe_jog_step())
             self.target_raw_spin.setValue(self.settings_profile.meas_pos)
         self.meas_pos_spin.setValue(self.settings_profile.meas_pos)
+        del blockers
         self.meas_pos_pill.setText(f"MeasPos {self.settings_profile.meas_pos:,}")
         self._calibration = read_calibration_from_settings(self.settings_profile.path)
         self._pending_meas_pos_suggestion = None
@@ -1815,18 +2350,40 @@ class MainWindow(QtWidgets.QMainWindow):
         return int(round(cm_value * counts_per_cm))
 
     def _measurement_sign(self) -> int:
+        meas_pos = self.meas_pos_spin.value() if hasattr(self, "meas_pos_spin") else self.settings_profile.meas_pos
+        if meas_pos > 0:
+            return 1
+        if meas_pos < 0:
+            return -1
         counts_per_cm = self._counts_per_cm()
         if counts_per_cm > 0:
             return 1
         if counts_per_cm < 0:
             return -1
-        return 1 if self.settings_profile.meas_pos >= 0 else -1
+        return 1
+
+    def _soft_downward_margin_cm(self) -> float:
+        margin_cm = 3.0
+        if hasattr(self, "sample_height_spin") and hasattr(self, "scan_half_range_spin"):
+            margin_cm = max(
+                margin_cm,
+                float(self.sample_height_spin.value()) / 2.0 + float(self.scan_half_range_spin.value()) + 0.75,
+            )
+        return margin_cm
+
+    def _downward_soft_limit_raw(self) -> int:
+        sign = self._measurement_sign()
+        margin_raw = self._cm_to_raw(self._soft_downward_margin_cm())
+        if margin_raw is None:
+            margin_raw = sign * max(1000, abs(self.meas_pos_spin.value()) // 25)
+        else:
+            margin_raw = sign * abs(int(margin_raw))
+        return int(self.meas_pos_spin.value() + margin_raw)
 
     def _safe_raw_bounds(self) -> tuple[int, int]:
-        sign = self._measurement_sign()
-        vb6_bottom_limit = sign * int(round(abs(self.settings_profile.meas_pos) * 1.15))
-        logical_min = min(0, vb6_bottom_limit)
-        logical_max = max(0, vb6_bottom_limit)
+        soft_limit_raw = self._downward_soft_limit_raw()
+        logical_min = min(0, soft_limit_raw)
+        logical_max = max(0, soft_limit_raw)
         return logical_min, logical_max
 
     def _settings_snapshot_dir(self, target: Path) -> Path:
@@ -2019,11 +2576,54 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         )
 
+    def _move_tolerance_counts(self) -> int:
+        return max(POSITION_TOLERANCE_COUNTS, abs(self._counts_per_cm()) // 10, 100)
+
+    def _set_motion_fault(self, message: str | None) -> None:
+        self._motion_fault_message = "" if message is None else message
+        self.safety_label.setProperty("faultActive", bool(self._motion_fault_message))
+        self.safety_label.style().unpolish(self.safety_label)
+        self.safety_label.style().polish(self.safety_label)
+        self.safety_label.update()
+
+    def _movement_is_downward(self, start_raw: int, target_raw: int) -> bool:
+        return (target_raw - start_raw) * self._measurement_sign() > 0
+
+    def _handle_motion_result(self, start_raw: int, target_raw: int, result: MoveResult, action: str) -> bool:
+        tolerance = self._move_tolerance_counts()
+        if abs(result.final_position - target_raw) <= tolerance:
+            self._set_motion_fault(None)
+            return True
+        try:
+            self.controller.stop()
+        except Exception:
+            pass
+        try:
+            self.controller.halt()
+        except Exception:
+            pass
+        if self._movement_is_downward(start_raw, target_raw):
+            message = (
+                "Unexpected motor resistance stopped the holder before it reached the requested lower position. "
+                f"{action} requested {target_raw:,} raw but stopped at {result.final_position:,}. "
+                "Drive power was turned off; check clearance before continuing."
+            )
+        else:
+            message = (
+                f"{action} did not settle at the requested position. Requested {target_raw:,}, reached {result.final_position:,}. "
+                "Drive power was turned off; check the Z axis before continuing."
+            )
+        self._append(message)
+        self._set_motion_fault(message)
+        return False
+
     def _update_connections_status(self) -> None:
         motor_status = "connected" if self.controller.is_connected else "disconnected"
         squid_status = "connected" if self.squid.is_connected else "disconnected"
+        vacuum_status = "connected" if self.vacuum.is_connected else "disconnected"
+        vacuum_state = "ON" if self.vacuum.is_connected and self.vacuum.is_enabled else "OFF"
         self.connections_status.setText(
-            f"Motor {motor_status}; SQUID {squid_status}. Top switch reads status bit 4."
+            f"Motor {motor_status}; SQUID {squid_status}; Vacuum comm {vacuum_status}, vacuum {vacuum_state}. Top switch reads status bit 4."
         )
 
     def _profile_model(self, current_raw: int | None) -> ProfileModel:
@@ -2034,7 +2634,7 @@ class MainWindow(QtWidgets.QMainWindow):
         measurement_cutoff_margin = max(int(round(counts_per_cm * 0.55)), 900)
         bands = (
             ProfileBand(
-                "Susc.\nmeter",
+                "χ-meter coil",
                 self.settings_profile.scoil_pos + susc_height,
                 self.settings_profile.scoil_pos,
                 18.0,
@@ -2043,7 +2643,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 value_text=f"{self.settings_profile.scoil_pos:,}",
             ),
             ProfileBand(
-                "AF\ncoils",
+                "AF coil",
                 self.settings_profile.af_pos + af_height,
                 self.settings_profile.af_pos,
                 18.0,
@@ -2052,7 +2652,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 value_text=f"{self.settings_profile.af_pos:,}",
             ),
             ProfileBand(
-                "Measurement\nzone",
+                "Measurement level",
                 self.meas_pos_spin.value() + meas_height,
                 self.meas_pos_spin.value(),
                 18.0,
@@ -2062,9 +2662,9 @@ class MainWindow(QtWidgets.QMainWindow):
             ),
         )
         indicators = [
-            ProfileIndicator("Top switch\nmotor 0", 0, "left", "#7a0219", "0", bar_half_width=18.0, emphasis=True),
+            ProfileIndicator("Top switch", 0, "left", "#7a0219", "0", bar_half_width=18.0, emphasis=True),
             ProfileIndicator(
-                "1.0 in\ntop",
+                "1-inch sample top",
                 self.settings_profile.sample_top,
                 "right",
                 "#8f4b45",
@@ -2074,7 +2674,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 emphasis=True,
             ),
             ProfileIndicator(
-                "XY stage\nholder bottom",
+                "Sample bottom / XY stage",
                 self.settings_profile.sample_bottom,
                 "left",
                 "#31566d",
@@ -2082,7 +2682,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 bar_half_width=18.0,
             ),
             ProfileIndicator(
-                "Zero\nbaseline",
+                "Baseline",
                 self.settings_profile.zero_pos,
                 "right",
                 "#8a6a44",
@@ -2164,6 +2764,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._settings.jog_step_raw = int(self.jog_step_spin.value())
         self._settings.target_raw = int(self.target_raw_spin.value())
 
+    @QtCore.Slot(str, int)
+    def _profile_target_selected(self, label: str, raw_position: int) -> None:
+        self.target_raw_spin.setValue(int(raw_position))
+        self._append(f"Selected profile target {label}: {raw_position:,} raw.")
+
+    @QtCore.Slot(str, int)
+    def _profile_target_activated(self, label: str, raw_position: int) -> None:
+        self._profile_target_selected(label, raw_position)
+        self._move_checked(int(raw_position), f"Move To {label}")
+
     def _on_velocity_changed(self, value: int) -> None:
         if self._confirm_speed_if_needed(int(value)):
             self._update_motion_hints()
@@ -2214,8 +2824,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._settings.scan_settle_s = float(self.scan_settle_spin.value())
 
     def _update_safety_label(self, current_raw: int | None) -> None:
-        low, high = self._safe_raw_bounds()
-        message = f"Safe envelope: top switch / zero at 0, lower scan clip at {max(abs(low), abs(high)):,} raw (1.15 x |MeasPos|)."
+        if self._motion_fault_message:
+            message = self._motion_fault_message
+            if current_raw is not None:
+                message += f" Live Z {current_raw:,}."
+            self.safety_label.setText(message)
+            return
+        soft_limit_raw = self._downward_soft_limit_raw()
+        margin_cm = self._soft_downward_margin_cm()
+        message = (
+            f"Safe envelope: top switch / zero at 0, software lower clip at {soft_limit_raw:,} raw "
+            f"(~{margin_cm:.2f} cm below MeasPos). Downward travel also halts on unexpected motor resistance."
+        )
         if current_raw is not None:
             message += f" Live Z {current_raw:,}."
         self.safety_label.setText(message)
@@ -2260,6 +2880,11 @@ class MainWindow(QtWidgets.QMainWindow):
         velocity = int(self.z_velocity_spin.value())
         if not self._confirm_speed_if_needed(velocity):
             return None
+        try:
+            start_raw = self.controller.read_position()
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, f"{action} Error", str(exc))
+            return None
         if not allow_outside_safe_bounds:
             low, high = self._safe_raw_bounds()
             if not (low <= target <= high):
@@ -2275,6 +2900,10 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, f"{action} Error", str(exc))
             return None
         self._append(f"{action}: target={target:,}, final={result.final_position:,}, success={result.success}")
+        if not self._handle_motion_result(start_raw, target, result, action):
+            self._poll_live_state()
+            QtWidgets.QMessageBox.warning(self, "Motion Safety Stop", self._motion_fault_message)
+            return None
         self._poll_live_state()
         return result
 
@@ -2296,6 +2925,7 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as exc:
             QtWidgets.QMessageBox.warning(self, "Home To Top Error", str(exc))
             return
+        self._set_motion_fault(None)
         self._append(f"Home To Top: final={result.final_position:,}, success={result.success}")
         self._poll_live_state()
 
@@ -2344,6 +2974,10 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         direction = "Jog Up" if upward else "Jog Down"
         self._append(f"{direction}: delta={delta:,}, final={result.final_position:,}, success={result.success}")
+        if not self._handle_motion_result(current, target, result, direction):
+            self._poll_live_state()
+            QtWidgets.QMessageBox.warning(self, "Motion Safety Stop", self._motion_fault_message)
+            return
         self._poll_live_state()
 
     def _take_squid_baseline(self) -> None:
@@ -2387,7 +3021,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if lower > upper:
             QtWidgets.QMessageBox.warning(self, "Unsafe Scan Window", "The requested scan window falls completely outside the enforced safe range.")
             return None
-        direction = 1 if upper >= lower else -1
         step_abs = abs(step_counts)
         values: list[int] = []
         current = lower
@@ -2421,7 +3054,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scan_start_btn.setEnabled(False)
         self.scan_stop_btn.setEnabled(True)
         self.apply_suggestion_btn.setEnabled(False)
-        self.scan_result_label.setText("Running scan…")
+        scan_start = targets[0]
+        scan_stop = targets[-1]
+        self.scan_result_label.setText(
+            f"Running scan from {scan_start:,} to {scan_stop:,} raw with {len(targets)} points."
+        )
         worker = ScanWorker(
             controller=self.controller,
             squid=self.squid,
@@ -2444,7 +3081,8 @@ class MainWindow(QtWidgets.QMainWindow):
         worker.finished.connect(self._scan_thread_finished)
         self._scan_worker = worker
         self._append(
-            f"Starting measurement Z scan with {len(targets)} points around assumed target {assumed_target:,}."
+            f"Starting measurement Z scan with {len(targets)} points around assumed target {assumed_target:,}; "
+            f"sample height {self.sample_height_spin.value():.3f} cm, step {self.scan_step_spin.value():.3f} cm, settle {self.scan_settle_spin.value():.2f} s."
         )
         worker.start()
 
@@ -2471,9 +3109,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.apply_suggestion_btn.setEnabled(False)
         summary = "No suggestion available."
         if result.suggested_z_cm is not None and result.suggested_meas_pos_raw is not None and result.suggested_target_raw is not None:
+            measurement_cm = self._raw_to_cm(result.suggested_target_raw)
             summary = (
-                f"Best fit ({result.fit_method}) gives optimal Z {result.suggested_z_cm:+.3f} cm "
-                f"at holder target {result.suggested_target_raw:,} raw, mapping to MeasPos {result.suggested_meas_pos_raw:,}."
+                f"Best fit ({result.fit_method}) gives optimal holder target {result.suggested_target_raw:,} raw"
+                + ("" if measurement_cm is None else f" ({measurement_cm:+.3f} cm)")
+                + f", mapping to MeasPos {result.suggested_meas_pos_raw:,} raw and Z {result.suggested_z_cm:+.3f} cm."
             )
         if result.note:
             summary = summary + " " + result.note
@@ -2482,6 +3122,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(str)
     def _handle_scan_failed(self, message: str) -> None:
+        if "did not settle" in message or "protect the holder" in message:
+            self._set_motion_fault(message)
         self.scan_result_label.setText(message)
         self._append(f"Scan failed: {message}")
         QtWidgets.QMessageBox.warning(self, "Scan Failed", message)
@@ -2521,6 +3163,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._settings = UpDownSettings(
                 motor_port=self.motor_port_combo.currentText().strip(),
                 squid_port=self.squid_port_combo.currentText().strip(),
+                vacuum_port=self.vacuum_port_combo.currentText().strip(),
                 squid_baud=self._settings.squid_baud,
                 settings_path=self.settings_path_edit.text().strip(),
                 min_raw_count=self._safe_raw_bounds()[0],
@@ -2535,6 +3178,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 scan_half_range_cm=float(self.scan_half_range_spin.value()),
                 scan_step_cm=float(self.scan_step_spin.value()),
                 scan_settle_s=float(self.scan_settle_spin.value()),
+                vacuum_enabled=bool(self.vacuum_toggle_btn.isChecked()),
             )
             save_settings(self._settings)
         except Exception:
@@ -2545,6 +3189,10 @@ class MainWindow(QtWidgets.QMainWindow):
             pass
         try:
             self.squid.disconnect()
+        except Exception:
+            pass
+        try:
+            self.vacuum.disconnect()
         except Exception:
             pass
         super().closeEvent(event)
