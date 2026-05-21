@@ -1,6 +1,17 @@
 @echo off
 setlocal
-cd /d %~dp0
-python -m PyInstaller --noconfirm --clean --windowed --name RapidPyChangerXY --onefile --icon assets\changer_xy_control_icon.ico --add-data assets;assets main.py
+set "APP_DIR=%~dp0"
+set "REPO_ROOT=%~dp0..\.."
+cd /d "%APP_DIR%"
+set "VENV_PY=%REPO_ROOT%\.venv\Scripts\python.exe"
+if exist "%VENV_PY%" (
+	set "PYTHON_EXE=%VENV_PY%"
+) else (
+	set "PYTHON_EXE=python"
+)
+"%PYTHON_EXE%" "%APP_DIR%tools\generate_icon.py"
+pushd "%REPO_ROOT%"
+"%PYTHON_EXE%" -m PyInstaller --noconfirm --clean installer\rapid_changer_xy.spec
 if %errorlevel% neq 0 exit /b %errorlevel%
-echo Build complete: dist\RapidPyChangerXY.exe
+popd
+echo Build complete: %REPO_ROOT%\dist\RapidPyChangerXY.exe
