@@ -13,7 +13,13 @@ This index tracks the compiled RapidPy operator apps, the current manual source,
 | AF Tuner | `dist/RapidPyAFTuner.exe` | README today; long-form manual pending | `docs/site/apps/index.html#af-tuner` | Planned |
 | XY Sample Changer | `dist/RapidPyChangerXY.exe` | `docs/changer-xy-control-user-manual.md` | `docs/site/apps/index.html#changer-xy-control` | Not yet |
 | Up/Down Control | `dist/RapidPyUpDown.exe` | `docs/updown-control-user-manual.md` | `docs/site/apps/index.html#updown-control` | Yes |
-| RAPID v4 Main Shell | `dist/RapidPySystemShell.exe` | README today; long-form manual pending | `docs/site/apps/index.html#rapid-v4-main-shell` | Planned |
+
+The current compiled-app index intentionally excludes developer or migration-only launchers that still depend on adjacent source trees at runtime.
+
+### Not Yet In The Normalized Compiled-App Set
+
+- `RapidPy/system_shell` still behaves primarily as a source-side launcher during migration and is not yet treated as a normalized one-file compiled app.
+- `RapidPy/dc_motor_control` still uses its older local build path and is not yet listed on the compiled-app website surfaces.
 
 ## Transition-Sheet Scope
 
