@@ -8,6 +8,7 @@ RapidPy now contains multiple subsystem control apps to support a staged VB6 -> 
 - `gaussmeter_control`: 908A gaussmeter operator panel backed by the legacy `gm0.dll` driver
 - `vrm_logger`: VRM logging and SQUID live plotting
 - `af_tuner`: AF coil tuning panel based on `frmAFTuner`
+- `af_clip_test`: AF clipping-test panel based on the clipping workflow inside `frmAFTuner`
 - `changer_xy_control`: hole/sample list and queue prep based on `frmChanger`
 - `updown_control`: vertical axis controls based on `frmDCMotors` up/down panel sections
 - `dc_motor_control`: general motor panel based on `frmDCMotors`
