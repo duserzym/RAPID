@@ -606,6 +606,36 @@
           ["User manual", "docs/changer-xy-control-user-manual.md", "https://github.com/duserzym/RAPID/blob/main/docs/changer-xy-control-user-manual.md"]
         ]
       },
+      "updown-control": {
+        title: "Up/Down Control",
+        status: "In Progress",
+        statusClass: "wip",
+        summary: "Z-axis operator panel with VB6-compatible raw motion, live top-switch readback, vacuum control, and SQUID-guided MeasPos optimization.",
+        screenshot: "../images/updown-control-overview.png",
+        screenshotAlt: "RapidPy Up/Down Control screenshot",
+        placeholderIcon: "↕️",
+        facts: [
+          ["Module", "RapidPy/updown_control"],
+          ["VB6 owner", "frmDCMotors.frm"],
+          ["Workflow", "SQUID scan + MeasPos fit"]
+        ],
+        description: [
+          "Combines the everyday Z-axis controls from the VB6 motion workflow with a clearer header status area, a clickable bore profile, and compact raw-to-cm operator guidance.",
+          "The current Python app also brings vacuum comms and measurement-height optimization into the same panel, so operators can baseline, scan, fit, accept a suggested MeasPos, and save it back to the active settings file without jumping between forms."
+        ],
+        launch: "conda activate paleomag\npython RapidPy/updown_control/main.py",
+        notes: [
+          "Default startup references come from VB6/settings/Paleomag_v3.INI unless another settings file was selected previously.",
+          "The published screenshots are captured from the current Python UI and mirrored into docs/site/images so the Pages deploy can publish them directly.",
+          "The full user manual now includes a VB6 transition sheet so operators can map legacy frmDCMotors and vacuum tasks directly onto the Python panel.",
+          "The current safety path uses a MeasPos-relative lower clip plus stopped-short detection because the shared Python motor wrapper does not yet expose a dedicated motor-resistance bit."
+        ],
+        links: [
+          ["App source folder", "RapidPy/updown_control", "https://github.com/duserzym/RAPID/tree/main/RapidPy/updown_control"],
+          ["README", "RapidPy/updown_control/README.md", "https://github.com/duserzym/RAPID/blob/main/RapidPy/updown_control/README.md"],
+          ["User manual", "docs/updown-control-user-manual.md", "https://github.com/duserzym/RAPID/blob/main/docs/updown-control-user-manual.md"]
+        ]
+      },
       "rapid-v4-main-shell": {
         title: "RAPID v4 Main Shell",
         status: "In Progress",

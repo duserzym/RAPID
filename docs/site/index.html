@@ -737,13 +737,13 @@
     RapidPy
   </a>
   <ul class="nav-links">
+    <li><a href="#manuals-transition">Manuals</a></li>
     <li><a href="#modules">Modules</a></li>
     <li><a href="#architecture">Architecture</a></li>
     <li><a href="#roadmap">Roadmap</a></li>
     <li><a href="https://github.com/duserzym/RAPID" target="_blank">GitHub ↗</a></li>
   </ul>
 </nav>
-
 <!-- ── Hero ─────────────────────────────────────────────────────────────── -->
 <header class="hero">
   <div class="hero-orb hero-orb-1"></div>
@@ -1093,6 +1093,46 @@
       </div>
     </div>
 
+    <!-- Up/Down Control — WIP -->
+    <div class="module-card">
+      <a class="module-card-media-link" href="apps/index.html#updown-control">
+        <img
+          class="module-card-image"
+          src="images/updown-control-overview.png"
+          alt="RapidPy Up/Down Control screenshot"
+          loading="lazy"
+          onerror="this.style.display='none'; this.parentElement.nextElementSibling.style.display='flex';"
+        />
+      </a>
+      <div class="module-card-image-placeholder" style="display:none;">
+        <div class="module-card-icon" style="background: linear-gradient(135deg,#4A148C,#2D0A5A); width:80px; height:80px; border-radius:20px;">
+          <span style="font-size:2rem">↕️</span>
+        </div>
+      </div>
+      <div class="module-card-body">
+        <div class="module-card-header">
+          <div class="module-card-icon" style="background: linear-gradient(135deg,#4A148C,#2D0A5A);">
+            <span style="font-size:1.4rem">↕️</span>
+          </div>
+          <span class="module-badge badge-wip">In Progress</span>
+        </div>
+        <h3><a class="module-card-title-link" href="apps/index.html#updown-control">Up/Down Control</a></h3>
+        <p>
+          Z-axis operator panel aligned to <code>frmDCMotors</code>.
+          Combines raw-count motion, top-switch readback, vacuum control,
+          and SQUID-guided MeasPos scanning in one window.
+        </p>
+        <ul class="module-specs">
+          <li><span class="spec-key">VB6 src</span>frmDCMotors.frm</li>
+          <li><span class="spec-key">Scan</span>SQUID baseline + fit-assisted MeasPos</li>
+        </ul>
+        <div class="module-card-actions">
+          <a href="apps/index.html#updown-control" class="module-card-link">Open app page →</a>
+          <a href="https://github.com/duserzym/RAPID/blob/main/docs/updown-control-user-manual.md" class="module-card-link-secondary" target="_blank" rel="noreferrer">Manual ↗</a>
+        </div>
+      </div>
+    </div>
+
     <!-- System Shell — In Progress -->
     <div class="module-card">
       <a class="module-card-media-link" href="apps/index.html#rapid-v4-main-shell">
@@ -1176,6 +1216,90 @@
       </div>
     </div>
 
+  </div>
+</section>
+
+<section id="manuals-transition">
+  <p class="section-eyebrow">Manuals</p>
+  <h2 class="section-title">Compiled app manuals and VB6 transition sheets</h2>
+  <p class="section-subtitle">
+    Use this index to see which compiled apps already have a full manual,
+    which ones still rely on a README, and where a dedicated VB6 transition
+    sheet has already been written.
+  </p>
+
+  <div class="modules-grid">
+    <div class="module-card">
+      <div class="module-card-body">
+        <div class="module-card-header">
+          <div class="module-card-icon" style="background: linear-gradient(135deg,#5d0013,#7A0219);">
+            <span style="font-size:1.4rem">📚</span>
+          </div>
+          <span class="module-badge badge-ready">Index</span>
+        </div>
+        <h3>Manual Index</h3>
+        <p>
+          Repo-side index of compiled executables, manual sources, website app pages,
+          and current VB6 transition-sheet coverage.
+        </p>
+        <ul class="module-specs">
+          <li><span class="spec-key">Source</span>Top-level docs markdown</li>
+          <li><span class="spec-key">Coverage</span>Compiled apps only</li>
+        </ul>
+        <div class="module-card-actions">
+          <a href="https://github.com/duserzym/RAPID/blob/main/docs/compiled-apps-manual-index.md" class="module-card-link" target="_blank" rel="noreferrer">Open manual index ↗</a>
+          <a href="apps/index.html#updown-control" class="module-card-link-secondary">App pages →</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-card-body">
+        <div class="module-card-header">
+          <div class="module-card-icon" style="background: linear-gradient(135deg,#4A148C,#2D0A5A);">
+            <span style="font-size:1.4rem">↕️</span>
+          </div>
+          <span class="module-badge badge-wip">Transition Sheet Live</span>
+        </div>
+        <h3>Up/Down Control</h3>
+        <p>
+          Current reference manual for the new transition-sheet format, mapping
+          <code>frmDCMotors</code> and vacuum tasks onto the Python Z-axis panel.
+        </p>
+        <ul class="module-specs">
+          <li><span class="spec-key">Manual</span>Full</li>
+          <li><span class="spec-key">VB6</span>Transition sheet included</li>
+        </ul>
+        <div class="module-card-actions">
+          <a href="https://github.com/duserzym/RAPID/blob/main/docs/updown-control-user-manual.md" class="module-card-link" target="_blank" rel="noreferrer">Manual ↗</a>
+          <a href="apps/index.html#updown-control" class="module-card-link-secondary">App page →</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-card-body">
+        <div class="module-card-header">
+          <div class="module-card-icon" style="background: linear-gradient(135deg,#1A3A5C,#0D1F35);">
+            <span style="font-size:1.4rem">🗂️</span>
+          </div>
+          <span class="module-badge badge-ready">Manual Coverage</span>
+        </div>
+        <h3>What Exists Today</h3>
+        <p>
+          Full manuals currently exist for Gaussmeter Control, VRM Decay Logger,
+          ADwin Communications Tester, XY Sample Changer, and Up/Down Control.
+        </p>
+        <ul class="module-specs">
+          <li><span class="spec-key">README-only</span>COM Port Mapper, AF Tuner, Main Shell</li>
+          <li><span class="spec-key">Next target</span>Extend transition sheets beyond Up/Down</li>
+        </ul>
+        <div class="module-card-actions">
+          <a href="https://github.com/duserzym/RAPID/blob/main/docs/changer-xy-control-user-manual.md" class="module-card-link" target="_blank" rel="noreferrer">Changer manual ↗</a>
+          <a href="https://github.com/duserzym/RAPID/blob/main/docs/compiled-apps-manual-index.md" class="module-card-link-secondary" target="_blank" rel="noreferrer">Coverage table ↗</a>
+        </div>
+      </div>
+    </div>
   </div>
 </section>
 
