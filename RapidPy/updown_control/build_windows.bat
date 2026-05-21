@@ -1,7 +1,17 @@
 @echo off
 setlocal
-cd /d %~dp0
-python tools\generate_icon.py
-python -m PyInstaller --noconfirm --clean --windowed --name RapidPyUpDown --onefile --icon assets\updown_control_icon.ico main.py
+set "APP_DIR=%~dp0"
+set "REPO_ROOT=%~dp0..\.."
+cd /d "%APP_DIR%"
+set "VENV_PY=%REPO_ROOT%\.venv\Scripts\python.exe"
+if exist "%VENV_PY%" (
+	set "PYTHON_EXE=%VENV_PY%"
+) else (
+	set "PYTHON_EXE=python"
+)
+"%PYTHON_EXE%" "%APP_DIR%tools\generate_icon.py"
+pushd "%REPO_ROOT%"
+"%PYTHON_EXE%" -m PyInstaller --noconfirm --clean installer\rapid_updown.spec
 if %errorlevel% neq 0 exit /b %errorlevel%
-echo Build complete: dist\RapidPyUpDown.exe
+popd
+echo Build complete: %REPO_ROOT%\dist\RapidPyUpDown.exe
