@@ -1,6 +1,16 @@
 @echo off
 setlocal
-cd /d %~dp0
-python -m PyInstaller --noconfirm --clean --windowed --name RapidPySystemShell --onefile main.py
+set "APP_DIR=%~dp0"
+set "REPO_ROOT=%~dp0..\.."
+cd /d "%APP_DIR%"
+set "VENV_PY=%REPO_ROOT%\.venv\Scripts\python.exe"
+if exist "%VENV_PY%" (
+	set "PYTHON_EXE=%VENV_PY%"
+) else (
+	set "PYTHON_EXE=python"
+)
+pushd "%REPO_ROOT%"
+"%PYTHON_EXE%" -m PyInstaller --noconfirm --clean installer\rapid_system_shell.spec
 if %errorlevel% neq 0 exit /b %errorlevel%
-echo Build complete: dist\RapidPySystemShell.exe
+popd
+echo Build complete: %REPO_ROOT%\dist\RapidPySystemShell.exe
