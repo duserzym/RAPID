@@ -22,14 +22,14 @@ def draw_icon(output_png: Path, output_ico: Path) -> None:
     painter.setBrush(gradient)
     painter.drawRoundedRect(QtCore.QRectF(0, 0, size, size), 256, 256)
 
-    title_font = QtGui.QFont("Avenir Next", 106)
+    title_font = QtGui.QFont("Avenir Next", 128)
     title_font.setBold(True)
     title_font.setLetterSpacing(QtGui.QFont.PercentageSpacing, 104)
     painter.setFont(title_font)
     painter.setPen(QtGui.QColor("#f4ede0"))
-    painter.drawText(QtCore.QRectF(0, 96, size, 110), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, "XY")
+    painter.drawText(QtCore.QRectF(0, 124, size, 132), QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, "XY")
 
-    tray_rect = QtCore.QRectF(238, 226, 548, 548)
+    tray_rect = QtCore.QRectF(238, 286, 548, 548)
     painter.setBrush(QtGui.QColor("#050505"))
     painter.drawRoundedRect(tray_rect, 66, 66)
 
