@@ -1197,43 +1197,43 @@
       </div>
     </div>
 
-    <!-- Zijderveld Viewer — Released -->
+    <!-- RapidPy DataViewer — Released -->
     <div class="module-card">
-      <a class="module-card-media-link" href="apps/index.html#zijderveld-viewer">
+      <a class="module-card-media-link" href="apps/index.html#data-viewer">
         <img
           class="module-card-image"
           src="images/zijderveld-viewer-overview.png"
-          alt="RapidPy Zijderveld Viewer screenshot"
+          alt="RapidPy DataViewer screenshot"
           loading="lazy"
           onerror="this.style.display='none'; this.parentElement.nextElementSibling.style.display='flex';"
         />
       </a>
       <div class="module-card-image-placeholder" style="display:none;">
-        <div class="module-card-icon" style="background: linear-gradient(135deg,#1a3a5c,#0d2035); width:80px; height:80px; border-radius:20px;">
-          <span style="font-size:2rem">📐</span>
+        <div class="module-card-icon module-card-icon-large" style="background: #CBB15C; width:80px; height:80px; border-radius:20px;">
+          <img class="module-card-icon-asset" src="https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/data_viewer/assets/data_viewer_icon.png?v=20260526" alt="RapidPy DataViewer icon" loading="lazy" />
         </div>
       </div>
       <div class="module-card-body">
         <div class="module-card-header">
-          <div class="module-card-icon" style="background: linear-gradient(135deg,#1a3a5c,#0d2035);">
-            <span style="font-size:1.4rem">📐</span>
+          <div class="module-card-icon" style="background: #CBB15C;">
+            <img class="module-card-icon-asset" src="https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/data_viewer/assets/data_viewer_icon.png?v=20260526" alt="RapidPy DataViewer icon" loading="lazy" />
           </div>
           <span class="module-badge badge-ready">Released</span>
         </div>
-        <h3><a class="module-card-title-link" href="apps/index.html#zijderveld-viewer">Zijderveld Viewer</a></h3>
+        <h3><a class="module-card-title-link" href="apps/index.html#data-viewer">RapidPy DataViewer</a></h3>
         <p>
-          Standalone demagnetisation data viewer: Zijderveld diagram, Lambert equal-area
-          stereonet, and intensity-decay curve. Loads CSV files or uses built-in
-          synthetic demo data. Runs independently of all hardware.
+          Standalone demagnetisation data viewer with 2D component plots, 3D vector view,
+          equal-area stereonet, normalized moment quicklook, and lightweight next-step hints.
+          Opens CIT `.sam` sets, MagIC directories, and auto-reloads watched files.
         </p>
         <ul class="module-specs">
-          <li><span class="spec-key">Plots</span>Zijderveld, stereonet, intensity decay</li>
-          <li><span class="spec-key">Input</span>CSV (label, N, E, U columns)</li>
+          <li><span class="spec-key">Plots</span>2D, 3D, stereonet, intensity, paleointensity</li>
+          <li><span class="spec-key">Input</span>CIT `.sam`, MagIC, legacy CSV</li>
           <li><span class="spec-key">Deps</span>PySide6 + pyqtgraph</li>
         </ul>
         <div class="module-card-actions">
-          <a href="apps/index.html#zijderveld-viewer" class="module-card-link">Open app page →</a>
-          <a href="https://github.com/duserzym/RAPID/blob/main/RapidPy/zijderveld_viewer/README.md" class="module-card-link-secondary" target="_blank" rel="noreferrer">README ↗</a>
+          <a href="apps/index.html#data-viewer" class="module-card-link">Open app page →</a>
+          <a href="https://github.com/duserzym/RAPID/blob/main/RapidPy/data_viewer/README.md" class="module-card-link-secondary" target="_blank" rel="noreferrer">README ↗</a>
         </div>
       </div>
     </div>
@@ -1351,7 +1351,7 @@
 │   ├── <span class="dir">changer_xy_control/</span>     <span class="comment"># ✅ Released</span>
 │   ├── <span class="dir">updown_control/</span>         <span class="comment"># ✅ Released</span>
 │   ├── <span class="dir">dc_motor_control/</span>       <span class="comment"># 🔧 In progress</span>
-│   ├── <span class="dir">zijderveld_viewer/</span>      <span class="comment"># ✅ Released — standalone plot viewer</span>
+│   ├── <span class="dir">data_viewer/</span>            <span class="comment"># ✅ Released — standalone demagnetisation data viewer</span>
 │   └── <span class="dir">rapid_main/</span>             <span class="comment"># 🔧 Phase 2 — full system shell</span>
 │
 ├── <span class="dir">installer/</span>               <span class="comment"># PyInstaller specs + Inno Setup</span>
@@ -1404,7 +1404,7 @@
         Full operator UI shell (<code>rapid_main</code>) reaches Phase 2: all 8
         settings tabs populated, 9 dialog windows wired (Zijderveld plots, SQUID comm,
         IRM/ARM, vacuum, sample select, debug console), standalone
-        <code>zijderveld_viewer</code> utility released.
+        <code>data_viewer</code> utility released.
         Backend hardware integration (Phase 3) now active.
       </div>
     </div>

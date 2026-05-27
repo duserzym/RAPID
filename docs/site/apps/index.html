@@ -714,31 +714,33 @@
           ["README", "RapidPy/system_shell/README.md", "https://github.com/duserzym/RAPID/blob/main/RapidPy/system_shell/README.md"]
         ]
       },
-      "zijderveld-viewer": {
-        title: "Zijderveld Viewer",
+      "data-viewer": {
+        title: "RapidPy DataViewer",
         status: "Released",
         statusClass: "ready",
-        summary: "Standalone demagnetisation viewer for Zijderveld plots, stereonets, intensity decay, and quick CSV inspection.",
+        summary: "Standalone demagnetisation data viewer for CIT, MagIC, and CSV inputs with 2D/3D views, stereonets, moment curves, and quick next-step guidance.",
+        icon: "https://raw.githubusercontent.com/duserzym/RAPID/main/RapidPy/data_viewer/assets/data_viewer_icon.png?v=20260526",
         screenshot: "../images/zijderveld-viewer-overview.png",
-        screenshotAlt: "RapidPy Zijderveld Viewer screenshot",
-        placeholderIcon: "📈",
+        screenshotAlt: "RapidPy DataViewer screenshot",
+        placeholderIcon: "📊",
         facts: [
-          ["Module", "RapidPy/zijderveld_viewer"],
-          ["Input", "CSV + built-in demo data"],
+          ["Module", "RapidPy/data_viewer"],
+          ["Input", "CIT, MagIC, CSV"],
           ["Dependency", "PySide6 + pyqtgraph"]
         ],
         description: [
           "Runs independently of the hardware stack and focuses on rapid demagnetisation-data inspection.",
-          "Suitable both as a standalone viewer and as a future dialog component in the larger RAPID shell."
+          "Suitable both as a standalone viewer and as a future dialog component in the larger RAPID shell, with debounced file watching for active measurement runs."
         ],
-        launch: "conda activate paleomag\npython RapidPy/zijderveld_viewer/main.py",
+        launch: "conda activate paleomag\npython RapidPy/data_viewer/main.py",
         notes: [
           "Does not require instrument hardware to launch.",
+          "Auto-watch reloads CIT, MagIC, and CSV sources after file changes settle.",
           "A dedicated user manual is still pending."
         ],
         links: [
-          ["App source folder", "RapidPy/zijderveld_viewer", "https://github.com/duserzym/RAPID/tree/main/RapidPy/zijderveld_viewer"],
-          ["README", "RapidPy/zijderveld_viewer/README.md", "https://github.com/duserzym/RAPID/blob/main/RapidPy/zijderveld_viewer/README.md"]
+          ["App source folder", "RapidPy/data_viewer", "https://github.com/duserzym/RAPID/tree/main/RapidPy/data_viewer"],
+          ["README", "RapidPy/data_viewer/README.md", "https://github.com/duserzym/RAPID/blob/main/RapidPy/data_viewer/README.md"]
         ]
       }
     };
