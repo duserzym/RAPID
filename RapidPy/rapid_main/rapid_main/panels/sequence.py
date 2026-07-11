@@ -83,7 +83,6 @@ class SequencePanel(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
-        hw_btn.setWordWrap(True)
         hw_btn.clicked.connect(self._preset_hawaiian)
 
         rw_btn = QtWidgets.QPushButton('Rockmag "the Works"\n(NRM + ARM + IRM + AF/IRM)')
@@ -93,7 +92,6 @@ class SequencePanel(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
-        rw_btn.setWordWrap(True)
         rw_btn.clicked.connect(self._preset_works)
 
         row.addWidget(hw_btn, 0, 0)
@@ -211,7 +209,13 @@ class SequencePanel(QtWidgets.QWidget):
             spin = QtWidgets.QDoubleSpinBox()
             spin.setRange(lo, hi)
             spin.setValue(default)
-            spin.setFixedWidth(80)
+            spin.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
+            spin.setMinimumWidth(110)
+            spin.setDecimals(3)
+            spin.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
             spin.setEnabled(False)
             spin.valueChanged.connect(self._rebuild_preview)
             parent_chk.toggled.connect(spin.setEnabled)
