@@ -765,12 +765,54 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ── Diagnostic launchers (stubs — wired in Phase 3) ───────────────────────
     def _launch_dc_motors(self) -> None:
-        self._run_owned_stub_dialog(
-            "dc_motors",
-            "dc_motors_panel",
-            "DC Motors",
-            "Launches dc_motor_control app (Phase 3)",
+        dc_motor_script = (
+            Path(__file__).resolve().parents[2] / "dc_motor_control" / "main.py"
         )
+        if not dc_motor_script.exists():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "DC Motors",
+                "DC Motors launcher script is missing.",
+            )
+            return
+
+        if (
+            hasattr(self, "_dc_motor_proc")
+            and getattr(self, "_dc_motor_proc")
+            and self._dc_motor_proc.poll() is None
+        ):
+            QtWidgets.QMessageBox.information(
+                self,
+                "DC Motors",
+                "DC Motors is already running.",
+            )
+            return
+
+        try:
+            dc_motor_lease = self.acquire_device("dc_motors", "dc_motors_panel")
+        except DeviceOwnershipError as exc:
+            QtWidgets.QMessageBox.warning(self, "DC Motors", str(exc))
+            return
+
+        try:
+            self._dc_motor_proc = subprocess.Popen(
+                [sys.executable, str(dc_motor_script)],
+                cwd=str(dc_motor_script.parent),
+            )
+            self._dc_motor_lease = dc_motor_lease
+        except OSError as exc:
+            dc_motor_lease.release()
+            QtWidgets.QMessageBox.warning(
+                self,
+                "DC Motors",
+                f"Unable to launch DC Motors utility:\n{exc}",
+            )
+            self._dc_motor_proc = None
+            self._dc_motor_lease = None
+            return
+
+        self.set_status("DC Motors launched in a separate window.")
+        QtCore.QTimer.singleShot(1000, self._finalize_dc_motor_launch)
 
     @staticmethod
     def _af_demo_labels() -> list[str]:
@@ -875,6 +917,21 @@ class MainWindow(QtWidgets.QMainWindow):
             lambda _parent: _StubDialog(),
             modal=modal,
         )
+
+    def _finalize_dc_motor_launch(self) -> None:
+        proc = getattr(self, "_dc_motor_proc", None)
+        if proc is None:
+            return
+
+        if proc.poll() is None:
+            QtCore.QTimer.singleShot(1000, self._finalize_dc_motor_launch)
+            return
+
+        lease = getattr(self, "_dc_motor_lease", None)
+        if lease is not None:
+            lease.release()
+            self._dc_motor_lease = None
+        self._dc_motor_proc = None
 
     def closeEvent(self, event) -> None:
         """Confirm safe shutdown and persist layout settings before closing."""
