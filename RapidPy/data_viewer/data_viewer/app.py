@@ -39,7 +39,7 @@ def _synthetic_dataset() -> ViewerDataset:
         sample = vec + noise
         moment = float(np.linalg.norm(sample))
         dec = math.degrees(math.atan2(float(sample[1]), float(sample[0]))) % 360.0
-        inc = math.degrees(math.asin(float(sample[2]) / max(moment, 1e-15)))
+        inc = math.degrees(math.asin(float(-sample[2]) / max(moment, 1e-15)))
         steps.append(
             MeasurementStep(
                 demag_label="NRM" if mT == 0 else f"AF{mT}",
@@ -84,6 +84,21 @@ def _equal_area(inc_deg: float, dec_deg: float) -> tuple[float, float]:
     return r * math.sin(dec), r * math.cos(dec)
 
 
+def _orthogonal_projection_components(vector: np.ndarray) -> tuple[float, float, float]:
+    north, east, up = float(vector[0]), float(vector[1]), float(vector[2])
+    return east, north, -up
+
+
+def _vector_headers_for_coordinate_system(coordinate_system: str) -> tuple[str, str, str]:
+    if coordinate_system == "specimen":
+        return ("X", "Y", "Z")
+    return ("North", "East", "Up")
+
+
+def _has_paleointensity_data(specimen: ViewerSpecimen | None) -> bool:
+    return bool(specimen and specimen.paleointensity_points)
+
+
 # ── Stereonet widget ──────────────────────────────────────────────────────────
 class StereonetWidget(QtWidgets.QWidget):
     """Lambert equal-area stereonet drawn with QPainter."""
@@ -109,12 +124,12 @@ class StereonetWidget(QtWidgets.QWidget):
         cx, cy = w / 2.0, h / 2.0
 
         # Background circle
-        p.setPen(QtGui.QPen(QtGui.QColor(180, 160, 155), 1.5))
-        p.setBrush(QtGui.QBrush(QtGui.QColor(252, 249, 244)))
+        p.setPen(QtGui.QPen(QtGui.QColor("#c9d0d7"), 1.5))
+        p.setBrush(QtGui.QBrush(QtGui.QColor("#ffffff")))
         p.drawEllipse(QtCore.QPointF(cx, cy), r, r)
 
         # Grid lines and cardinal ticks
-        p.setPen(QtGui.QPen(QtGui.QColor(210, 195, 190), 1))
+        p.setPen(QtGui.QPen(QtGui.QColor("#e2e8f0"), 1))
         p.drawLine(QtCore.QPointF(cx - r, cy), QtCore.QPointF(cx + r, cy))
         p.drawLine(QtCore.QPointF(cx, cy - r), QtCore.QPointF(cx, cy + r))
         for ang in range(0, 360, 30):
@@ -129,7 +144,7 @@ class StereonetWidget(QtWidgets.QWidget):
         font.setPointSize(8)
         font.setBold(True)
         p.setFont(font)
-        p.setPen(QtGui.QPen(QtGui.QColor(155, 135, 130)))
+        p.setPen(QtGui.QPen(QtGui.QColor("#6b7280")))
         p.drawText(QtCore.QPointF(cx - 4, cy - r - 6), "N")
         p.drawText(QtCore.QPointF(cx + r + 6, cy + 4), "E")
         p.drawText(QtCore.QPointF(cx - 4, cy + r + 14), "S")
@@ -165,7 +180,7 @@ class StereonetWidget(QtWidgets.QWidget):
                 font2.setPointSize(7)
                 font2.setBold(False)
                 p.setFont(font2)
-                p.setPen(QtGui.QPen(QtGui.QColor(100, 80, 75)))
+                p.setPen(QtGui.QPen(QtGui.QColor("#4b5563")))
                 p.drawText(pt + QtCore.QPointF(8, -4), step.demag_label)
 
         # Draw connecting path
@@ -192,7 +207,7 @@ class StereonetWidget(QtWidgets.QWidget):
         font3 = p.font()
         font3.setPointSize(8)
         p.setFont(font3)
-        p.setPen(QtGui.QPen(QtGui.QColor(120, 100, 95)))
+        p.setPen(QtGui.QPen(QtGui.QColor("#6b7280")))
         p.setBrush(QtGui.QBrush(QtGui.QColor(122, 2, 25)))
         p.drawEllipse(QtCore.QPointF(cx - r + 10, cy + r - 18), 5, 5)
         p.drawText(QtCore.QPointF(cx - r + 20, cy + r - 14), "Lower hemi")
@@ -217,17 +232,18 @@ class ZijderveldWidget(QtWidgets.QWidget):
         self._label_items: list[pg.TextItem] = [] if _HAS_PG else []
 
         if _HAS_PG:
-            pg.setConfigOptions(antialias=True, background="#faf8f4", foreground="#2f2827")
+            pg.setConfigOptions(antialias=True, background="#ffffff", foreground="#1f2937")
             self._plot = pg.PlotWidget()
             self._plot.setAspectLocked(True)
-            self._plot.showGrid(x=True, y=True, alpha=0.18)
-            self._plot.getAxis("bottom").setLabel("X / North →")
-            self._plot.getAxis("left").setLabel("← Y / East     Down / Z →")
+            self._plot.showGrid(x=True, y=True, alpha=0.14)
+            self._plot.getAxis("bottom").setLabel("East →")
+            self._plot.getAxis("left").setLabel("North ↑    Down ↓")
             self._plot.addLegend(offset=(10, 10))
+            self._plot.setMenuEnabled(False)
 
             self._horiz_line = self._plot.plot(
                 [], [], pen=pg.mkPen("#111111", width=1.5),
-                name="Horizontal projection",
+                name="Horizontal projection (E/N)",
             )
             self._horiz_pts = self._plot.plot(
                 [], [], pen=None,
@@ -237,7 +253,7 @@ class ZijderveldWidget(QtWidgets.QWidget):
             )
             self._vert_line = self._plot.plot(
                 [], [], pen=pg.mkPen("#5c6470", width=1.5, style=QtCore.Qt.DashLine),
-                name="Vertical projection",
+                name="Vertical projection (E/Down)",
             )
             self._vert_pts = self._plot.plot(
                 [], [], pen=None,
@@ -283,14 +299,15 @@ class ZijderveldWidget(QtWidgets.QWidget):
             return
 
         vectors = [vector_for_step(step, self._coordinate_system) for step in self._specimen.steps]
-        n = [float(vector[0]) for vector in vectors]
-        e = [float(vector[1]) for vector in vectors]
-        d = [-float(vector[2]) for vector in vectors]
+        east_north_down = [_orthogonal_projection_components(vector) for vector in vectors]
+        e = [component[0] for component in east_north_down]
+        n = [component[1] for component in east_north_down]
+        d = [component[2] for component in east_north_down]
         sizes = [_dot_radius(step.error_angle, self._scale_by_csd) * 1.8 for step in self._specimen.steps]
-        self._horiz_line.setData(n, e)
-        self._horiz_pts.setData(n, e, symbolSize=sizes)
-        self._vert_line.setData(n, d)
-        self._vert_pts.setData(n, d, symbolSize=sizes)
+        self._horiz_line.setData(e, n)
+        self._horiz_pts.setData(e, n, symbolSize=sizes)
+        self._vert_line.setData(e, d)
+        self._vert_pts.setData(e, d, symbolSize=sizes)
 
         fit = principal_component_fit(
             self._fit_steps or self._specimen.steps,
@@ -305,12 +322,14 @@ class ZijderveldWidget(QtWidgets.QWidget):
             half_span = max(abs(min(projections, default=-1.0)), abs(max(projections, default=1.0)), 1.0)
             p1 = fit.center - fit.direction * half_span
             p2 = fit.center + fit.direction * half_span
-            self._fit_line.setData([float(p1[0]), float(p2[0])], [float(p1[1]), float(p2[1])])
+            fit_e1, fit_n1, _fit_d1 = _orthogonal_projection_components(p1)
+            fit_e2, fit_n2, _fit_d2 = _orthogonal_projection_components(p2)
+            self._fit_line.setData([fit_e1, fit_e2], [fit_n1, fit_n2])
 
         for index, step in enumerate(self._specimen.steps):
             if index in (0, len(self._specimen.steps) - 1):
                 label = pg.TextItem(text=step.demag_label, color="#5b544f", anchor=(0, 1))
-                label.setPos(n[index], e[index])
+                label.setPos(e[index], n[index])
                 self._plot.addItem(label)
                 self._label_items.append(label)
 
@@ -364,16 +383,16 @@ class Vector3DWidget(QtWidgets.QWidget):
     def paintEvent(self, _event: QtGui.QPaintEvent) -> None:
         p = QtGui.QPainter(self)
         p.setRenderHint(QtGui.QPainter.Antialiasing)
-        p.fillRect(self.rect(), QtGui.QColor("#faf8f4"))
+        p.fillRect(self.rect(), QtGui.QColor("#ffffff"))
         margin = 26
         center = QtCore.QPointF(self.width() / 2, self.height() / 2)
         radius = max(60.0, min(self.width(), self.height()) / 2 - margin)
 
-        p.setPen(QtGui.QPen(QtGui.QColor("#d6cec6"), 1))
+        p.setPen(QtGui.QPen(QtGui.QColor("#d9dde3"), 1))
         p.drawRoundedRect(self.rect().adjusted(8, 8, -8, -8), 12, 12)
 
         if not self._specimen or not self._specimen.steps:
-            p.setPen(QtGui.QColor("#7a736d"))
+            p.setPen(QtGui.QColor("#6b7280"))
             p.drawText(self.rect(), QtCore.Qt.AlignCenter, "No specimen loaded")
             p.end()
             return
@@ -429,7 +448,7 @@ class Vector3DWidget(QtWidgets.QWidget):
                 p.setBrush(QtGui.QBrush(QtGui.QColor(255, 255, 255, 180)))
                 p.drawEllipse(point, radius_px, radius_px)
 
-        p.setPen(QtGui.QColor("#7a736d"))
+        p.setPen(QtGui.QColor("#6b7280"))
         p.drawText(self.rect().adjusted(16, 12, -16, -12), QtCore.Qt.AlignTop | QtCore.Qt.AlignRight, "Drag to rotate")
         p.end()
 
@@ -460,11 +479,12 @@ class IntensityWidget(QtWidgets.QWidget):
         vl.setContentsMargins(0, 0, 0, 0)
 
         if _HAS_PG:
-            pg.setConfigOptions(antialias=True, background="#faf8f4", foreground="#2f2827")
+            pg.setConfigOptions(antialias=True, background="#ffffff", foreground="#1f2937")
             self._plot = pg.PlotWidget()
-            self._plot.showGrid(x=True, y=True, alpha=0.18)
+            self._plot.showGrid(x=True, y=True, alpha=0.14)
             self._plot.getAxis("bottom").setLabel("Step #")
             self._plot.getAxis("left").setLabel("Moment (emu)")
+            self._plot.setMenuEnabled(False)
             self._curve = self._plot.plot(
                 [], [],
                 pen=pg.mkPen("#7A0219", width=2),
@@ -500,11 +520,12 @@ class PaleointensityWidget(QtWidgets.QWidget):
         layout.addWidget(self._summary)
 
         if _HAS_PG:
-            pg.setConfigOptions(antialias=True, background="#faf8f4", foreground="#2f2827")
+            pg.setConfigOptions(antialias=True, background="#ffffff", foreground="#1f2937")
             self._plot = pg.PlotWidget()
-            self._plot.showGrid(x=True, y=True, alpha=0.18)
+            self._plot.showGrid(x=True, y=True, alpha=0.14)
             self._plot.getAxis("bottom").setLabel("pTRM gained / NRM")
             self._plot.getAxis("left").setLabel("NRM remaining / NRM")
+            self._plot.setMenuEnabled(False)
             self._zf_curve = self._plot.plot([], [], pen=pg.mkPen("#111111", width=1.6), symbol="o", symbolBrush=pg.mkBrush("#111111"), symbolPen=pg.mkPen("#111111"), name="ZF/IF path")
             self._ptrm_curve = self._plot.plot([], [], pen=None, symbol="t", symbolSize=10, symbolBrush=pg.mkBrush("#0c7a6b"), symbolPen=pg.mkPen("#0c7a6b"), name="pTRM checks")
             self._fit_line = self._plot.plot([], [], pen=pg.mkPen("#7A0219", width=2, style=QtCore.Qt.DashLine), name="Linear fit")
@@ -550,19 +571,38 @@ class PaleointensityWidget(QtWidgets.QWidget):
 
 # ── Data table widget ─────────────────────────────────────────────────────────
 class DataTableWidget(QtWidgets.QTableWidget):
-    _COLS = ("Step", "X", "Y", "Z", "Inc (°)", "Dec (°)", "Moment", "CSD")
+    _BASE_COLS = ("Step", "Inc (°)", "Dec (°)", "Moment (emu)", "CSD (°)")
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
-        super().__init__(0, len(self._COLS))
-        self.setHorizontalHeaderLabels(list(self._COLS))
-        self.horizontalHeader().setStretchLastSection(True)
+        super().__init__(0, 8)
         self.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.verticalHeader().setVisible(False)
         self.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.setAlternatingRowColors(True)
+        self.setShowGrid(False)
+        self.setWordWrap(False)
+        self.setSortingEnabled(False)
+        self.horizontalHeader().setHighlightSections(False)
+        self.horizontalHeader().setStretchLastSection(False)
+        self.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
+        self.horizontalHeader().setDefaultAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        self.verticalHeader().setDefaultSectionSize(26)
+        self.setStyleSheet(
+            "QTableWidget { alternate-background-color: #f7f8fa; selection-background-color: rgba(122,2,25,0.10); selection-color: #1f2937; }"
+            "QHeaderView::section { background: #f3f4f6; color: #374151; padding: 6px 8px; border: 0; border-bottom: 1px solid #d9dde3; font-weight: 600; }"
+        )
+        self._numeric_font = QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont)
+        self._numeric_font.setPointSize(max(9, self._numeric_font.pointSize()))
+        self._apply_headers("specimen")
+
+    def _apply_headers(self, coordinate_system: str) -> None:
+        vector_headers = _vector_headers_for_coordinate_system(coordinate_system)
+        self.setHorizontalHeaderLabels(["Step", *vector_headers, *self._BASE_COLS[1:]])
 
     def set_specimen(self, specimen: ViewerSpecimen | None, coordinate_system: str) -> None:
         self.setRowCount(0)
+        self._apply_headers(coordinate_system)
         if not specimen:
             return
         for step in specimen.steps:
@@ -572,21 +612,26 @@ class DataTableWidget(QtWidgets.QTableWidget):
             inc, dec = _cart_to_inc_dec(vector)
             for col, val in enumerate([
                 step.demag_label,
-                f"{vector[0]:.5f}",
-                f"{vector[1]:.5f}",
-                f"{vector[2]:.5f}",
-                f"{inc:.2f}",
-                f"{dec:.2f}",
-                f"{step.moment:.5f}",
-                f"{step.error_angle:.2f}",
+                f"{vector[0]:.3e}",
+                f"{vector[1]:.3e}",
+                f"{vector[2]:.3e}",
+                f"{inc:.1f}",
+                f"{dec:.1f}",
+                f"{step.moment:.3e}",
+                f"{step.error_angle:.1f}",
             ]):
                 item = QtWidgets.QTableWidgetItem(val)
                 item.setTextAlignment(
                     QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter
                     if col > 0 else QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
                 )
+                if col > 0:
+                    item.setFont(self._numeric_font)
                 self.setItem(row, col, item)
         self.resizeColumnsToContents()
+        self.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+        for col in range(1, self.columnCount()):
+            self.horizontalHeader().setSectionResizeMode(col, QtWidgets.QHeaderView.Stretch)
 
 
 # ── Main window ───────────────────────────────────────────────────────────────
@@ -623,25 +668,28 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
 
         # Toolbar strip
         tb_frame = QtWidgets.QFrame()
-        tb_frame.setFixedHeight(46)
+        tb_frame.setFixedHeight(92)
         tb_frame.setStyleSheet(
-            "QFrame { background: #fef9f4; border-bottom: 1px solid rgba(122,2,25,0.15); }"
+            "QFrame { background: #ffffff; border-bottom: 1px solid rgba(122,2,25,0.10); }"
         )
-        tbl = QtWidgets.QHBoxLayout(tb_frame)
-        tbl.setContentsMargins(14, 0, 14, 0)
-        tbl.setSpacing(8)
+        tb_layout = QtWidgets.QVBoxLayout(tb_frame)
+        tb_layout.setContentsMargins(14, 8, 14, 8)
+        tb_layout.setSpacing(6)
 
+        # Top row: title, dataset, load buttons
+        top_row = QtWidgets.QHBoxLayout()
+        top_row.setSpacing(8)
         title = QtWidgets.QLabel("RapidPy DataViewer")
         title.setStyleSheet("font-size: 14px; font-weight: 700; color: #7A0219;")
-        tbl.addWidget(title)
+        top_row.addWidget(title)
 
-        tbl.addWidget(_vline())
+        top_row.addWidget(_vline())
 
         self._dataset_lbl = QtWidgets.QLabel("Demo dataset")
         self._dataset_lbl.setStyleSheet("color: #6b7280; font-size: 12px;")
-        tbl.addWidget(self._dataset_lbl)
+        top_row.addWidget(self._dataset_lbl)
 
-        tbl.addStretch()
+        top_row.addStretch()
 
         load_btn = QtWidgets.QPushButton("📂  Open File")
         load_btn.clicked.connect(self._open_file)
@@ -649,49 +697,59 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         dir_btn.clicked.connect(self._open_directory)
         demo_btn = QtWidgets.QPushButton("🔄  Load Demo")
         demo_btn.clicked.connect(self._load_demo)
-        tbl.addWidget(QtWidgets.QLabel("Coords"))
-        self._coord_combo = QtWidgets.QComboBox()
-        self._coord_combo.addItems(["Specimen", "Geographic", "Core"])
-        self._coord_combo.currentIndexChanged.connect(self._update_all)
-        tbl.addWidget(self._coord_combo)
+        top_row.addWidget(load_btn)
+        top_row.addWidget(dir_btn)
+        top_row.addWidget(demo_btn)
+        tb_layout.addLayout(top_row)
 
-        tbl.addWidget(QtWidgets.QLabel("Directional view"))
+        # Bottom row: controls and settings
+        bottom_row = QtWidgets.QHBoxLayout()
+        bottom_row.setSpacing(8)
+
+        bottom_row.addWidget(QtWidgets.QLabel("Coords"))
+        self._coord_combo = QtWidgets.QComboBox()
+        self._coord_combo.addItem("Specimen", "specimen")
+        self._coord_combo.addItem("Geographic", "geographic")
+        self._coord_combo.addItem("Tilt-corrected", "tilt-corrected")
+        self._coord_combo.currentIndexChanged.connect(self._update_all)
+        bottom_row.addWidget(self._coord_combo)
+
+        bottom_row.addWidget(QtWidgets.QLabel("Directional view"))
         self._view_combo = QtWidgets.QComboBox()
         self._view_combo.addItems(["2D component view", "3D vector view"])
         self._view_combo.currentIndexChanged.connect(self._sync_directional_stack)
-        tbl.addWidget(self._view_combo)
+        bottom_row.addWidget(self._view_combo)
 
         self._scale_csd = QtWidgets.QCheckBox("Scale point size by CSD")
         self._scale_csd.toggled.connect(self._update_all)
-        tbl.addWidget(self._scale_csd)
+        bottom_row.addWidget(self._scale_csd)
 
-        tbl.addWidget(QtWidgets.QLabel("Fit range"))
+        bottom_row.addWidget(QtWidgets.QLabel("Fit range"))
         self._fit_start = QtWidgets.QComboBox()
         self._fit_end = QtWidgets.QComboBox()
         self._fit_start.currentIndexChanged.connect(self._handle_fit_range_change)
         self._fit_end.currentIndexChanged.connect(self._handle_fit_range_change)
         self._fit_start.setMinimumWidth(120)
         self._fit_end.setMinimumWidth(120)
-        tbl.addWidget(self._fit_start)
-        tbl.addWidget(QtWidgets.QLabel("to"))
-        tbl.addWidget(self._fit_end)
+        bottom_row.addWidget(self._fit_start)
+        bottom_row.addWidget(QtWidgets.QLabel("to"))
+        bottom_row.addWidget(self._fit_end)
 
         self._include_origin = QtWidgets.QCheckBox("Include origin in fit")
         self._include_origin.toggled.connect(self._update_all)
-        tbl.addWidget(self._include_origin)
+        bottom_row.addWidget(self._include_origin)
 
         self._auto_watch = QtWidgets.QCheckBox("Auto-watch")
         self._auto_watch.setChecked(True)
         self._auto_watch.toggled.connect(self._refresh_watch_paths)
-        tbl.addWidget(self._auto_watch)
+        bottom_row.addWidget(self._auto_watch)
 
         self._watch_lbl = QtWidgets.QLabel("Watch off")
         self._watch_lbl.setStyleSheet("color: #7a736d; font-size: 11px;")
-        tbl.addWidget(self._watch_lbl)
+        bottom_row.addWidget(self._watch_lbl)
 
-        tbl.addWidget(load_btn)
-        tbl.addWidget(dir_btn)
-        tbl.addWidget(demo_btn)
+        bottom_row.addStretch()
+        tb_layout.addLayout(bottom_row)
 
         vl.addWidget(tb_frame)
 
@@ -746,7 +804,7 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         self._suggestion_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #7A0219;")
         self._suggestion_text = QtWidgets.QTextBrowser()
         self._suggestion_text.setOpenExternalLinks(True)
-        self._suggestion_text.setStyleSheet("QTextBrowser { background: #fffdfa; border: 1px solid rgba(122,2,25,0.10); color: #433a37; }")
+        self._suggestion_text.setStyleSheet("QTextBrowser { background: #ffffff; border: 1px solid #d9dde3; color: #374151; }")
         suggestion_layout.addWidget(self._suggestion_title)
         suggestion_layout.addWidget(self._suggestion_text, 1)
         left_layout.addWidget(suggestion_card, 1)
@@ -757,37 +815,48 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         right_split.setChildrenCollapsible(False)
         right_split.setHandleWidth(6)
 
-        self._tabs = QtWidgets.QTabWidget()
-        directional_page = QtWidgets.QWidget()
-        directional_layout = QtWidgets.QVBoxLayout(directional_page)
-        directional_layout.setContentsMargins(0, 0, 0, 0)
-        directional_layout.setSpacing(0)
         self._directional_stack = QtWidgets.QStackedWidget()
         self._zij = ZijderveldWidget()
         self._vector3d = Vector3DWidget()
         self._directional_stack.addWidget(self._zij)
         self._directional_stack.addWidget(self._vector3d)
-        directional_layout.addWidget(self._directional_stack)
-        self._tabs.addTab(directional_page, "Directional")
 
         stereo_wrap = QtWidgets.QWidget()
         sl = QtWidgets.QHBoxLayout(stereo_wrap)
+        sl.setContentsMargins(0, 0, 0, 0)
         sl.setAlignment(QtCore.Qt.AlignCenter)
         self._stereo = StereonetWidget()
         self._stereo.setMinimumSize(350, 350)
         sl.addWidget(self._stereo)
-        self._tabs.addTab(stereo_wrap, "Equal-Area Stereonet")
 
         self._int_widget = IntensityWidget()
-        self._tabs.addTab(self._int_widget, "Intensity Decay")
-
         self._pint_widget = PaleointensityWidget()
-        self._tabs.addTab(self._pint_widget, "Paleointensity")
 
-        right_split.addWidget(self._tabs)
+        plots_split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        plots_split.setChildrenCollapsible(False)
+        plots_split.setHandleWidth(6)
+        plots_split.addWidget(_panel_card("Directional", self._directional_stack, "PmagPy-style orthogonal view defaults to east-right and north-up."))
+
+        secondary_split = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        secondary_split.setChildrenCollapsible(False)
+        secondary_split.setHandleWidth(6)
+        secondary_split.addWidget(_panel_card("Equal-Area Stereonet", stereo_wrap))
+
+        self._analysis_split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self._analysis_split.setChildrenCollapsible(False)
+        self._analysis_split.setHandleWidth(6)
+        self._analysis_split.addWidget(_panel_card("Intensity Decay", self._int_widget))
+        self._pint_card = _panel_card("Paleointensity (Arai)", self._pint_widget)
+        self._analysis_split.addWidget(self._pint_card)
+        secondary_split.addWidget(self._analysis_split)
+        secondary_split.setSizes([320, 260])
+
+        plots_split.addWidget(secondary_split)
+        plots_split.setSizes([640, 430])
+        right_split.addWidget(plots_split)
 
         self._table = DataTableWidget()
-        right_split.addWidget(self._table)
+        right_split.addWidget(_panel_card("Measurement Table", self._table, "Vector columns follow the selected coordinate system."))
         right_split.setSizes([580, 220])
         main_split.addWidget(right_split)
         main_split.setSizes([290, 980])
@@ -797,8 +866,8 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         # Status bar
         self.statusBar().showMessage("Ready — open a CIT .sam file, a MagIC directory, or use demo data.")
         self.setStyleSheet(
-            "QFrame#viewerCard { background: #fffaf5; border: 1px solid rgba(122,2,25,0.10); border-radius: 12px; }"
-            "QListWidget, QTableWidget, QComboBox, QTextBrowser { background: #fffdfa; }"
+            "QFrame#viewerCard { background: #ffffff; border: 1px solid #d9dde3; border-radius: 12px; }"
+            "QListWidget, QTableWidget, QComboBox, QTextBrowser { background: #ffffff; }"
         )
 
     # ── Menu ───────────────────────────────────────────────────────────────
@@ -916,7 +985,8 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         self._update_all()
 
     def _current_coordinate_system(self) -> str:
-        return self._coord_combo.currentText().lower()
+        value = self._coord_combo.currentData()
+        return value if isinstance(value, str) else self._coord_combo.currentText().lower()
 
     def _current_fit_steps(self) -> list[MeasurementStep]:
         if not self._current_specimen or not self._current_specimen.steps:
@@ -1007,6 +1077,7 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         self._int_widget.set_specimen(self._current_specimen)
         self._pint_widget.set_specimen(self._current_specimen)
         self._table.set_specimen(self._current_specimen, coordinate_system)
+        self._sync_analysis_panels()
 
         if not self._current_specimen:
             self._experiment_lbl.setText("Experiment type: n/a")
@@ -1042,9 +1113,18 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
             "  3. Legacy CSV\n"
             "     Expected columns: label, n, e, u\n\n"
             "The experiment type is auto-detected from the step labels or MagIC treatment fields.\n"
+            "Coordinate views follow the legacy RAPID convention: Specimen, Geographic, and Tilt-corrected.\n"
             "Turn on Auto-watch to refresh the plots automatically while files are being updated.\n"
             "Use the fit-range controls to inspect quick PCA lines without opening the heavier PmagPy GUIs.",
         )
+
+    def _sync_analysis_panels(self) -> None:
+        has_paleointensity = _has_paleointensity_data(self._current_specimen)
+        self._pint_card.setVisible(has_paleointensity)
+        if has_paleointensity:
+            self._analysis_split.setSizes([1, 1])
+        else:
+            self._analysis_split.setSizes([1, 0])
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1059,6 +1139,22 @@ def _section_label(text: str) -> QtWidgets.QLabel:
     label = QtWidgets.QLabel(text)
     label.setStyleSheet("font-size: 12px; font-weight: 700; color: #7A0219;")
     return label
+
+
+def _panel_card(title: str, content: QtWidgets.QWidget, note: str | None = None) -> QtWidgets.QFrame:
+    card = QtWidgets.QFrame()
+    card.setObjectName("viewerCard")
+    layout = QtWidgets.QVBoxLayout(card)
+    layout.setContentsMargins(12, 12, 12, 12)
+    layout.setSpacing(8)
+    layout.addWidget(_section_label(title))
+    if note:
+        note_label = QtWidgets.QLabel(note)
+        note_label.setWordWrap(True)
+        note_label.setStyleSheet("color: #6b7280; font-size: 11px;")
+        layout.addWidget(note_label)
+    layout.addWidget(content, 1)
+    return card
 
 
 def _dot_radius(error_angle: float, scale_by_csd: bool) -> float:
@@ -1081,14 +1177,18 @@ def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
 
+    assets_dir = None
     try:
         from rapidpy_common.ui import apply_liquid_glass_theme, set_app_icon
         apply_liquid_glass_theme(app)
         assets = Path(__file__).resolve().parent.parent / "assets"
         set_app_icon(app, "data_viewer_icon.png", assets)
+        assets_dir = assets
     except ImportError:
         pass  # works standalone without rapidpy_common
 
     win = ZijderveldWindow()
+    if assets_dir is not None:  # type: ignore[name-defined]
+        set_app_icon(win, "data_viewer_icon.png", assets_dir)
     win.show()
     return app.exec()

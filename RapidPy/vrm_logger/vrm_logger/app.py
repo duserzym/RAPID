@@ -12,9 +12,24 @@ import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 from serial.tools import list_ports
 
+def _bootstrap_common_imports() -> None:
+    root = Path(__file__).resolve().parents[2]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
+
+def _assets_dir() -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / "assets"  # type: ignore[attr-defined]
+    return Path(__file__).resolve().parent.parent / "assets"
+
+
+_bootstrap_common_imports()
+
 from .config import AppConfig, _auto_find_ini, load_config, read_calibration_from_ini, save_config
 from .models import MeasurementSample
 from .squid_serial import SquidCommunicationError, SquidSerialClient
+from rapidpy_common.ui import apply_liquid_glass_theme, set_app_icon
 
 
 class AbsoluteTimeAxis(pg.AxisItem):
@@ -127,13 +142,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if compact_size > 0:
             compact_font.setPointSizeF(max(8.0, compact_size - 1.5))
             self.setFont(compact_font)
-        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-            self._assets_dir = Path(sys._MEIPASS) / "assets"  # type: ignore[attr-defined]
-        else:
-            self._assets_dir = Path(__file__).resolve().parent.parent / "assets"
-        self._icon_png = self._assets_dir / "vrm_icon.png"
-        if self._icon_png.exists():
-            self.setWindowIcon(QtGui.QIcon(str(self._icon_png)))
+        self._assets_dir = _assets_dir()
 
         self._config = load_config()
         self._client = SquidSerialClient()
@@ -417,62 +426,20 @@ class MainWindow(QtWidgets.QMainWindow):
         if app is None:
             return
 
-        if getattr(sys, "frozen", False):
-            base = Path(sys._MEIPASS)  # type: ignore[attr-defined]
-        else:
-            base = Path(__file__).resolve().parents[2]
-        common_assets = base / "rapidpy_common" / "assets"
-        arrow_down = (common_assets / "arrow_down.svg").as_posix()
-        arrow_up = (common_assets / "arrow_up.svg").as_posix()
-
-        app.setStyle("Fusion")
-        font = QtGui.QFont("SF Pro Text", 10)
-        if not QtGui.QFontInfo(font).exactMatch():
-            font = QtGui.QFont("Avenir Next", 10)
-        if not QtGui.QFontInfo(font).exactMatch():
-            font = QtGui.QFont("Segoe UI", 10)
-        app.setFont(font)
-
-        style = (
-            """
-            QWidget {
-                background: #f3eee2;
-                color: #2f2827;
-            }
-            QFrame#card {
-                background: rgba(255, 255, 255, 0.92);
-                border: 1px solid rgba(122, 2, 25, 0.14);
-                border-radius: 24px;
-            }
-            QFrame#card QWidget {
-                background: transparent;
-            }
-            QLabel#title {
-                font-size: 24px;
-                font-weight: 760;
-                color: #7A0219;
-            }
-            QLabel#subtitle {
-                color: #61534d;
-                margin-bottom: 4px;
-            }
-            QLabel#status {
-                background: rgba(255, 255, 255, 0.68);
-                border: 1px solid rgba(122, 2, 25, 0.18);
-                border-radius: 14px;
-                padding: 9px;
-                color: #4d3a39;
-            }
+        apply_liquid_glass_theme(app)
+        app.setStyleSheet(
+            app.styleSheet()
+            + """
             QLabel#consoleTitle {
                 color: #7A0219;
                 font-weight: 720;
             }
-            QLabel#valuePill {
-                background: rgba(255, 255, 255, 0.82);
-                border: 1px solid rgba(122, 2, 25, 0.16);
-                border-radius: 16px;
-                padding: 10px 12px;
-                font-weight: 650;
+            QSplitter::handle {
+                background: rgba(122, 2, 25, 0.18);
+                border-radius: 4px;
+            }
+            QSplitter::handle:hover {
+                background: rgba(122, 2, 25, 0.35);
             }
             QPlainTextEdit#console {
                 background: rgba(255, 248, 240, 0.95);
@@ -483,176 +450,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 selection-background-color: #7A0219;
                 selection-color: #ffffff;
             }
-            QScrollArea#panelScroll {
-                background: transparent;
-                border: none;
-            }
-            QScrollArea#panelScroll > QWidget > QWidget {
-                background: transparent;
-            }
-            QSplitter::handle {
-                background: rgba(122, 2, 25, 0.18);
-                border-radius: 4px;
-            }
-            QSplitter::handle:hover {
-                background: rgba(122, 2, 25, 0.35);
-            }
-            QPushButton {
-                background: rgba(255, 255, 255, 0.72);
-                border: 1px solid rgba(122, 2, 25, 0.55);
-                border-radius: 14px;
-                padding: 9px 14px;
-                color: #2f2827;
-            }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.88);
-                border-color: rgba(122, 2, 25, 0.75);
-            }
-            QPushButton:pressed {
-                background: rgba(255, 255, 255, 0.94);
-            }
-            QFrame#card QPushButton {
-                background: rgba(255, 255, 255, 0.72);
-                color: #2f2827;
-            }
-            QPushButton#accent {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #7A0219, stop:1 #5a0013);
-                color: #ffffff;
-                border: 1px solid rgba(122, 2, 25, 0.80);
-                font-weight: 680;
-            }
-            QPushButton#accent:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #8a0220, stop:1 #650016);
-            }
-            QPushButton#accent:pressed {
-                background: #5a0013;
-            }
-            QLineEdit, QComboBox, QDoubleSpinBox {
-                border: 1px solid rgba(122, 2, 25, 0.35);
-                background: #ffffff;
-                border-radius: 12px;
-                padding: 7px;
-                selection-background-color: #7A0219;
-                selection-color: #ffffff;
-            }
-            QComboBox {
-                padding-right: 34px;
-                min-width: 80px;
-            }
-            QComboBox::drop-down {
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 28px;
-                margin: 3px;
-                border: none;
-                border-radius: 10px;
-                background: rgba(122, 2, 25, 0.12);
-            }
-            QComboBox::drop-down:hover {
-                background: rgba(122, 2, 25, 0.2);
-            }
-            QComboBox::drop-down:pressed {
-                background: rgba(122, 2, 25, 0.28);
-            }
-            QComboBox::down-arrow {
-                image: url(__ARROW_DOWN__);
-                width: 14px;
-                height: 14px;
-            }
-            QAbstractSpinBox {
-                padding-right: 30px;
-                min-width: 64px;
-            }
-            QAbstractSpinBox::up-button,
-            QAbstractSpinBox::down-button {
-                width: 22px;
-                border: none;
-                border-radius: 5px;
-                background: rgba(122, 2, 25, 0.12);
-            }
-            QAbstractSpinBox::up-button {
-                subcontrol-origin: border;
-                subcontrol-position: top right;
-                margin: 5px 5px 1px 0px;
-            }
-            QAbstractSpinBox::down-button {
-                subcontrol-origin: border;
-                subcontrol-position: bottom right;
-                margin: 1px 5px 5px 0px;
-            }
-            QAbstractSpinBox::up-button:hover,
-            QAbstractSpinBox::down-button:hover {
-                background: rgba(122, 2, 25, 0.2);
-            }
-            QAbstractSpinBox::up-button:pressed,
-            QAbstractSpinBox::down-button:pressed {
-                background: rgba(122, 2, 25, 0.28);
-            }
-            QAbstractSpinBox::up-arrow {
-                image: url(__ARROW_UP__);
-                width: 13px;
-                height: 13px;
-            }
-            QAbstractSpinBox::down-arrow {
-                image: url(__ARROW_DOWN__);
-                width: 13px;
-                height: 13px;
-            }
-            QFrame#card QLineEdit,
-            QFrame#card QComboBox,
-            QFrame#card QDoubleSpinBox {
-                background: #ffffff;
-            }
-            QScrollBar:vertical {
-                background: transparent;
-                width: 12px;
-                margin: 4px 3px 4px 3px;
-                border: none;
-            }
-            QScrollBar:horizontal {
-                background: transparent;
-                height: 12px;
-                margin: 3px 4px 3px 4px;
-                border: none;
-            }
-            QScrollBar::handle:vertical,
-            QScrollBar::handle:horizontal {
-                background: rgba(86, 72, 69, 0.36);
-                border: 1px solid rgba(255, 255, 255, 0.46);
-                border-radius: 6px;
-            }
-            QScrollBar::handle:vertical {
-                min-height: 34px;
-            }
-            QScrollBar::handle:horizontal {
-                min-width: 34px;
-            }
-            QScrollBar::handle:vertical:hover,
-            QScrollBar::handle:horizontal:hover {
-                background: rgba(86, 72, 69, 0.52);
-            }
-            QScrollBar::handle:vertical:pressed,
-            QScrollBar::handle:horizontal:pressed {
-                background: rgba(122, 2, 25, 0.54);
-            }
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical,
-            QScrollBar::add-line:horizontal,
-            QScrollBar::sub-line:horizontal {
-                border: none;
-                background: transparent;
-                width: 0px;
-                height: 0px;
-            }
-            QScrollBar::add-page:vertical,
-            QScrollBar::sub-page:vertical,
-            QScrollBar::add-page:horizontal,
-            QScrollBar::sub-page:horizontal {
-                background: transparent;
-            }
             """
         )
-        self.setStyleSheet(style.replace("__ARROW_DOWN__", arrow_down).replace("__ARROW_UP__", arrow_up))
 
     def _apply_card_shadow(self, card: QtWidgets.QFrame) -> None:
         shadow = QtWidgets.QGraphicsDropShadowEffect(self)
@@ -1085,7 +884,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
+    apply_liquid_glass_theme(app)
+    set_app_icon(app, "vrm_icon.png", _assets_dir())
     pg.setConfigOptions(antialias=True)
     window = MainWindow()
+    set_app_icon(window, "vrm_icon.png", _assets_dir())
     window.show()
     return app.exec()

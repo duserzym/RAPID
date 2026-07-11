@@ -1395,5 +1395,6 @@ def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     apply_liquid_glass_theme(app)
     window = MainWindow()
+    set_app_icon(window, "af_clip_test_icon.ico", _assets_dir())
     window.show()
     return app.exec()

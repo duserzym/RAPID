@@ -403,5 +403,6 @@ def main() -> int:
     assets_dir = Path(__file__).resolve().parent.parent / "assets"
     set_app_icon(app, "com_port_mapper_icon.png", assets_dir)
     window = MainWindow()
+    set_app_icon(window, "com_port_mapper_icon.png", assets_dir)
     window.show()
     return app.exec()

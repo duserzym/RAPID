@@ -1738,5 +1738,6 @@ def main() -> int:
     apply_liquid_glass_theme(app)
     set_app_icon(app, "af_tuner_icon.ico", _assets_dir())
     window = MainWindow()
+    set_app_icon(window, "af_tuner_icon.ico", _assets_dir())
     window.show()
     return app.exec()

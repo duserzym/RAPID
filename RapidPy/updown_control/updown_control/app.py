@@ -3204,5 +3204,6 @@ def main() -> int:
     assets_dir = Path(__file__).resolve().parent.parent / "assets"
     set_app_icon(app, "updown_control_icon.png", assets_dir)
     window = MainWindow()
+    set_app_icon(window, "updown_control_icon.png", assets_dir)
     window.show()
     return app.exec()

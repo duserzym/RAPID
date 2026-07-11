@@ -14,7 +14,7 @@ def _bootstrap_common_imports() -> None:
 
 
 _bootstrap_common_imports()
-from rapidpy_common.ui import apply_card_shadow, apply_liquid_glass_theme  # noqa: E402
+from rapidpy_common.ui import apply_card_shadow, apply_liquid_glass_theme, set_app_icon  # noqa: E402
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -81,6 +81,9 @@ class MainWindow(QtWidgets.QMainWindow):
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     apply_liquid_glass_theme(app)
+    assets_dir = Path(__file__).resolve().parent.parent / "assets"
+    set_app_icon(app, "system_shell_icon.png", assets_dir)
     window = MainWindow()
+    set_app_icon(window, "system_shell_icon.png", assets_dir)
     window.show()
     return app.exec()

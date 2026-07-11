@@ -18,7 +18,7 @@ from rapidpy_common.hardware import (  # noqa: E402
     MotorSerialClient,
     convert_position_to_hole,
 )
-from rapidpy_common.ui import apply_card_shadow, apply_liquid_glass_theme  # noqa: E402
+from rapidpy_common.ui import apply_card_shadow, apply_liquid_glass_theme, set_app_icon  # noqa: E402
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -289,6 +289,8 @@ class MainWindow(QtWidgets.QMainWindow):
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     apply_liquid_glass_theme(app)
+    set_app_icon(app, "dc_motor_control_icon.png", Path(__file__).resolve().parent.parent / "assets")
     window = MainWindow()
+    set_app_icon(window, "dc_motor_control_icon.png", Path(__file__).resolve().parent.parent / "assets")
     window.show()
     return app.exec()

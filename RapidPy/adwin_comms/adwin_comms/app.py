@@ -1882,5 +1882,6 @@ def main() -> int:
     set_app_icon(app, "adwin_icon.png", assets_dir)
 
     win = AdwinCommsApp()
+    set_app_icon(win, "adwin_icon.png", assets_dir)
     win.show()
     return app.exec()
