@@ -46,19 +46,14 @@ class SequencePanel(QtWidgets.QWidget):
         root.setContentsMargins(16, 12, 16, 16)
         root.setSpacing(12)
 
-        left_scroll = QtWidgets.QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        left_inner = QtWidgets.QWidget()
-        lv = QtWidgets.QVBoxLayout(left_inner)
+        left_panel = QtWidgets.QWidget()
+        lv = QtWidgets.QVBoxLayout(left_panel)
         lv.setContentsMargins(0, 0, 0, 0)
         lv.setSpacing(12)
         lv.addWidget(self._build_presets_card())
         lv.addWidget(self._build_steps_card())
         lv.addStretch()
-        left_scroll.setWidget(left_inner)
-
-        root.addWidget(left_scroll, 3)
+        root.addWidget(left_panel, 3)
         root.addWidget(self._build_preview_card(), 2)
 
     # ── Presets ───────────────────────────────────────────────────────────────
@@ -77,18 +72,32 @@ class SequencePanel(QtWidgets.QWidget):
         note.setStyleSheet("color: #7a6f6e; font-size: 12px;")
         cl.addWidget(note)
 
-        row = QtWidgets.QHBoxLayout()
+        row = QtWidgets.QGridLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setHorizontalSpacing(10)
+        row.setVerticalSpacing(8)
+
         hw_btn = QtWidgets.QPushButton("Hawaiian Std AF\n(25, 50, 100, 200, 400, 800 mT)")
         hw_btn.setMinimumHeight(52)
+        hw_btn.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        hw_btn.setWordWrap(True)
         hw_btn.clicked.connect(self._preset_hawaiian)
 
         rw_btn = QtWidgets.QPushButton('Rockmag "the Works"\n(NRM + ARM + IRM + AF/IRM)')
         rw_btn.setMinimumHeight(52)
         rw_btn.setObjectName("accent")
+        rw_btn.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        rw_btn.setWordWrap(True)
         rw_btn.clicked.connect(self._preset_works)
 
-        row.addWidget(hw_btn)
-        row.addWidget(rw_btn)
+        row.addWidget(hw_btn, 0, 0)
+        row.addWidget(rw_btn, 0, 1)
         cl.addLayout(row)
         return card
 
@@ -188,13 +197,17 @@ class SequencePanel(QtWidgets.QWidget):
     def _param_row(self, parent_chk: QtWidgets.QCheckBox,
                    params: list[tuple[str, float, float, float]]
                    ) -> tuple[QtWidgets.QHBoxLayout, ...]:
-        row = QtWidgets.QHBoxLayout()
+        row = QtWidgets.QGridLayout()
         row.setContentsMargins(22, 2, 0, 2)
         row.setSpacing(6)
+        row.setColumnMinimumWidth(0, 85)
+        row.setHorizontalSpacing(8)
         spins = []
-        for label, default, lo, hi in params:
+        for col, (label, default, lo, hi) in enumerate(params):
             lbl = QtWidgets.QLabel(label)
             lbl.setObjectName("readLbl")
+            lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+            lbl.setMinimumWidth(88)
             spin = QtWidgets.QDoubleSpinBox()
             spin.setRange(lo, hi)
             spin.setValue(default)
@@ -202,10 +215,10 @@ class SequencePanel(QtWidgets.QWidget):
             spin.setEnabled(False)
             spin.valueChanged.connect(self._rebuild_preview)
             parent_chk.toggled.connect(spin.setEnabled)
-            row.addWidget(lbl)
-            row.addWidget(spin)
+            row.addWidget(lbl, 0, col * 2)
+            row.addWidget(spin, 0, col * 2 + 1)
             spins.append(spin)
-        row.addStretch()
+        row.setColumnStretch(len(params) * 2, 1)
         return (row, *spins)
 
     # ── Preview ───────────────────────────────────────────────────────────────
