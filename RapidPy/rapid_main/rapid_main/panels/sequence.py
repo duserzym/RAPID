@@ -198,14 +198,14 @@ class SequencePanel(QtWidgets.QWidget):
         row = QtWidgets.QGridLayout()
         row.setContentsMargins(22, 2, 0, 2)
         row.setSpacing(6)
-        row.setColumnMinimumWidth(0, 85)
+        row.setColumnMinimumWidth(0, 90)
         row.setHorizontalSpacing(8)
         spins = []
         for col, (label, default, lo, hi) in enumerate(params):
             lbl = QtWidgets.QLabel(label)
             lbl.setObjectName("readLbl")
             lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
-            lbl.setMinimumWidth(88)
+            lbl.setMinimumWidth(95)
             spin = QtWidgets.QDoubleSpinBox()
             spin.setRange(lo, hi)
             spin.setValue(default)
@@ -213,7 +213,7 @@ class SequencePanel(QtWidgets.QWidget):
                 QtWidgets.QSizePolicy.Policy.Expanding,
                 QtWidgets.QSizePolicy.Policy.Fixed,
             )
-            spin.setMinimumWidth(110)
+            spin.setMinimumWidth(130)
             spin.setDecimals(3)
             spin.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
             spin.setEnabled(False)
