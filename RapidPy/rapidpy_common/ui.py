@@ -298,6 +298,17 @@ def set_app_icon(
         icon_path = Path(sys._MEIPASS) / "assets" / icon_name  # type: ignore[attr-defined]
     else:
         icon_path = dev_assets_dir / icon_name
+
+    # Prefer platform-friendly .ico files when both are available.
+    if not icon_path.exists():
+        if icon_path.suffix.lower() == ".png":
+            ico_path = icon_path.with_suffix(".ico")
+            if ico_path.exists():
+                icon_path = ico_path
+        elif icon_path.suffix.lower() == ".ico":
+            png_path = icon_path.with_suffix(".png")
+            if png_path.exists():
+                icon_path = png_path
     if icon_path.exists():
         target.setWindowIcon(QtGui.QIcon(str(icon_path)))
 

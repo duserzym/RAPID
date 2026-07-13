@@ -11,7 +11,16 @@ from PySide6 import QtCore, QtWidgets
 from rapidpy_common.ui import apply_liquid_glass_theme, set_app_icon
 
 from .config import AppConfig
-from .hardware_contracts import MeasurementBackend, build_measurement_backend
+from .hardware_contracts import (
+    MeasurementAutomationBackend,
+    build_measurement_backend,
+)
+from .diagnostic_services import (
+    build_dcmotor_backend,
+    build_irm_arm_backend,
+    build_squid_backend,
+    build_vacuum_backend,
+)
 from .device_ownership import DeviceOwnershipError, DeviceOwnershipManager
 from .dialogs import (
     AboutDialog,
@@ -21,6 +30,7 @@ from .dialogs import (
     PlotsDialog,
     SampleSelectDialog,
     SquidCommDialog,
+    DCMotorDialog,
     StepMonitorDialog,
     VacuumDialog,
     WebcamDialog,
@@ -233,7 +243,8 @@ _NAV_ITEMS: list[tuple[str, str, int]] = [
 
 
 _DEFAULT_WINDOW_SIZE = (1440, 880)
-_DEFAULT_SIDEBAR_WIDTH = 260
+_DEFAULT_SIDEBAR_WIDTH = 620
+_MIN_SIDEBAR_WIDTH = 520
 _QSETTINGS_ORG = "RAPID"
 _QSETTINGS_APP = "RapidPy-rapid_main"
 _QSETTINGS_QUEUE_ROWS = "ui/queue_rows"
@@ -254,16 +265,25 @@ class MainWindow(QtWidgets.QMainWindow):
         # Persistent configuration (load or create defaults)
         self.config: AppConfig = AppConfig.load()
         self._current_sample = "UNKNOWN"
-        self._measurement_backend: MeasurementBackend = build_measurement_backend(self.config)
+        self._measurement_backend: MeasurementAutomationBackend = build_measurement_backend(self.config)
+        self._vacuum_backend = build_vacuum_backend(self.config.vacuum, nocomm=self.config.general.nocomm)
+        self._irm_arm_backend = build_irm_arm_backend(self.config.irm_arm, nocomm=self.config.general.nocomm)
+        self._squid_backend = build_squid_backend(self.config.squid, nocomm=self.config.general.nocomm)
+        self._dc_motor_backend = build_dcmotor_backend(
+            port=(self.config.changer.port or "COM3").strip(),
+            baud=int(self.config.changer.baud or 9600),
+            nocomm=bool(self.config.general.nocomm),
+        )
         self._ownership = DeviceOwnershipManager()
+        self._owned_dialog_leases: dict[str, object] = {}
 
         # Runtime estimator — initialised from config step times
         self._estimator = RuntimeEstimator(self.config.sequence.as_estimator_dict())
         self._sequence_labels: list[str] = []  # current loaded sequence step labels
         self._queue_plan: list[QueueCommand] = []
-        self._queue_targets: list[QueueCommand] = []
         self._queue_pos: int = 0
         self._queue_current_sample: str | None = None
+        self._queue_current_command: QueueCommand | None = None
         self._queue_active: bool = False
         self._queue_last_warnings: list[str] = []
 
@@ -358,7 +378,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # ── Sidebar ──
         sidebar = QtWidgets.QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setMinimumWidth(240)
+        sidebar.setMinimumWidth(_DEFAULT_SIDEBAR_WIDTH)
         self._sidebar = sidebar
         sl = QtWidgets.QVBoxLayout(sidebar)
         sl.setContentsMargins(8, 14, 8, 14)
@@ -382,6 +402,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtWidgets.QSizePolicy.Policy.Fixed,
             )
             btn.setMinimumHeight(42)
+            btn.setToolTip(label)
             btn.clicked.connect(lambda _checked, i=idx: self._nav_select(i))
             self._btn_group.addButton(btn)
             self._nav_btns.append(btn)
@@ -404,6 +425,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtWidgets.QSizePolicy.Policy.Fixed,
             )
             btn.setMinimumHeight(38)
+            btn.setToolTip(label)
             btn.clicked.connect(slot)
             sl.addWidget(btn)
 
@@ -509,10 +531,10 @@ class MainWindow(QtWidgets.QMainWindow):
         Validation is intentionally strict for safety and queue automation.
         """
         self._queue_active = False
-        self._queue_targets = []
         self._queue_plan = []
         self._queue_pos = 0
         self._queue_current_sample = None
+        self._queue_current_command = None
 
         if not samples:
             self.set_status("Queue is empty.")
@@ -533,19 +555,32 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return False
 
-        self._queue_targets = [cmd for cmd in self._queue_plan if cmd.command_type == "Meas"]
-        if not self._queue_targets:
-            self.set_status("Queue has no measurement commands.")
+        if not self._queue_plan:
+            self.set_status("Queue has no executable commands.")
             QtWidgets.QMessageBox.information(self, "Queue", "Queue has no measurement steps.")
+            return False
+
+        missing = self._missing_required_queue_methods(self._queue_plan)
+        if missing:
+            message = "Queue requires unsupported backend commands:\n\n" + "\n".join(
+                f"• {item}" for item in missing
+            )
+            self.set_status("Queue cannot start: missing required hardware commands.")
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Queue Error",
+                message,
+            )
             return False
 
         self._queue_active = True
         self._queue_pos = 0
         self._queue_last_warnings = []
         self._queue_current_sample = None
-        self.set_status(f"Queue run started with {len(self._queue_targets)} measurements.")
+        self._queue_current_command = None
+        self.set_status(f"Queue run started with {len(self._queue_plan)} commands.")
         self._save_queue_state()
-        self._run_next_queue_sample()
+        self._run_next_queue_command()
         return True
 
     def cancel_queue_run(self, reason: str = "Queue cancelled.") -> None:
@@ -554,38 +589,210 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if hasattr(self._measurement, "halt_run"):
             self._measurement.halt_run()
+        self._return_queue_to_safe_state()
         self._queue_active = False
         self._queue_plan = []
-        self._queue_targets = []
         self._queue_pos = 0
         self._queue_current_sample = None
+        self._queue_current_command = None
         self._save_queue_state()
         self.set_status(reason)
         self.set_flow_state("idle")
 
-    def _run_next_queue_sample(self) -> None:
+    def _run_next_queue_command(self) -> None:
         if not self._queue_active:
             return
-        if self._queue_pos >= len(self._queue_targets):
+        if self._queue_pos >= len(self._queue_plan):
+            self._return_queue_to_safe_state()
             self._queue_active = False
             self._queue_current_sample = None
+            self._queue_current_command = None
+            self._queue_pos = 0
+            self._queue_plan = []
             self._save_queue_state()
             self.set_status("Queue run complete.")
             self.set_flow_state("complete")
             return
-        target = self._queue_targets[self._queue_pos]
+
+        self._queue_current_command = self._queue_plan[self._queue_pos]
         self._queue_pos += 1
-        self._queue_current_sample = target.sample_name
-        self._sample_queue.start_queue_sample(target.sample_name)
-        if not self._measurement.start_measurement_for_sample(target.sample_name):
+
+        if self._queue_current_command is None:
+            return
+
+        if self._queue_current_command.command_type == "Meas":
+            self._run_measure_command()
+        else:
+            self._run_automation_command(self._queue_current_command)
+
+    def _run_measure_command(self) -> None:
+        if self._queue_current_command is None:
+            return
+        sample_name = self._queue_current_command.sample_name or ""
+        if not sample_name:
+            self.set_status("Queue measurement command missing sample name; continuing.")
+            self._run_next_queue_command()
+            return
+
+        self._queue_current_sample = sample_name
+        self._sample_queue.start_queue_sample(sample_name)
+        if not self._measurement.start_measurement_for_sample(sample_name):
+            self._return_queue_to_safe_state()
             self._queue_active = False
-            self._sample_queue.set_queue_sample_failed(target.sample_name)
+            self._sample_queue.set_queue_sample_failed(sample_name)
             self._queue_current_sample = None
+            self._queue_current_command = None
             self._save_queue_state()
             self.set_status("Queue run failed to start.")
             self.set_flow_state("error")
             return
         self._save_queue_state()
+
+    def _run_automation_command(self, command: QueueCommand) -> None:
+        """Execute queue commands that do not require a full measurement sequence."""
+        if not self._queue_active:
+            return
+        self._queue_current_sample = None
+        lease: object | None = None
+        command_type = command.command_type
+        try:
+            if command_type in {"InitUp", "Holder", "Goto", "Flip"}:
+                lease = self.acquire_device("changer", "queue_workflow")
+
+            method_name: str
+            arg: str | int | None
+            if command_type == "InitUp":
+                method_name = "init_up"
+                arg = command.file_id
+            elif command_type == "Holder":
+                method_name = "holder"
+                arg = command.hole
+            elif command_type == "Goto":
+                method_name = "goto_hole"
+                arg = command.hole
+            elif command_type == "Flip":
+                method_name = "flip"
+                arg = None
+            else:
+                raise ValueError(f"Unsupported queue command '{command_type}'.")
+
+            self._run_device_command(
+                self._measurement_backend,
+                method_name,
+                arg,
+                required=self._is_queue_command_required(command_type),
+            )
+            self._set_queue_position_status(command_type, command)
+            self._save_queue_state()
+            self._run_next_queue_command()
+            return
+        except Exception as exc:
+            if self._queue_current_sample:
+                self._sample_queue.set_queue_sample_failed(self._queue_current_sample)
+            self._return_queue_to_safe_state()
+            self._queue_active = False
+            self._queue_current_command = None
+            self._queue_current_sample = None
+            self._save_queue_state()
+            self.set_status(f"Queue {command.command_type} failed: {exc}")
+            self.set_flow_state("error")
+        finally:
+            if lease is not None:
+                try:
+                    lease.release()
+                except Exception:
+                    pass
+
+    def _run_device_command(
+        self,
+        backend: object,
+        method_name: str,
+        arg: str | int | None = None,
+        *,
+        required: bool,
+    ) -> None:
+        method = getattr(backend, method_name, None)
+        if method is None or not callable(method):
+            if required:
+                raise AttributeError(
+                    f"Backend does not support required command '{method_name}'."
+                )
+            self._queue_last_warnings.append(
+                f"Backend missing optional command '{method_name}'"
+            )
+            self.set_status(f"Queue warning: {method_name} command not supported by backend.")
+            return
+
+        if arg is None:
+            method()
+        else:
+            method(arg)
+
+        self.set_flow_state("positioning")
+
+    def _is_queue_command_required(self, command_type: str) -> bool:
+        """Return whether queue movement must be implemented before run proceeds."""
+        # In no-comm mode we allow graceful fallback so queue compilation can still
+        # exercise the flow without a queue-capable hardware backend.
+        return not bool(self.config.general.nocomm)
+
+    def _missing_required_queue_methods(
+        self,
+        plan: list[QueueCommand],
+    ) -> list[str]:
+        if self.config.general.nocomm:
+            return []
+
+        missing: list[str] = []
+        for cmd in plan:
+            command_type = cmd.command_type
+            if command_type not in {"InitUp", "Holder", "Goto", "Flip", "Meas"}:
+                continue
+            if command_type == "Meas":
+                continue
+            if command_type == "InitUp":
+                method_name = "init_up"
+            elif command_type == "Holder":
+                method_name = "holder"
+            elif command_type == "Goto":
+                method_name = "goto_hole"
+            elif command_type == "Flip":
+                method_name = "flip"
+            else:
+                continue
+
+            method = getattr(self._measurement_backend, method_name, None)
+            if not callable(method):
+                if method_name not in missing:
+                    missing.append(method_name)
+        return missing
+
+    def _set_queue_position_status(self, command_type: str, command: QueueCommand) -> None:
+        details = f"{command_type} command"
+        if command.hole not in (0, -1):
+            details = f"{details} @ hole {command.hole}"
+        if command_type == "InitUp" and command.file_id:
+            details = f"{details} for {command.file_id}"
+        if command.hole in (0, -1):
+            self.set_position("Queue position: return / home")
+        elif command.hole > 0:
+            self.set_position(f"Hole {command.hole}")
+        self.set_status(f"{details} completed.")
+
+    def _return_queue_to_safe_state(self) -> None:
+        try:
+            return_to_safe_state = getattr(self._measurement_backend, "return_to_safe_state")
+        except AttributeError:
+            return
+
+        if not callable(return_to_safe_state):
+            return
+
+        try:
+            return_to_safe_state()
+        except Exception as exc:
+            self.set_status(f"Queue safe-state returned with warning: {exc}")
+            self.log_event(f"Queue safe-state warning: {exc}")
 
     def _on_queue_sample_finished(self, aborted: bool, sample: str) -> None:
         if not self._queue_active:
@@ -596,24 +803,30 @@ class MainWindow(QtWidgets.QMainWindow):
             else False
         )
         if aborted:
+            self._return_queue_to_safe_state()
             self._queue_active = False
             self._sample_queue.set_queue_sample_failed(sample)
             self._queue_current_sample = None
+            self._queue_current_command = None
             self._save_queue_state()
             self.set_status(f"Queue stopped after sample {sample}.")
             return
         if had_error:
+            self._return_queue_to_safe_state()
             self._queue_active = False
             self._sample_queue.set_queue_sample_failed(sample)
             self._queue_current_sample = None
+            self._queue_current_command = None
             self._save_queue_state()
             self.set_status(f"Queue sample {sample} failed with an error.")
             return
         self._sample_queue.mark_queue_sample_done(sample)
+        if self._queue_current_command is not None:
+            self._set_queue_position_status("Meas", self._queue_current_command)
         self._save_queue_state()
-        self._run_next_queue_sample()
+        self._run_next_queue_command()
 
-    def measurement_backend(self) -> MeasurementBackend:
+    def measurement_backend(self) -> MeasurementAutomationBackend:
         """Return the active workflow backend."""
         return self._measurement_backend
 
@@ -754,6 +967,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.config.general.nocomm = bool(on)
         self.config.save()
         self._measurement_backend = build_measurement_backend(self.config)
+        self._vacuum_backend = build_vacuum_backend(self.config.vacuum, nocomm=bool(on))
+        self._irm_arm_backend = build_irm_arm_backend(self.config.irm_arm, nocomm=bool(on))
+        self._squid_backend = build_squid_backend(self.config.squid, nocomm=bool(on))
+        self._dc_motor_backend = build_dcmotor_backend(
+            port=(self.config.changer.port or "COM3").strip(),
+            baud=int(self.config.changer.baud or 9600),
+            nocomm=bool(on),
+        )
         if on:
             self._flow_lbl.setObjectName("flowNocomm")
             self._flow_lbl.setText("⊘  No-Comm")
@@ -763,56 +984,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self._flow_lbl.style().unpolish(self._flow_lbl)
         self._flow_lbl.style().polish(self._flow_lbl)
 
-    # ── Diagnostic launchers (stubs — wired in Phase 3) ───────────────────────
+    # ── Diagnostic launchers ───────────────────────────────────────────────────
     def _launch_dc_motors(self) -> None:
-        dc_motor_script = (
-            Path(__file__).resolve().parents[2] / "dc_motor_control" / "main.py"
+        self._run_owned_dialog(
+            "dc_motors",
+            "dc_motors_panel",
+            lambda owner: DCMotorDialog(
+                owner,
+                backend=self._dc_motor_backend,
+                port=(self.config.changer.port or "COM3").strip(),
+                baud=int(self.config.changer.baud or 9600),
+            ),
+            modal=False,
         )
-        if not dc_motor_script.exists():
-            QtWidgets.QMessageBox.warning(
-                self,
-                "DC Motors",
-                "DC Motors launcher script is missing.",
-            )
-            return
 
-        if (
-            hasattr(self, "_dc_motor_proc")
-            and getattr(self, "_dc_motor_proc")
-            and self._dc_motor_proc.poll() is None
-        ):
-            QtWidgets.QMessageBox.information(
-                self,
-                "DC Motors",
-                "DC Motors is already running.",
-            )
-            return
-
-        try:
-            dc_motor_lease = self.acquire_device("dc_motors", "dc_motors_panel")
-        except DeviceOwnershipError as exc:
-            QtWidgets.QMessageBox.warning(self, "DC Motors", str(exc))
-            return
-
-        try:
-            self._dc_motor_proc = subprocess.Popen(
-                [sys.executable, str(dc_motor_script)],
-                cwd=str(dc_motor_script.parent),
-            )
-            self._dc_motor_lease = dc_motor_lease
-        except OSError as exc:
-            dc_motor_lease.release()
-            QtWidgets.QMessageBox.warning(
-                self,
-                "DC Motors",
-                f"Unable to launch DC Motors utility:\n{exc}",
-            )
-            self._dc_motor_proc = None
-            self._dc_motor_lease = None
-            return
-
-        self.set_status("DC Motors launched in a separate window.")
-        QtCore.QTimer.singleShot(1000, self._finalize_dc_motor_launch)
+        # Ensure all configured port settings are visible if user asks to open again.
+        if self.config.changer.port:
+            self.set_status(f"DC Motor dialog opened for {self.config.changer.port}.")
+        else:
+            self.set_status("DC Motor dialog opened.")
 
     @staticmethod
     def _af_demo_labels() -> list[str]:
@@ -855,13 +1045,25 @@ class MainWindow(QtWidgets.QMainWindow):
         return True
 
     def _launch_irm(self) -> None:
-        self._run_owned_dialog("irm", "irm_panel", IrmArmDialog)
+        self._run_owned_dialog(
+            "irm",
+            "irm_panel",
+            lambda owner: IrmArmDialog(owner, backend=self._irm_arm_backend),
+        )
 
     def _launch_vacuum(self) -> None:
-        self._run_owned_dialog("vacuum", "vacuum_panel", VacuumDialog)
+        self._run_owned_dialog(
+            "vacuum",
+            "vacuum_panel",
+            lambda owner: VacuumDialog(owner, backend=self._vacuum_backend),
+        )
 
     def _launch_squid(self) -> None:
-        self._run_owned_dialog("squid", "squid_panel", SquidCommDialog)
+        self._run_owned_dialog(
+            "squid",
+            "squid_panel",
+            lambda owner: SquidCommDialog(owner, backend=self._squid_backend),
+        )
 
     def _run_owned_dialog(
         self,
@@ -883,14 +1085,47 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "Device Busy", str(exc))
             return
 
+        if not callable(dialog_factory):
+            if lease is not None:
+                lease.release()
+            QtWidgets.QMessageBox.warning(self, "Dialog", "Invalid dialog factory.")
+            return
+
         try:
             dlg = dialog_factory(self)
+            if not isinstance(dlg, QtWidgets.QWidget):
+                raise TypeError("Dialog factory must return a QWidget/QDialog instance.")
+            dlg.setWindowIcon(self.windowIcon())
+
             if modal:
                 dlg.exec()
             else:
+                dlg.setAttribute(
+                    QtCore.Qt.WidgetAttribute.WA_DeleteOnClose,
+                    True,
+                )
+                self._owned_dialog_leases[resource] = lease
+
+                @QtCore.Slot(object)
+                def _release_owner(_obj: object) -> None:
+                    held_lease = self._owned_dialog_leases.pop(resource, None)
+                    if held_lease is not None:
+                        held_lease.release()
+
+                dlg.destroyed.connect(_release_owner)
                 dlg.show()
-        finally:
+                dlg.raise_()
+        except Exception as exc:
             if lease is not None:
+                lease.release()
+                lease = None
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Dialog Error",
+                f"Unable to open diagnostic dialog: {exc}",
+            )
+        else:
+            if lease is not None and modal:
                 lease.release()
 
     def _run_owned_stub_dialog(
@@ -917,21 +1152,6 @@ class MainWindow(QtWidgets.QMainWindow):
             lambda _parent: _StubDialog(),
             modal=modal,
         )
-
-    def _finalize_dc_motor_launch(self) -> None:
-        proc = getattr(self, "_dc_motor_proc", None)
-        if proc is None:
-            return
-
-        if proc.poll() is None:
-            QtCore.QTimer.singleShot(1000, self._finalize_dc_motor_launch)
-            return
-
-        lease = getattr(self, "_dc_motor_lease", None)
-        if lease is not None:
-            lease.release()
-            self._dc_motor_lease = None
-        self._dc_motor_proc = None
 
     def closeEvent(self, event) -> None:
         """Confirm safe shutdown and persist layout settings before closing."""
@@ -1018,6 +1238,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         sidebar_width = self._settings.value("ui/sidebar_width", _DEFAULT_SIDEBAR_WIDTH, type=int)
         splitter_state = self._settings.value("ui/main_splitter_state")
+        sidebar_target = _DEFAULT_SIDEBAR_WIDTH
+        if isinstance(sidebar_width, int):
+            sidebar_target = max(_MIN_SIDEBAR_WIDTH, sidebar_width)
 
         if splitter_state:
             self._main_splitter.restoreState(splitter_state)
@@ -1025,8 +1248,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._main_splitter.setSizes(
                     [_DEFAULT_SIDEBAR_WIDTH, max(1, self.width() - _DEFAULT_SIDEBAR_WIDTH)]
                 )
-        elif isinstance(sidebar_width, int) and sidebar_width >= 120:
-            self._main_splitter.setSizes([sidebar_width, max(1, self.width() - sidebar_width)])
+        elif sidebar_target >= _MIN_SIDEBAR_WIDTH:
+            self._main_splitter.setSizes([sidebar_target, max(1, self.width() - sidebar_target)])
         else:
             self._main_splitter.setSizes(
                 [_DEFAULT_SIDEBAR_WIDTH, max(1, self.width() - _DEFAULT_SIDEBAR_WIDTH)]
@@ -1273,8 +1496,8 @@ def main() -> int:
     apply_liquid_glass_theme(app)
     app.setStyleSheet(app.styleSheet() + _EXTRA_CSS)
     assets_dir = Path(__file__).resolve().parent.parent / "assets"
-    set_app_icon(app, "rapid_icon.png", assets_dir)
+    set_app_icon(app, "rapid_main_window_icon.png", assets_dir)
     window = MainWindow()
-    set_app_icon(window, "rapid_icon.png", assets_dir)
+    set_app_icon(window, "rapid_main_window_icon.png", assets_dir)
     window.show()
     return app.exec()

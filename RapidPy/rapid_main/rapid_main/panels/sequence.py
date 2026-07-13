@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from PySide6 import QtCore, QtWidgets
 
@@ -76,22 +74,25 @@ class SequencePanel(QtWidgets.QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setHorizontalSpacing(10)
         row.setVerticalSpacing(8)
+        row.setColumnStretch(1, 1)
 
-        hw_btn = QtWidgets.QPushButton("Hawaiian Std AF\n(25, 50, 100, 200, 400, 800 mT)")
+        hw_btn = QtWidgets.QPushButton("Hawaiian AF Preset")
         hw_btn.setMinimumHeight(52)
         hw_btn.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
+        hw_btn.setToolTip("Hawaiian Standard AF\n(25, 50, 100, 200, 400, 800 mT)")
         hw_btn.clicked.connect(self._preset_hawaiian)
 
-        rw_btn = QtWidgets.QPushButton('Rockmag "the Works"\n(NRM + ARM + IRM + AF/IRM)')
+        rw_btn = QtWidgets.QPushButton('Rockmag the Works')
         rw_btn.setMinimumHeight(52)
         rw_btn.setObjectName("accent")
         rw_btn.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
+        rw_btn.setToolTip("NRM + ARM + IRM + AF/IRM")
         rw_btn.clicked.connect(self._preset_works)
 
         row.addWidget(hw_btn, 0, 0)
@@ -194,35 +195,43 @@ class SequencePanel(QtWidgets.QWidget):
 
     def _param_row(self, parent_chk: QtWidgets.QCheckBox,
                    params: list[tuple[str, float, float, float]]
-                   ) -> tuple[QtWidgets.QHBoxLayout, ...]:
-        row = QtWidgets.QGridLayout()
-        row.setContentsMargins(22, 2, 0, 2)
+                   ) -> tuple[QtWidgets.QLayout, ...]:
+        row = QtWidgets.QVBoxLayout()
+        row.setContentsMargins(22, 2, 6, 2)
         row.setSpacing(6)
-        row.setColumnMinimumWidth(0, 90)
-        row.setHorizontalSpacing(8)
         spins = []
-        for col, (label, default, lo, hi) in enumerate(params):
-            lbl = QtWidgets.QLabel(label)
+        for label, default, lo, hi in params:
+            row_widget = QtWidgets.QWidget()
+            row_layout = QtWidgets.QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(6)
+
+            lbl = QtWidgets.QLabel(f"{label}:")
             lbl.setObjectName("readLbl")
-            lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
-            lbl.setMinimumWidth(95)
+            lbl.setWordWrap(True)
+            lbl.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
+            lbl.setMinimumWidth(102)
             spin = QtWidgets.QDoubleSpinBox()
             spin.setRange(lo, hi)
             spin.setValue(default)
             spin.setSizePolicy(
-                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Fixed,
                 QtWidgets.QSizePolicy.Policy.Fixed,
             )
-            spin.setMinimumWidth(130)
+            spin.setMinimumWidth(126)
             spin.setDecimals(3)
-            spin.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+            spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.UpDownArrows)
             spin.setEnabled(False)
             spin.valueChanged.connect(self._rebuild_preview)
             parent_chk.toggled.connect(spin.setEnabled)
-            row.addWidget(lbl, 0, col * 2)
-            row.addWidget(spin, 0, col * 2 + 1)
+            row_layout.addWidget(lbl)
+            row_layout.addWidget(spin)
+            row_layout.setStretch(1, 1)
+            row.addWidget(row_widget)
             spins.append(spin)
-        row.setColumnStretch(len(params) * 2, 1)
         return (row, *spins)
 
     # ── Preview ───────────────────────────────────────────────────────────────
