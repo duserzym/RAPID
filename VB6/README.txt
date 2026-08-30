@@ -4,6 +4,21 @@ by Laurent Carporzen & Bob Kopp & Scott Bogue & Isaac Hilburn
 January 27th, 2010
 Licensed under the terms of the GNU General Public License
 
+MODERN WINDOWS LAUNCH PREFLIGHT
+
+On a current 64-bit Windows computer, run this from PowerShell before connecting
+the RAPID hardware:
+
+    powershell -ExecutionPolicy Bypass -File .\Test-LaunchReadiness.ps1
+
+The script checks for the 32-bit VB6 runtime, a compiled PALEOMAG2013.exe or the
+VB6 IDE/compiler, and the legacy ActiveX controls referenced by Paleomag v3.vbp.
+After all checks pass, add -Launch to start the compiled application (preferred)
+or the VB6 project. Add -RunAndExit only when launching through the VB6 IDE.
+
+Use C:\Windows\SysWOW64\regsvr32.exe, not the 64-bit System32 copy, when
+registering required 32-bit OCX/DLL components.
+
 *****
 
 Contents:
