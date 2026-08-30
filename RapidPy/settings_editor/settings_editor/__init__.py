@@ -1,0 +1,1 @@
+"""RapidPy settings editor package."""
