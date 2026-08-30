@@ -5,8 +5,12 @@ import unittest
 
 from rapid_main.config import CalibrationConfig
 from rapid_main.magnetometer import (
+    BracketedMeasurementBlock,
+    FluxCountDiscontinuityError,
     MagnetometerCalibration,
     calibrate_magnetometer_reading,
+    reduce_bracketed_measurement,
+    validate_zero_pair,
 )
 
 
@@ -70,6 +74,60 @@ class MagnetometerTests(unittest.TestCase):
             calibrate_magnetometer_reading((1.0, 2.0))
         with self.assertRaisesRegex(TypeError, "calibration"):
             calibrate_magnetometer_reading((1.0, 2.0, 3.0), object())  # type: ignore[arg-type]
+
+    def test_rejects_archived_x_axis_flux_count_step_before_interpolation(self) -> None:
+        validation = validate_zero_pair(
+            (-1.0436457, 0.0, 0.0),
+            (-0.95364007, 0.0, 0.0),
+        )
+
+        self.assertFalse(validation.valid)
+        self.assertEqual(validation.discontinuous_axes, ("X",))
+        self.assertEqual(validation.flux_step_axes, ("X",))
+        self.assertAlmostEqual(validation.deltas[0], 0.09000563)
+
+        block = BracketedMeasurementBlock(
+            zero_before=(-1.0436457, 0.0, 0.0),
+            positions=((0.0, 0.0, 0.0),) * 4,
+            zero_after=(-0.95364007, 0.0, 0.0),
+        )
+        with self.assertRaisesRegex(FluxCountDiscontinuityError, "bracketing zeros"):
+            reduce_bracketed_measurement(block)
+
+    def test_reduces_stable_bracketed_block_only_after_validation(self) -> None:
+        block = BracketedMeasurementBlock(
+            zero_before=(0.0, 0.0, 0.0),
+            positions=(
+                (1.001, 2.001, 3.001),
+                (1.002, 2.002, 3.002),
+                (1.003, 2.003, 3.003),
+                (1.004, 2.004, 3.004),
+            ),
+            zero_after=(0.005, 0.005, 0.005),
+        )
+
+        result = reduce_bracketed_measurement(block)
+
+        self.assertTrue(result.validation.valid)
+        self.assertAlmostEqual(result.mean_raw[0], 0.0)
+        self.assertAlmostEqual(result.mean_raw[1], 0.0)
+        self.assertAlmostEqual(result.mean_raw[2], 3.0)
+        self.assertAlmostEqual(result.moment_emu[2], 3.0e-5)
+
+    def test_rejects_independent_monotonic_holder_staircase_guard(self) -> None:
+        block = BracketedMeasurementBlock(
+            zero_before=(0.0, 0.0, 0.0),
+            positions=(
+                (-0.075787979, 0.0, 0.0),
+                (-0.057467791, 0.0, 0.0),
+                (-0.037529347, 0.0, 0.0),
+                (-0.017978350, 0.0, 0.0),
+            ),
+            zero_after=(0.0, 0.0, 0.0),
+        )
+
+        with self.assertRaisesRegex(FluxCountDiscontinuityError, "monotonic holder X staircase"):
+            reduce_bracketed_measurement(block)
 
 
 if __name__ == "__main__":

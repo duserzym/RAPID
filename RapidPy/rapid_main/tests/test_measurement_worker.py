@@ -11,6 +11,7 @@ from PySide6 import QtCore
 
 from rapid_main.data_model import SpecimenMeta
 from rapid_main.hardware_contracts import PreflightResult
+from rapid_main.magnetometer import BracketedMeasurementBlock, ZeroPairValidation
 from rapid_main.measurement_worker import MeasurementWorker
 from rapid_main.workflow import WorkflowPhase
 
@@ -258,6 +259,29 @@ class HaltingBackend:
 
     def is_available(self) -> bool:
         return True
+
+
+class FluxRecoveryBackend(DeterministicBackend):
+    """Returns one invalid bracketed block, then a valid legacy moment tuple."""
+
+    flux_discontinuity_retries = 2
+
+    def __init__(self) -> None:
+        super().__init__([("NRM", 1.0, 2.0, 3.0)])
+        self.recovery_evidence: list[ZeroPairValidation] = []
+
+    def read_squid(self) -> BracketedMeasurementBlock | tuple[float, float, float]:
+        self.squid_calls += 1
+        if self.squid_calls == 1:
+            return BracketedMeasurementBlock(
+                zero_before=(-1.0436457, 0.0, 0.0),
+                positions=((0.0, 0.0, 0.0),) * 4,
+                zero_after=(-0.95364007, 0.0, 0.0),
+            )
+        return (1.0, 2.0, 3.0)
+
+    def recover_flux_count_discontinuity(self, evidence: ZeroPairValidation) -> None:
+        self.recovery_evidence.append(evidence)
 
 
 def _meta(name: str = "MEASURE_WORKER") -> SpecimenMeta:
@@ -635,6 +659,22 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
         self.assertAlmostEqual(result.step.sdz, 2.0)
         self.assertEqual(result.cycle_stats.count, 3)
         self.assertEqual(result.cycle_stats.axis_ranges, (2.0, 2.0, 2.0))
+
+    def test_worker_rejects_block_then_uses_backend_rezero_hook_before_retry(self) -> None:
+        backend = FluxRecoveryBackend()
+        with tempfile.TemporaryDirectory() as td:
+            worker = MeasurementWorker(
+                meta=_meta("FLUX_RECOVERY"),
+                labels=["NRM"],
+                output_dir=Path(td) / "FLUX_RECOVERY",
+                backend=backend,
+            )
+            vector = worker._read_validated_squid_sample("NRM")
+
+        self.assertEqual(vector, (1.0, 2.0, 3.0))
+        self.assertEqual(backend.squid_calls, 2)
+        self.assertEqual(len(backend.recovery_evidence), 1)
+        self.assertEqual(backend.recovery_evidence[0].flux_step_axes, ("X",))
 
     def test_halt_during_step_marks_run_halted_without_error(self) -> None:
         backend = HaltingBackend(step_delay=0.5)

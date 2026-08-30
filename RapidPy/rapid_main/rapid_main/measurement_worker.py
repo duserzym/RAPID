@@ -48,7 +48,12 @@ from rapid_main.communication_log import CommunicationLogger
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
 from rapid_main.geometry import Cartesian3D, cartesian3d_to_angular3d
-from rapid_main.magnetometer import MagnetometerReading
+from rapid_main.magnetometer import (
+    BracketedMeasurementBlock,
+    FluxCountDiscontinuityError,
+    MagnetometerReading,
+    reduce_bracketed_measurement,
+)
 from rapid_main.status_codes import OperatorStatus, error_status, status_for_phase, warning_status
 from rapid_main.susceptibility import write_susceptibility_summary_json
 from rapid_main.workflow import WorkflowPhase, WorkflowStateMachine
@@ -477,7 +482,10 @@ class MeasurementWorker(QtCore.QThread):
     def _coerce_squid_reading(self, reading: object, label: str) -> tuple[float, float, float]:
         """Accept legacy tuple reads or calibrated magnetometer evidence."""
         quality_flags: tuple[str, ...] = ()
-        if isinstance(reading, MagnetometerReading):
+        if isinstance(reading, BracketedMeasurementBlock):
+            result = reduce_bracketed_measurement(reading)
+            sdx, sdy, sdz = result.moment_emu
+        elif isinstance(reading, MagnetometerReading):
             sdx, sdy, sdz = reading.moment_emu
             quality_flags = reading.flags
         else:
@@ -497,15 +505,42 @@ class MeasurementWorker(QtCore.QThread):
 
         readings: list[tuple[float, float, float]] = []
         for _ in range(self._samples_per_position):
+            vector = self._read_validated_squid_sample(label)
+            readings.append(vector)
+            self._comm_received(vector, detail="read_squid")
+        return reading_cycle_statistics(readings)
+
+    def _read_validated_squid_sample(self, label: str) -> tuple[float, float, float]:
+        """Read one sample, recovering only when a backend can safely re-zero."""
+
+        retry_value = getattr(self._backend, "flux_discontinuity_retries", 2)
+        try:
+            retry_limit = max(0, int(retry_value))
+        except (TypeError, ValueError):
+            retry_limit = 2
+        for attempt in range(retry_limit + 1):
             squid_reading = self._call_with_timeout(
                 self._backend.read_squid,
                 timeout=self._get_backend_timeout("read_timeout"),
                 phase="read_squid",
             )
-            vector = self._coerce_squid_reading(squid_reading, label)
-            readings.append(vector)
-            self._comm_received(vector, detail="read_squid")
-        return reading_cycle_statistics(readings)
+            try:
+                return self._coerce_squid_reading(squid_reading, label)
+            except FluxCountDiscontinuityError as exc:
+                self._comm_warning(f"rejected SQUID block at {label}: {exc}")
+                recover = getattr(self._backend, "recover_flux_count_discontinuity", None)
+                if attempt >= retry_limit or not callable(recover):
+                    raise
+                self._emit_warning(
+                    f"Rejected discontinuous SQUID block at step {label}; "
+                    f"re-zeroing and retrying ({attempt + 1}/{retry_limit}): {exc}"
+                )
+                self._call_with_timeout(
+                    lambda: recover(exc.validation),
+                    timeout=self._get_backend_timeout("read_timeout"),
+                    phase="recover_flux_count_discontinuity",
+                )
+        raise RuntimeError("unreachable SQUID retry state")
 
     def _comm_info(self, detail: str) -> None:
         if self._comm_logger is not None:

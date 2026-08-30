@@ -6,6 +6,10 @@ Attribute VB_Name = "modMeasure"
 Option Explicit  ' enforce variable declaration!
 ' Time delay after ARC squid box command
 Const Measure_ARCDelay = 2.5
+' A normal zero drift must stay well below the axis-specific one-count steps
+' observed in archived 2G data (approximately X=.090, Y=.106, Z=.066).
+Private Const Measure_MaxContinuousZeroDrift As Double = 0.02
+Private Const Measure_MinStaircaseSpan As Double = 0.04
 ' Sample Orientation
 Global Const Magnet_SampleOrientationUp As Integer = -1
 Global Const Magnet_SampleOrientationDown As Integer = 1
@@ -174,12 +178,14 @@ Sub Measure_Read(targetSample As Sample, _
     Dim avstats As Measure_AvgStats
     Dim avg As Cartesian3D
     Dim msgret As VbMsgBoxResult
+    Dim currentBlock As MeasurementBlock
+    Dim blankHolder As MeasurementBlock
     ' Initialize variables
     If Prog_halted Then Exit Sub
     If IsHolder Then
-        ' Do initializations necessary for holder
-        Set Holder = Nothing
-        Set Holder = New MeasurementBlock
+        ' Keep the last accepted holder active until the complete replacement
+        ' block passes validation.  A rejected block must never propagate.
+        Set blankHolder = New MeasurementBlock
         frmSQUID.ChangeRange "A", "1" ' 1x read mode
         numAvgSteps = SampQueue.maxAvgSteps
     Else
@@ -194,9 +200,20 @@ Sub Measure_Read(targetSample As Sample, _
     ' Begin
     For i = 1 To numAvgSteps
         '  Do the initial zero measurement here
-        readDats.Add Measure_ReadSample(targetSample, IsHolder, isUp)
+        Set currentBlock = Measure_ReadSample(targetSample, IsHolder, isUp)
+        If Prog_halted Or (currentBlock Is Nothing) Then
+            Set currentBlock = Nothing
+            Set blankHolder = Nothing
+            Exit Sub
+        End If
+        readDats.Add currentBlock
+        Set currentBlock = Nothing
         For j = 1 To 4
-            readDats.Last.SetHolder j, Holder.Sample(j)
+            If IsHolder Then
+                readDats.Last.SetHolder j, blankHolder.Sample(j)
+            Else
+                readDats.Last.SetHolder j, Holder.Sample(j)
+            End If
         Next j
         readDats.Last.isUp = isUp
         Set avg = readDats.VectAvg
@@ -274,6 +291,7 @@ Sub Measure_Read(targetSample As Sample, _
     If NOCOMM_MODE Then DelayTime 5
     Set sdvect = Nothing
     Set readDats = Nothing
+    Set blankHolder = Nothing
     SampleNameCurrent = vbNullString
     SampleStepCurrent = vbNullString
 End Sub
@@ -294,6 +312,10 @@ Private Function Measure_ReadSample(specimen As Sample, _
     Dim blocks As MeasurementBlocks
     Dim avstats As Measure_AvgStats
     Dim avg As Cartesian3D
+    Dim discontinuityDetail As String
+    Dim retryLimit As Integer
+    Dim hasDiscontinuousZero As Boolean
+    Dim hasHolderStaircase As Boolean
     Dim MaxX, MaxY, MaxZ, MinX, MinY, MinZ As Double
     MaxX = -1000000000
     MaxY = -1000000000
@@ -578,6 +600,40 @@ Private Function Measure_ReadSample(specimen As Sample, _
     X = Abs(curMeas.X - Measure_ReadSample.Baselines(1).X)
     Y = Abs(curMeas.Y - Measure_ReadSample.Baselines(1).Y)
     Z = Abs(curMeas.Z - Measure_ReadSample.Baselines(1).Z)
+    retryLimit = NbTry
+    If retryLimit < 1 Then retryLimit = 3
+
+    ' A flux-count discontinuity is categorically invalid.  Unlike the legacy
+    ' generic jump rule below, this rule is never relaxed after the retry limit.
+    hasDiscontinuousZero = Measure_HasZeroDiscontinuity(Measure_ReadSample, discontinuityDetail)
+    If IsHolder Then
+        hasHolderStaircase = Measure_HasHolderStaircase(Measure_ReadSample, discontinuityDetail)
+    End If
+    If Not NOCOMM_MODE And (hasDiscontinuousZero Or hasHolderStaircase) _
+    Then
+        frmMeasure.lblRescan.Caption = "Flux-count step"
+        frmProgram.StatusBar "Rejected measurement: " & discontinuityDetail, 3
+        If DEBUG_MODE Then frmDebug.Msg "Rejected " & specimen.Samplename & ": " & discontinuityDetail
+
+        If Meascount >= retryLimit Then
+            MsgBox "The SQUID zero/count readings remained discontinuous after " & _
+                   Format$(retryLimit, "0") & " attempts." & vbCrLf & vbCrLf & _
+                   discontinuityDetail & vbCrLf & vbCrLf & _
+                   "The measurement was not saved and the previous holder correction remains active. " & _
+                   "Check the 2G 581 counter/DVM path before resuming.", _
+                   vbCritical + vbOKOnly, "SQUID flux-count discontinuity"
+            Flow_Halt
+            Set Measure_ReadSample = Nothing
+            Exit Function
+        End If
+
+        Meascount = Meascount + 1
+        frmSQUID.CLP "A"
+        frmSQUID.ResetCount "A"
+        DelayTime (Measure_ARCDelay * 1)
+        Set Measure_ReadSample = Measure_ReadSample(specimen, IsHolder, isUp, True)
+        Exit Function
+    End If
 ' To avoid repetitive measurements, "Number of try:" (Meascount) is the maximum try per measurement. You can change in the Options menu the "Number of try:" (default = 5)
 ' You can change in the Options menu the minimum moment ("Critical moment (emu):", default = 8.10-9 emu) where the CSD criteria is apply
     If Meascount >= NbTry Then
@@ -800,6 +856,87 @@ Private Function Measure_ReadSample(specimen As Sample, _
     
     SampleNameCurrent = vbNullString
     
+End Function
+
+Private Function Measure_HasZeroDiscontinuity(ByVal block As MeasurementBlock, _
+    ByRef detail As String) As Boolean
+    Dim dx As Double, dy As Double, dz As Double
+    Dim axes As String
+
+    dx = Abs(block.Baselines(2).X - block.Baselines(1).X)
+    dy = Abs(block.Baselines(2).Y - block.Baselines(1).Y)
+    dz = Abs(block.Baselines(2).Z - block.Baselines(1).Z)
+
+    If dx > Measure_MaxContinuousZeroDrift Then axes = axes & " X=" & Format$(dx, "0.000000")
+    If dy > Measure_MaxContinuousZeroDrift Then axes = axes & " Y=" & Format$(dy, "0.000000")
+    If dz > Measure_MaxContinuousZeroDrift Then axes = axes & " Z=" & Format$(dz, "0.000000")
+
+    Measure_HasZeroDiscontinuity = (Len(axes) > 0)
+    If Measure_HasZeroDiscontinuity Then
+        detail = "discontinuous bracketing zeros (limit " & _
+                 Format$(Measure_MaxContinuousZeroDrift, "0.000000") & "):" & axes
+    End If
+End Function
+
+Private Function Measure_HasHolderStaircase(ByVal block As MeasurementBlock, _
+    ByRef detail As String) As Boolean
+    Dim adjusted(1 To 4) As Cartesian3D
+    Dim i As Integer
+    Dim rangeX As Double, rangeY As Double, rangeZ As Double
+
+    For i = 1 To 4
+        Set adjusted(i) = block.BaselineAdjustedSample(i)
+    Next i
+
+    rangeX = Measure_VectorRange(adjusted(1).X, adjusted(2).X, adjusted(3).X, adjusted(4).X)
+    rangeY = Measure_VectorRange(adjusted(1).Y, adjusted(2).Y, adjusted(3).Y, adjusted(4).Y)
+    rangeZ = Measure_VectorRange(adjusted(1).Z, adjusted(2).Z, adjusted(3).Z, adjusted(4).Z)
+
+    If Measure_IsMonotonic(adjusted(1).X, adjusted(2).X, adjusted(3).X, adjusted(4).X) And _
+       rangeX >= Measure_MinStaircaseSpan And _
+       rangeX >= 2 * (Measure_Max(rangeY, rangeZ) + 0.005) _
+    Then
+        detail = "monotonic holder X staircase, span=" & Format$(rangeX, "0.000000")
+        Measure_HasHolderStaircase = True
+    ElseIf Measure_IsMonotonic(adjusted(1).Y, adjusted(2).Y, adjusted(3).Y, adjusted(4).Y) And _
+           rangeY >= Measure_MinStaircaseSpan And _
+           rangeY >= 2 * (Measure_Max(rangeX, rangeZ) + 0.005) _
+    Then
+        detail = "monotonic holder Y staircase, span=" & Format$(rangeY, "0.000000")
+        Measure_HasHolderStaircase = True
+    ElseIf Measure_IsMonotonic(adjusted(1).Z, adjusted(2).Z, adjusted(3).Z, adjusted(4).Z) And _
+           rangeZ >= Measure_MinStaircaseSpan And _
+           rangeZ >= 2 * (Measure_Max(rangeX, rangeY) + 0.005) _
+    Then
+        detail = "monotonic holder Z staircase, span=" & Format$(rangeZ, "0.000000")
+        Measure_HasHolderStaircase = True
+    End If
+
+    For i = 1 To 4
+        Set adjusted(i) = Nothing
+    Next i
+End Function
+
+Private Function Measure_IsMonotonic(ByVal a As Double, ByVal b As Double, _
+    ByVal c As Double, ByVal d As Double) As Boolean
+    Measure_IsMonotonic = ((a < b And b < c And c < d) Or _
+                           (a > b And b > c And c > d))
+End Function
+
+Private Function Measure_VectorRange(ByVal a As Double, ByVal b As Double, _
+    ByVal c As Double, ByVal d As Double) As Double
+    Dim high As Double, low As Double
+    high = Measure_Max(Measure_Max(a, b), Measure_Max(c, d))
+    low = Measure_Min(Measure_Min(a, b), Measure_Min(c, d))
+    Measure_VectorRange = high - low
+End Function
+
+Private Function Measure_Max(ByVal a As Double, ByVal b As Double) As Double
+    If a > b Then Measure_Max = a Else Measure_Max = b
+End Function
+
+Private Function Measure_Min(ByVal a As Double, ByVal b As Double) As Double
+    If a < b Then Measure_Min = a Else Measure_Min = b
 End Function
 
 Public Function Measure_Rotate(ByVal inc As Double, ByVal dec As Double, _
