@@ -1,0 +1,184 @@
+"""Holder measurement command: acquire, validate, then install atomically.
+
+VB6 ``Measure_Read`` measures the holder with a *blank* holder correction
+(``blankHolder``), averages ``avgSteps`` validated blocks, and only then
+replaces the module-level ``Holder``.  A rejected block halts the run and
+leaves the previous holder active.
+
+This module reproduces that command as a testable service so queue-level
+behavior — not just the reduction math — can be asserted.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Callable
+
+from rapid_main.holder_state import (
+    HolderCorrection,
+    HolderStateError,
+    HolderStateStore,
+)
+from rapid_main.magnetometer import (
+    BracketedMeasurementBlock,
+    BracketedMeasurementResult,
+    FluxCountDiscontinuityError,
+    ObservationIntegrityError,
+    Position4,
+    reduce_bracketed_measurement,
+)
+
+AcquireBlock = Callable[[], BracketedMeasurementBlock]
+RecoverHook = Callable[[object], object]
+
+
+@dataclass(frozen=True)
+class HolderMeasurementOutcome:
+    """Result of one holder-measurement command."""
+
+    installed: bool
+    correction: HolderCorrection | None
+    previous: HolderCorrection | None
+    blocks: tuple[BracketedMeasurementBlock, ...] = ()
+    results: tuple[BracketedMeasurementResult, ...] = ()
+    recovery_attempts: int = 0
+    rejection_reason: str = ""
+
+    @property
+    def retained_previous(self) -> bool:
+        """True when the command finished without replacing the holder."""
+
+        return not self.installed
+
+
+class HolderMeasurementService:
+    """Acquire, validate, and install a replacement holder correction."""
+
+    def __init__(
+        self,
+        acquire: AcquireBlock,
+        store: HolderStateStore,
+        *,
+        recover: RecoverHook | None = None,
+        averaging_cycles: int = 1,
+        flux_discontinuity_retries: int = 2,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._acquire = acquire
+        self._store = store
+        self._recover = recover
+        self._averaging_cycles = max(1, int(averaging_cycles))
+        self._retries = max(0, int(flux_discontinuity_retries))
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+
+    @property
+    def store(self) -> HolderStateStore:
+        return self._store
+
+    def measure(
+        self,
+        *,
+        holder_id: str,
+        hole: int = 0,
+    ) -> HolderMeasurementOutcome:
+        """Run the full holder command; never mutate state on any failure."""
+
+        previous = self._store.current
+        blocks: list[BracketedMeasurementBlock] = []
+        results: list[BracketedMeasurementResult] = []
+        recovery_attempts = 0
+
+        for _cycle in range(self._averaging_cycles):
+            attempt = 0
+            while True:
+                try:
+                    block = self._acquire()
+                    result = reduce_bracketed_measurement(block)
+                except FluxCountDiscontinuityError as exc:
+                    if attempt >= self._retries or self._recover is None:
+                        return HolderMeasurementOutcome(
+                            installed=False,
+                            correction=None,
+                            previous=previous,
+                            blocks=tuple(blocks),
+                            results=tuple(results),
+                            recovery_attempts=recovery_attempts,
+                            rejection_reason=(
+                                f"Holder block rejected and not replaced: {exc}"
+                            ),
+                        )
+                    attempt += 1
+                    recovery_attempts += 1
+                    try:
+                        self._recover(exc.validation)
+                    except Exception as recovery_exc:  # recovery is hardware work
+                        return HolderMeasurementOutcome(
+                            installed=False,
+                            correction=None,
+                            previous=previous,
+                            blocks=tuple(blocks),
+                            results=tuple(results),
+                            recovery_attempts=recovery_attempts,
+                            rejection_reason=(
+                                f"Holder recovery failed after a rejected block: {recovery_exc}"
+                            ),
+                        )
+                    continue
+                except (ObservationIntegrityError, ValueError, TimeoutError, OSError) as exc:
+                    return HolderMeasurementOutcome(
+                        installed=False,
+                        correction=None,
+                        previous=previous,
+                        blocks=tuple(blocks),
+                        results=tuple(results),
+                        recovery_attempts=recovery_attempts,
+                        rejection_reason=f"Holder acquisition failed: {exc}",
+                    )
+                blocks.append(block)
+                results.append(result)
+                break
+
+        averaged = _average_positions(tuple(result.baseline_adjusted_raw for result in results))
+        correction = HolderCorrection.from_result(
+            results[-1],
+            holder_id=holder_id,
+            hole=hole,
+            measured_at_iso=self._clock().isoformat(),
+            averaging_cycles=len(results),
+            positions_override=averaged,
+        )
+        try:
+            self._store.install(correction)
+        except (HolderStateError, OSError) as exc:
+            return HolderMeasurementOutcome(
+                installed=False,
+                correction=None,
+                previous=previous,
+                blocks=tuple(blocks),
+                results=tuple(results),
+                recovery_attempts=recovery_attempts,
+                rejection_reason=f"Holder correction was not installed: {exc}",
+            )
+        return HolderMeasurementOutcome(
+            installed=True,
+            correction=correction,
+            previous=previous,
+            blocks=tuple(blocks),
+            results=tuple(results),
+            recovery_attempts=recovery_attempts,
+        )
+
+
+def _average_positions(position_sets: tuple[Position4, ...]) -> Position4:
+    """VB6 ``MeasurementBlocks.AverageBlock`` over baseline-adjusted vectors."""
+
+    if not position_sets:
+        raise HolderStateError("cannot average an empty set of holder blocks")
+    count = float(len(position_sets))
+    averaged = []
+    for index in range(4):
+        axes = []
+        for axis in range(3):
+            axes.append(sum(float(item[index][axis]) for item in position_sets) / count)
+        averaged.append((axes[0], axes[1], axes[2]))
+    return (averaged[0], averaged[1], averaged[2], averaged[3])

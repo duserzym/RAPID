@@ -505,8 +505,19 @@ def validate_block_observations(
             )
 
 
-def _magnitude(vector: Iterable[float]) -> float:
+def vector_magnitude(vector: Iterable[float]) -> float:
+    """Euclidean magnitude of a three-axis vector."""
+
     return math.sqrt(sum(float(axis) * float(axis) for axis in vector))
+
+
+def holder_average_vector(holder_positions: Position4) -> Vector3:
+    """Public alias for the VB6 ``AverageHolder`` rotation/average."""
+
+    return _holder_average(_coerce_position4(holder_positions, "holder_positions"))
+
+
+_magnitude = vector_magnitude
 
 
 def _safe_ratio(numerator: float, denominator: float) -> float:

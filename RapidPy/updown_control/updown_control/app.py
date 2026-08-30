@@ -877,6 +877,25 @@ def fit_best_measurement_position(points: list[ScanPoint]) -> tuple[float | None
     return best_z, method
 
 
+@dataclass(frozen=True)
+class SquidAxisSample:
+    """One axis of a latched 2G read, with both components preserved."""
+
+    axis: str
+    counts: float
+    dvm: float
+    range_value: float = 1.0
+    count_command: str = ""
+    count_reply: str = ""
+    data_command: str = ""
+    data_reply: str = ""
+
+    @property
+    def raw_value(self) -> float:
+        """VB6 ``getVal``: ``-val(data) - val(count) * rangeval``."""
+        return -float(self.dvm) - float(self.counts) * float(self.range_value)
+
+
 class RawSquidClient:
     def __init__(self) -> None:
         self._serial: serial.Serial | None = None
@@ -941,22 +960,99 @@ class RawSquidClient:
         return chunks.decode("ascii", errors="ignore").strip()
 
     def _query_float(self, command: str) -> float:
+        return self._query_value(command)[0]
+
+    def _query_value(self, command: str) -> tuple[float, str]:
+        """Return the parsed value and the verbatim reply for ``command``."""
         self._send(command)
         response = self._read_response()
         match = FLOAT_RE.search(response)
         if not match:
             raise SquidCommunicationError(f"No numeric value in SQUID response for {command!r}: {response!r}")
-        return float(match.group(0))
+        return float(match.group(0)), response
+
+    # -- Atomic 2G 581 operations -----------------------------------------
+    #
+    # VB6 ``frmSQUID`` exposes latch, counter read, DVM read, range, and
+    # counter reset as separate commands. Bracketed acquisition needs them
+    # separately so one latch cycle can be tied to its three axis replies and
+    # so the counter and DVM components survive into the audit record.
+
+    def send_command(self, command: str) -> str:
+        """Send a bare command that produces no reply and return it."""
+        self._send(command)
+        return command
+
+    def clear_and_reset(self, axis: str = "A") -> tuple[str, ...]:
+        """VB6 ``frmSQUID.CLP`` + ``frmSQUID.ResetCount``."""
+        commands = (f"{axis}CLP", f"{axis}RC")
+        for command in commands:
+            self._send(command)
+        return commands
+
+    def set_range(self, axis: str = "A", range_label: str = "1") -> tuple[str, ...]:
+        """VB6 ``frmSQUID.ChangeRange``.
+
+        ``F`` (extended flux-counting range) enables fast-slew first, exactly
+        like the legacy form; every other label is a plain control-rate set.
+        """
+        label = str(range_label).strip().upper() or "1"
+        if label == "F":
+            commands = (f"{axis}CSE", f"{axis}CR1")
+        elif label in {"1", "T", "H", "E"}:
+            commands = (f"{axis}CR{label}",)
+        else:
+            raise SquidCommunicationError(f"Invalid 2G range label: {range_label!r}")
+        for command in commands:
+            self._send(command)
+        return commands
+
+    def latch(self, axis: str = "A", *, settle_s: float = 0.0) -> tuple[str, ...]:
+        """VB6 ``frmSQUID.latchVal``: ``LatchCount`` then ``LatchData``.
+
+        The 0.10 s / 0.12 s pauses match ``LatchCount``/``LatchData`` in the
+        legacy form; ``settle_s`` maps to the optional ``ReadDelay`` settle.
+        """
+        if settle_s and settle_s > 0:
+            time.sleep(float(settle_s))
+        self._send(f"{axis}LC")
+        time.sleep(0.10)
+        self._send(f"{axis}LD")
+        time.sleep(0.12)
+        return (f"{axis}LC", f"{axis}LD")
+
+    def read_axis(self, axis: str, *, range_value: float = 1.0) -> "SquidAxisSample":
+        """Read one axis of the latched values, keeping both components.
+
+        VB6 ``getVal`` queries the counter (``<axis>SC``) before the DVM
+        (``<axis>SD``) and combines them as ``-data - count * range``.
+        """
+        name = str(axis).strip().upper()
+        if name not in ("X", "Y", "Z"):
+            raise SquidCommunicationError(f"Invalid SQUID axis: {axis!r}")
+        count_command = f"{name}SC"
+        data_command = f"{name}SD"
+        counts, count_reply = self._query_value(count_command)
+        dvm, data_reply = self._query_value(data_command)
+        return SquidAxisSample(
+            axis=name,
+            counts=counts,
+            dvm=dvm,
+            range_value=float(range_value),
+            count_command=count_command,
+            count_reply=count_reply,
+            data_command=data_command,
+            data_reply=data_reply,
+        )
 
     def read_xyz_raw(self) -> tuple[float, float, float]:
-        self._send("ALC")
-        time.sleep(0.10)
-        self._send("ALD")
-        time.sleep(0.12)
-        x = -(self._query_float("XSD") + self._query_float("XSC"))
-        y = -(self._query_float("YSD") + self._query_float("YSC"))
-        z = -(self._query_float("ZSD") + self._query_float("ZSC"))
-        return x, y, z
+        """Latch once and return the three combined raw axis values."""
+        self.latch("A")
+        return (
+            self.read_axis("X").raw_value,
+            self.read_axis("Y").raw_value,
+            self.read_axis("Z").raw_value,
+        )
 
 
 class SquidMomentReader:
