@@ -5,9 +5,11 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6 import QtCore, QtWidgets
+from rapidpy_common.ui import clamp_window_geometry
 
 try:
-    from rapid_main.io.sam_reader import read_sam, specimen_path
+    from rapid_main.io.sam_reader import specimen_path
+    from rapid_main.io.sample_index import read_sample_index_registrations
     from rapid_main.io.specimen_reader import read_specimen
     _IO_AVAILABLE = True
 except ImportError:
@@ -37,6 +39,51 @@ class SampleSelectDialog(QtWidgets.QDialog):
         self.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowContextHelpButtonHint)
         self._build_ui()
         self._load_demo()
+
+    def showEvent(self, event: QtCore.QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        QtCore.QTimer.singleShot(0, self._fit_to_screen)
+        handle = self.windowHandle()
+        if handle is not None and not getattr(self, "_screen_signal_connected", False):
+            if handle.screen() is not None:
+                handle.screen().availableGeometryChanged.connect(self._fit_to_screen)
+            handle.screenChanged.connect(self._fit_to_screen)
+            self._screen_signal_connected = True
+
+    def _fit_to_screen(self, screen: QtCore.QObject | None = None) -> None:
+        active_screen = (
+            screen
+            if isinstance(screen, QtCore.QScreen)
+            else (self.screen() or QtWidgets.QApplication.primaryScreen())
+        )
+        if active_screen is None:
+            return
+        available = active_screen.availableGeometry()
+        max_w, max_h = clamp_window_geometry(available, (self.width(), self.height()))
+        min_size = self.minimumSize()
+        if min_size.isValid() and not min_size.isNull():
+            self.setMinimumSize(min(min_size.width(), max_w), min(min_size.height(), max_h))
+        self.resize(min(self.width(), max_w), min(self.height(), max_h))
+        frame = self.frameGeometry()
+        frame.setSize(
+            QtCore.QSize(
+                min(frame.width(), max_w),
+                min(frame.height(), max_h),
+            )
+        )
+        if frame.width() > available.width() or frame.height() > available.height():
+            frame.moveCenter(available.center())
+        else:
+            new_x = max(
+                available.left(),
+                min(frame.left(), available.right() - frame.width() + 1),
+            )
+            new_y = max(
+                available.top(),
+                min(frame.top(), available.bottom() - frame.height() + 1),
+            )
+            frame.moveTopLeft(QtCore.QPoint(new_x, new_y))
+        self.setGeometry(frame)
 
     # ── Public ─────────────────────────────────────────────────────────────
     @property
@@ -131,33 +178,35 @@ class SampleSelectDialog(QtWidgets.QDialog):
             )
             return
         try:
-            names = read_sam(sam_path)
+            registrations = read_sample_index_registrations(sam_path)
         except Exception as exc:
             QtWidgets.QMessageBox.warning(self, "Load SAM", f"Could not read file:\n{exc}")
             return
-        if not names:
+        if not registrations.names:
             QtWidgets.QMessageBox.information(
                 self, "Load SAM", "No specimen names found in file."
             )
             return
         self._table.setRowCount(0)
-        for name in names:
+        for reg in registrations.entries:
+            name = reg.specimen_name
             sp = specimen_path(sam_path, name)
-            volume_str = ""
-            comment_str = ""
+            depth_or_volume = reg.depth_cm
+            comment_str = reg.formation
+            location = reg.location
             if sp.exists():
                 try:
                     meta, _ = read_specimen(sp, specimen_name=name)
-                    volume_str = f"{meta.volume:.2f}" if meta.volume else ""
-                    comment_str = meta.comment or ""
+                    depth_or_volume = depth_or_volume or (f"{meta.volume:.2f}" if meta.volume else "")
+                    comment_str = meta.comment or reg.formation
                 except Exception:
                     pass
             row = self._table.rowCount()
             self._table.insertRow(row)
             self._table.setItem(row, 0, QtWidgets.QTableWidgetItem(name))
-            self._table.setItem(row, 1, QtWidgets.QTableWidgetItem(volume_str))
+            self._table.setItem(row, 1, QtWidgets.QTableWidgetItem(depth_or_volume))
             self._table.setItem(row, 2, QtWidgets.QTableWidgetItem(comment_str))
-            self._table.setItem(row, 3, QtWidgets.QTableWidgetItem(str(sam_path.parent)))
+            self._table.setItem(row, 3, QtWidgets.QTableWidgetItem(location or str(sam_path.parent)))
 
     def _load_csv(self, csv_path: Path) -> None:
         """Parse a CSV file and populate the table."""

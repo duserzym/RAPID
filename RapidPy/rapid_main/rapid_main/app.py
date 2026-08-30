@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import sys
 import json
+import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
-from rapidpy_common.ui import apply_liquid_glass_theme, set_app_icon
+from rapidpy_common.ui import (
+    MIN_WINDOW_WIDTH,
+    apply_liquid_glass_theme,
+    apply_window_bounds_guard,
+    clamp_window_geometry,
+    _screen_area_for_widget,
+    set_app_icon,
+)
 
 from .config import AppConfig
 from .hardware_contracts import (
@@ -16,10 +24,14 @@ from .hardware_contracts import (
     build_measurement_backend,
 )
 from .diagnostic_services import (
+    build_af_demag_backend,
     build_dcmotor_backend,
     build_irm_arm_backend,
     build_squid_backend,
     build_vacuum_backend,
+    collect_diagnostic_status,
+    require_squid_ready,
+    require_vacuum_ready,
 )
 from .device_ownership import DeviceOwnershipError, DeviceOwnershipManager
 from .dialogs import (
@@ -30,6 +42,7 @@ from .dialogs import (
     PlotsDialog,
     SampleSelectDialog,
     SquidCommDialog,
+    StartupGuideDialog,
     DCMotorDialog,
     StepMonitorDialog,
     VacuumDialog,
@@ -45,6 +58,7 @@ from .panels import (
 )
 from .queue_compiler import QueueCommand, QueueOptions, QueueSample, compile_queue
 from .runtime_estimator import RuntimeEstimator
+from .vrm import VRM_CONTEXT_ENV, build_vrm_launch_context, write_vrm_launch_context
 
 
 # ── Extra stylesheet (appended to shared theme) ───────────────────────────────
@@ -58,10 +72,12 @@ _EXTRA_CSS = """
         background: transparent;
         border: none;
         border-radius: 10px;
-        padding: 10px 16px;
+        padding: 2px 2px;
         text-align: left;
         color: #4d3a39;
-        font-size: 13px;
+        font-size: 11px;
+        font-weight: 500;
+        min-width: 0;
     }
     QPushButton#navBtn:hover  { background: rgba(122, 2, 25, 0.08); }
     QPushButton#navBtn:checked {
@@ -173,6 +189,11 @@ _EXTRA_CSS = """
         border: 1px solid rgba(22, 101, 52, 0.30);
         border-radius: 8px; padding: 3px 10px; color: #166534; font-weight: 600;
     }
+    QLabel#flowComplete {
+        background: rgba(34, 197, 94, 0.14);
+        border: 1px solid rgba(22, 101, 52, 0.40);
+        border-radius: 8px; padding: 3px 10px; color: #15803d; font-weight: 600;
+    }
     QLabel#flowReturning {
         background: rgba(71, 85, 105, 0.10);
         border: 1px solid rgba(71, 85, 105, 0.28);
@@ -242,15 +263,102 @@ _NAV_ITEMS: list[tuple[str, str, int]] = [
 ]
 
 
-_DEFAULT_WINDOW_SIZE = (1440, 880)
-_DEFAULT_SIDEBAR_WIDTH = 620
-_MIN_SIDEBAR_WIDTH = 520
+_DEFAULT_WINDOW_SIZE = (460, 380)
+_DEFAULT_SIDEBAR_WIDTH = 64
+_MIN_SIDEBAR_WIDTH = 48
+_MAX_SIDEBAR_WIDTH = 72
+_SIDEBAR_RESTORE_RATIO = 0.08
+_MAIN_MAX_WIDTH_RATIO = 0.12
+_MAIN_MIN_WIDTH = 200
+_MAIN_FIXED_MIN_WIDTH_THRESHOLD = 1024
 _QSETTINGS_ORG = "RAPID"
 _QSETTINGS_APP = "RapidPy-rapid_main"
 _QSETTINGS_QUEUE_ROWS = "ui/queue_rows"
 _QSETTINGS_QUEUE_PROGRESS = "ui/queue_progress"
+_QSETTINGS_QUEUE_RESUME_POS = "ui/queue_resume_pos"
 _QSETTINGS_QUEUE_CURRENT_SAMPLE = "ui/queue_current_sample"
 _QSETTINGS_QUEUE_ACTIVE = "ui/queue_active"
+_QSETTINGS_SHOW_STARTUP_GUIDE = "ui/show_startup_guide"
+
+
+def clamp_window_size_for_screen(available: QtCore.QRect, requested: tuple[int, int]) -> tuple[int, int]:
+    """Backward-compatible alias retained for legacy tests/callers.
+
+    Rapidly moved into :func:`rapidpy_common.ui.clamp_window_geometry`.
+    """
+    return clamp_window_geometry(available, requested)
+
+
+def _clamp_main_window_size(available: QtCore.QRect, requested: tuple[int, int]) -> tuple[int, int]:
+    requested_width, requested_height = requested
+    available_width = max(1, int(available.width()))
+    ratio_cap = max(1, int(available_width * _MAIN_MAX_WIDTH_RATIO))
+    tiny_profile = available_width < _MAIN_FIXED_MIN_WIDTH_THRESHOLD
+    minimum_width = (
+        max(_MIN_SIDEBAR_WIDTH, ratio_cap)
+        if tiny_profile
+        else _MAIN_MIN_WIDTH
+    )
+    width_cap = max(minimum_width, ratio_cap)
+    width_cap = min(width_cap, available_width, 960)
+    requested_width = max(1, int(requested_width))
+    requested_height = max(1, int(requested_height))
+
+    # Keep shared height behavior (including minimum insets) while letting
+    # smaller startup requests remain responsive for compact startup widths.
+    _, clamped_height = clamp_window_geometry(
+        available,
+        (requested_width, requested_height),
+    )
+    minimum_width = min(minimum_width, available_width)
+    width = max(minimum_width, min(requested_width, width_cap))
+    width = min(width, available_width)
+    return width, clamped_height
+
+
+def clamp_sidebar_target(
+    requested: int,
+    *,
+    window_width: int,
+    minimum: int,
+    maximum: int,
+    ratio: float,
+) -> int:
+    """Return a sidebar width bounded by explicit limits and fractional window width."""
+    cap = max(minimum, int(max(1, window_width) * ratio))
+    return max(minimum, min(requested, maximum, cap))
+
+
+def _sidebar_button_label(icon: str, label: str) -> str:
+    if _DEFAULT_SIDEBAR_WIDTH <= 92:
+        return f"{icon}"
+    return f"  {icon}  {label}"
+
+
+def _allow_horizontal_compression(widget: QtWidgets.QWidget) -> None:
+    widget.setMinimumWidth(0)
+    widget.setSizePolicy(
+        QtWidgets.QSizePolicy.Policy.Ignored,
+        widget.sizePolicy().verticalPolicy(),
+    )
+
+
+class _AdaptivePanelStack(QtWidgets.QStackedWidget):
+    def sizeHint(self) -> QtCore.QSize:
+        return super().sizeHint()
+
+    def minimumSizeHint(self) -> QtCore.QSize:
+        hint = super().minimumSizeHint()
+        # Hidden pages must not force an oversized startup width, while their
+        # vertical minimum remains available to the window layout.
+        screen = self.screen()
+        app = QtWidgets.QApplication.instance()
+        if screen is None and app is not None:
+            screen = app.primaryScreen()
+        max_height = hint.height()
+        if screen is not None:
+            max_height = min(max_height, screen.availableGeometry().height())
+        return QtCore.QSize(0, max_height)
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -259,7 +367,11 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("RAPID v4 — Paleomagnetics Control System")
         self.resize(*_DEFAULT_WINDOW_SIZE)
+        self._sidebar_min_width = _MIN_SIDEBAR_WIDTH
+        self._sidebar_default_width = _DEFAULT_SIDEBAR_WIDTH
         self._settings = QtCore.QSettings(_QSETTINGS_ORG, _QSETTINGS_APP)
+        self._startup_guide_dialog: StartupGuideDialog | None = None
+        self._startup_guide_scheduled = False
         self._nav_btns: list[QtWidgets.QPushButton] = []
 
         # Persistent configuration (load or create defaults)
@@ -268,6 +380,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._measurement_backend: MeasurementAutomationBackend = build_measurement_backend(self.config)
         self._vacuum_backend = build_vacuum_backend(self.config.vacuum, nocomm=self.config.general.nocomm)
         self._irm_arm_backend = build_irm_arm_backend(self.config.irm_arm, nocomm=self.config.general.nocomm)
+        self._af_demag_backend = build_af_demag_backend(self.config.af_demag, nocomm=self.config.general.nocomm)
         self._squid_backend = build_squid_backend(self.config.squid, nocomm=self.config.general.nocomm)
         self._dc_motor_backend = build_dcmotor_backend(
             port=(self.config.changer.port or "COM3").strip(),
@@ -282,10 +395,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sequence_labels: list[str] = []  # current loaded sequence step labels
         self._queue_plan: list[QueueCommand] = []
         self._queue_pos: int = 0
+        self._queue_resume_pos: int = 0
         self._queue_current_sample: str | None = None
         self._queue_current_command: QueueCommand | None = None
         self._queue_active: bool = False
         self._queue_last_warnings: list[str] = []
+        self._queue_paused: bool = False
+        self._queue_lease: object | None = None
 
         # Live countdown timer (1 Hz, used when a run is active)
         self._run_start_time: "datetime | None" = None
@@ -310,6 +426,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._clock = QtCore.QTimer(self)
         self._clock.timeout.connect(self._tick_clock)
         self._clock.start(1000)
+        self._fit_window_to_current_screen()
+        QtCore.QTimer.singleShot(0, self._fit_window_to_current_screen)
+        QtCore.QTimer.singleShot(0, self._wire_screen_guard)
 
 
     # ── Header toolbar ────────────────────────────────────────────────────────
@@ -317,6 +436,7 @@ class MainWindow(QtWidgets.QMainWindow):
         header = QtWidgets.QFrame()
         header.setObjectName("header")
         header.setFixedHeight(54)
+        _allow_horizontal_compression(header)
 
         hl = QtWidgets.QHBoxLayout(header)
         hl.setContentsMargins(18, 0, 14, 0)
@@ -324,20 +444,28 @@ class MainWindow(QtWidgets.QMainWindow):
 
         title = QtWidgets.QLabel("⚗  RAPID v4")
         title.setObjectName("headerTitle")
+        title.setToolTip("RAPID v4")
+        _allow_horizontal_compression(title)
         hl.addWidget(title)
         hl.addWidget(_vline())
 
         self._flow_lbl = QtWidgets.QLabel("◉  Running")
         self._flow_lbl.setObjectName("flowRunning")
+        self._flow_lbl.setToolTip("Run state")
+        _allow_horizontal_compression(self._flow_lbl)
         hl.addWidget(self._flow_lbl)
         hl.addWidget(_vline())
 
         self._sample_hdr = QtWidgets.QLabel("Sample: —")
         self._sample_hdr.setStyleSheet("color: #4d3a39; font-size: 13px;")
+        self._sample_hdr.setToolTip("Current sample")
+        _allow_horizontal_compression(self._sample_hdr)
         hl.addWidget(self._sample_hdr)
 
         self._step_hdr = QtWidgets.QLabel("Step: —")
         self._step_hdr.setStyleSheet("color: #7a6f6e; font-size: 12px;")
+        self._step_hdr.setToolTip("Current step")
+        _allow_horizontal_compression(self._step_hdr)
         hl.addWidget(self._step_hdr)
 
         hl.addStretch()
@@ -357,13 +485,22 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._pause_btn.clicked.connect(self._on_header_pause)
         self._halt_btn.clicked.connect(self._on_header_halt)
-        for btn in (self._pause_btn, self._halt_btn, self._nocomm_btn, quit_btn):
+        for btn, tip, width in (
+            (self._pause_btn, "Pause the active queue or measurement", 68),
+            (self._halt_btn, "Halt the active queue or measurement", 58),
+            (self._nocomm_btn, "Toggle no-communication simulation mode", 76),
+            (quit_btn, "Exit RAPID", 54),
+        ):
+            btn.setToolTip(tip)
+            btn.setMinimumWidth(0)
+            btn.setMaximumWidth(width)
             hl.addWidget(btn)
 
         tb = QtWidgets.QToolBar()
         tb.setMovable(False)
         tb.setFloatable(False)
         tb.setStyleSheet("QToolBar { border: none; padding: 0; margin: 0; }")
+        tb.setMinimumWidth(0)
         tb.addWidget(header)
         self.addToolBar(QtCore.Qt.TopToolBarArea, tb)
 
@@ -374,15 +511,22 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         self.setCentralWidget(root)
+        sidebar_fit_width = _DEFAULT_SIDEBAR_WIDTH
 
         # ── Sidebar ──
         sidebar = QtWidgets.QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setMinimumWidth(_DEFAULT_SIDEBAR_WIDTH)
+        sidebar.setMinimumWidth(_MIN_SIDEBAR_WIDTH)
+        sidebar.setMaximumWidth(_MAX_SIDEBAR_WIDTH)
+        sidebar.setContentsMargins(0, 0, 0, 0)
+        sidebar.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
         self._sidebar = sidebar
         sl = QtWidgets.QVBoxLayout(sidebar)
-        sl.setContentsMargins(8, 14, 8, 14)
-        sl.setSpacing(2)
+        sl.setContentsMargins(2, 6, 2, 6)
+        sl.setSpacing(3)
 
         def _sec_hdr(text: str) -> QtWidgets.QLabel:
             lbl = QtWidgets.QLabel(text)
@@ -393,20 +537,23 @@ class MainWindow(QtWidgets.QMainWindow):
         sl.addWidget(_sec_hdr("MAIN"))
         self._btn_group = QtWidgets.QButtonGroup(self)
         self._btn_group.setExclusive(True)
+        sidebar_buttons: list[QtWidgets.QPushButton] = []
         for icon, label, idx in _NAV_ITEMS:
-            btn = QtWidgets.QPushButton(f"  {icon}  {label}")
+            btn = QtWidgets.QPushButton(_sidebar_button_label(icon, label))
             btn.setObjectName("navBtn")
             btn.setCheckable(True)
             btn.setSizePolicy(
                 QtWidgets.QSizePolicy.Policy.Expanding,
                 QtWidgets.QSizePolicy.Policy.Fixed,
             )
-            btn.setMinimumHeight(42)
+            btn.setMinimumHeight(28)
             btn.setToolTip(label)
+            sidebar_fit_width = max(sidebar_fit_width, btn.sizeHint().width() + 20)
             btn.clicked.connect(lambda _checked, i=idx: self._nav_select(i))
             self._btn_group.addButton(btn)
             self._nav_btns.append(btn)
             sl.addWidget(btn)
+            sidebar_buttons.append(btn)
 
         sl.addSpacing(16)
         sl.addWidget(_sec_hdr("DIAGNOSTICS"))
@@ -418,16 +565,41 @@ class MainWindow(QtWidgets.QMainWindow):
             ("💧", "Vacuum",     self._launch_vacuum),
             ("🔭", "SQUID Comm", self._launch_squid),
         ]:
-            btn = QtWidgets.QPushButton(f"  {icon}  {label}")
+            btn = QtWidgets.QPushButton(_sidebar_button_label(icon, label))
             btn.setObjectName("navBtn")
             btn.setSizePolicy(
                 QtWidgets.QSizePolicy.Policy.Expanding,
                 QtWidgets.QSizePolicy.Policy.Fixed,
             )
-            btn.setMinimumHeight(38)
+            btn.setMinimumHeight(28)
             btn.setToolTip(label)
+            sidebar_fit_width = max(sidebar_fit_width, btn.sizeHint().width() + 16)
             btn.clicked.connect(slot)
             sl.addWidget(btn)
+            sidebar_buttons.append(btn)
+        sidebar_fit_width = max(_MIN_SIDEBAR_WIDTH, sidebar_fit_width)
+        sidebar_fit_width = min(_MAX_SIDEBAR_WIDTH, sidebar_fit_width)
+        sidebar.setMinimumWidth(_MIN_SIDEBAR_WIDTH)
+        self._sidebar_min_width = _MIN_SIDEBAR_WIDTH
+        self._sidebar_default_width = max(
+            self._sidebar_min_width,
+            min(
+                _MAX_SIDEBAR_WIDTH,
+                clamp_sidebar_target(
+                    sidebar_fit_width,
+                    window_width=max(1, self.width()),
+                    minimum=self._sidebar_min_width,
+                    maximum=_MAX_SIDEBAR_WIDTH,
+                    ratio=_SIDEBAR_RESTORE_RATIO,
+                ),
+            ),
+        )
+        for btn in sidebar_buttons:
+            btn.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
+            btn.setContentsMargins(0, 0, 0, 0)
 
         sl.addStretch()
         ver = QtWidgets.QLabel("RAPID v4.0 · Phase 2")
@@ -435,7 +607,13 @@ class MainWindow(QtWidgets.QMainWindow):
         sl.addWidget(ver)
 
         # ── Stacked panels ──
-        self._stack = QtWidgets.QStackedWidget()
+        self._stack = _AdaptivePanelStack()
+        self._stack.currentChanged.connect(self._stack.updateGeometry)
+        self._stack.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        self._stack.setMinimumSize(0, 0)
         self._dashboard   = DashboardPanel()
         self._sample_queue = SampleQueuePanel()
         self._sequence    = SequencePanel()
@@ -453,6 +631,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self._settings_panel,
             self._calibration_panel,
         ):
+            panel.setMinimumWidth(0)
+            panel.setMinimumHeight(0)
+            panel.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Expanding,
+            )
+            panel.setMinimumSize(0, 0)
             self._stack.addWidget(panel)
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
@@ -464,7 +649,114 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         self._main_splitter = splitter
+        self._main_splitter.splitterMoved.connect(self._on_splitter_moved)
         layout.addWidget(splitter)
+
+    def _current_screen(self) -> QtCore.QRect | None:
+        return _screen_area_for_widget(self)
+
+    def _resolved_work_area(self) -> QtCore.QRect:
+        available = self._current_screen()
+        if available is not None and available.width() > 0 and available.height() > 0:
+            return available
+
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen is not None:
+            primary = screen.availableGeometry()
+            if primary.width() > 0 and primary.height() > 0:
+                return primary
+
+        return QtCore.QRect(0, 0, 1366, 768)
+
+    def _clamp_window_to_work_area(self, available: QtCore.QRect | None = None) -> tuple[int, int]:
+        work_area = available or self._resolved_work_area()
+        fitted_w, fitted_h = _clamp_main_window_size(work_area, (self.width(), self.height()))
+        # Keep startup and restore geometry compact on every screen transition.
+        # Without this cap, stale saved geometries can briefly re-expand the
+        # top-level window after monitor changes.
+        self.setMaximumWidth(fitted_w)
+        self.setMaximumHeight(fitted_h)
+        if self.isMaximized():
+            self.showNormal()
+
+        min_size = self.minimumSize()
+        if min_size.isValid() and not min_size.isNull():
+            self.setMinimumSize(min(min_size.width(), fitted_w), min(min_size.height(), fitted_h))
+
+        self.resize(min(self.width(), fitted_w), min(self.height(), fitted_h))
+        return fitted_w, fitted_h
+
+    def _fit_window_to_current_screen(self, *_args: object) -> None:
+        available = self._current_screen()
+        if available is None:
+            available = self._resolved_work_area()
+        if available.width() <= 0 or available.height() <= 0:
+            return
+
+        clamp_to_work_area = getattr(self, "_clamp_window_to_work_area", None)
+        if callable(clamp_to_work_area):
+            fitted_w, fitted_h = clamp_to_work_area(available)
+        else:
+            fitted_w, fitted_h = _clamp_main_window_size(
+                available,
+                (self.width(), self.height()),
+            )
+            if self.isMaximized():
+                self.showNormal()
+            minimum_size = self.minimumSize()
+            if minimum_size.isValid() and not minimum_size.isNull():
+                self.setMinimumSize(
+                    min(minimum_size.width(), fitted_w),
+                    min(minimum_size.height(), fitted_h),
+                )
+            self.setMaximumSize(fitted_w, fitted_h)
+            self.resize(min(self.width(), fitted_w), min(self.height(), fitted_h))
+        frame = self.frameGeometry()
+        frame.setSize(QtCore.QSize(
+            min(frame.width(), fitted_w),
+            min(frame.height(), fitted_h),
+        ))
+        x = max(
+            available.left(),
+            min(frame.left(), available.right() - frame.width() + 1),
+        )
+        y = max(
+            available.top(),
+            min(frame.top(), available.bottom() - frame.height() + 1),
+        )
+        frame.moveTopLeft(QtCore.QPoint(x, y))
+        self.setGeometry(frame)
+        if hasattr(self, "_main_splitter") and hasattr(self, "_sidebar") and self.width() > 0:
+            sidebar_target = clamp_sidebar_target(
+                self._sidebar_default_width,
+                window_width=self.width(),
+                minimum=self._sidebar_min_width,
+                maximum=_MAX_SIDEBAR_WIDTH,
+                ratio=_SIDEBAR_RESTORE_RATIO,
+            )
+            self._main_splitter.setSizes(
+                [sidebar_target, max(1, self.width() - sidebar_target)]
+            )
+
+    def _wire_screen_guard(self) -> None:
+        if getattr(self, "_screen_guarded", False):
+            return
+        handle = self.windowHandle()
+        if handle is None or handle.screen() is None:
+            QtCore.QTimer.singleShot(75, self._wire_screen_guard)
+            return
+        handle.screen().availableGeometryChanged.connect(
+            lambda *_sig_args: self._fit_window_to_current_screen(*_sig_args)
+        )
+        handle.screenChanged.connect(lambda _screen: self._fit_window_to_current_screen())
+        self._screen_guarded = True
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self._fit_window_to_current_screen()
+        QtCore.QTimer.singleShot(0, self._fit_window_to_current_screen)
+        self._wire_screen_guard()
+        self._schedule_startup_guide()
 
     # ── Status bar ────────────────────────────────────────────────────────────
     def _build_statusbar(self) -> None:
@@ -481,6 +773,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for lbl in (self._sb_status, self._sb_pos, self._sb_sample,
                     self._sb_runtime, self._sb_time):
             lbl.setStyleSheet("padding: 1px 10px; color: #4d3a39; font-size: 12px;")
+            _allow_horizontal_compression(lbl)
 
         sb.addWidget(self._sb_status, 3)
         sb.addWidget(_vline(), 0)
@@ -530,11 +823,24 @@ class MainWindow(QtWidgets.QMainWindow):
 
         Validation is intentionally strict for safety and queue automation.
         """
+        if self._queue_active:
+            self.set_status("Queue run is already active.")
+            return False
+
+        if hasattr(self._measurement, "is_active") and self._measurement.is_active():
+            self.set_status("Cannot start queue while a live measurement is running.")
+            return False
+
+        if self._queue_lease is not None:
+            self._release_queue_lease()
+        self._queue_paused = False
         self._queue_active = False
         self._queue_plan = []
         self._queue_pos = 0
+        self._queue_resume_pos = 0
         self._queue_current_sample = None
         self._queue_current_command = None
+        self.set_flow_state("running")
 
         if not samples:
             self.set_status("Queue is empty.")
@@ -560,6 +866,34 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.information(self, "Queue", "Queue has no measurement steps.")
             return False
 
+        vacuum_fault = self._queue_vacuum_fault_reason()
+        if vacuum_fault:
+            self.set_flow_state("error")
+            self.set_status(f"Queue cannot start: {vacuum_fault}")
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Vacuum Fault",
+                f"Queue cannot start because vacuum is not ready:\n\n{vacuum_fault}",
+            )
+            return False
+        squid_fault = self._queue_squid_fault_reason()
+        if squid_fault:
+            self.set_flow_state("error")
+            self.set_status(f"Queue cannot start: {squid_fault}")
+            QtWidgets.QMessageBox.critical(
+                self,
+                "SQUID Communication Fault",
+                f"Queue cannot start because SQUID communication is not ready:\n\n{squid_fault}",
+            )
+            return False
+
+        try:
+            self._queue_lease = self.acquire_device("changer", "queue_workflow")
+        except DeviceOwnershipError as exc:
+            self.set_status(f"Queue cannot start: {exc}")
+            QtWidgets.QMessageBox.critical(self, "Queue Error", str(exc))
+            return False
+
         missing = self._missing_required_queue_methods(self._queue_plan)
         if missing:
             message = "Queue requires unsupported backend commands:\n\n" + "\n".join(
@@ -571,6 +905,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 "Queue Error",
                 message,
             )
+            self._release_queue_lease()
             return False
 
         self._queue_active = True
@@ -583,39 +918,98 @@ class MainWindow(QtWidgets.QMainWindow):
         self._run_next_queue_command()
         return True
 
+    def _release_queue_lease(self) -> None:
+        """Release queue workflow lease if present."""
+        if self._queue_lease is None:
+            return
+        try:
+            self._queue_lease.release()
+        except Exception:
+            pass
+        finally:
+            self._queue_lease = None
+
+    def _finalize_queue_run(
+        self,
+        state: str,
+        *,
+        reason: str | None = None,
+        return_to_safe: bool = True,
+        clear_plan: bool = True,
+        clear_current: bool = True,
+        clear_command: bool = True,
+    ) -> None:
+        """Set a stable terminal queue state and persist state/ownership."""
+        if return_to_safe:
+            self._return_queue_to_safe_state()
+
+        self._queue_active = False
+        if clear_plan:
+            self._queue_plan = []
+            self._queue_pos = 0
+            self._queue_resume_pos = 0
+        else:
+            self._queue_resume_pos = self._queue_pos
+
+        if clear_current:
+            self._queue_current_sample = None
+        if clear_command:
+            self._queue_current_command = None
+
+        self._release_queue_lease()
+        self._save_queue_state()
+        if state:
+            self.set_flow_state(state)
+        if reason is not None:
+            self.set_status(reason)
+
     def cancel_queue_run(self, reason: str = "Queue cancelled.") -> None:
         """Cancel active queue automation while leaving controls in a safe state."""
+        self._queue_paused = False
         if not self._queue_active:
+            self._release_queue_lease()
             return
+
         if hasattr(self._measurement, "halt_run"):
             self._measurement.halt_run()
+        if self._queue_current_sample:
+            self._sample_queue.set_queue_sample_failed(self._queue_current_sample)
         self._return_queue_to_safe_state()
-        self._queue_active = False
-        self._queue_plan = []
-        self._queue_pos = 0
-        self._queue_current_sample = None
-        self._queue_current_command = None
-        self._save_queue_state()
-        self.set_status(reason)
-        self.set_flow_state("idle")
+        self._finalize_queue_run("idle", reason=reason, return_to_safe=False)
 
     def _run_next_queue_command(self) -> None:
         if not self._queue_active:
             return
+        if self._queue_paused:
+            self.set_flow_state("paused")
+            return
+        vacuum_fault = self._queue_vacuum_fault_reason()
+        if vacuum_fault:
+            if self._queue_current_sample:
+                self._sample_queue.set_queue_sample_failed(self._queue_current_sample)
+            self._finalize_queue_run(
+                "error",
+                reason=f"Queue halted by vacuum fault: {vacuum_fault}",
+                return_to_safe=True,
+            )
+            return
+        squid_fault = self._queue_squid_fault_reason()
+        if squid_fault:
+            if self._queue_current_sample:
+                self._sample_queue.set_queue_sample_failed(self._queue_current_sample)
+            self._finalize_queue_run(
+                "error",
+                reason=f"Queue halted by SQUID communication fault: {squid_fault}",
+                return_to_safe=True,
+            )
+            return
         if self._queue_pos >= len(self._queue_plan):
-            self._return_queue_to_safe_state()
-            self._queue_active = False
-            self._queue_current_sample = None
-            self._queue_current_command = None
-            self._queue_pos = 0
-            self._queue_plan = []
-            self._save_queue_state()
-            self.set_status("Queue run complete.")
-            self.set_flow_state("complete")
+            self._finalize_queue_run("complete", reason="Queue run complete.")
             return
 
         self._queue_current_command = self._queue_plan[self._queue_pos]
         self._queue_pos += 1
+        self._queue_resume_pos = self._queue_pos
 
         if self._queue_current_command is None:
             return
@@ -636,15 +1030,26 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._queue_current_sample = sample_name
         self._sample_queue.start_queue_sample(sample_name)
-        if not self._measurement.start_measurement_for_sample(sample_name):
-            self._return_queue_to_safe_state()
-            self._queue_active = False
+        try:
+            started = self._measurement.start_measurement_for_sample(
+                sample_name,
+                queue_run=True,
+                owner="queue_workflow",
+            )
+        except TypeError:
+            started = self._measurement.start_measurement_for_sample(
+                sample_name,
+                queue_run=True,
+            )
+
+        if not started:
             self._sample_queue.set_queue_sample_failed(sample_name)
-            self._queue_current_sample = None
-            self._queue_current_command = None
-            self._save_queue_state()
-            self.set_status("Queue run failed to start.")
-            self.set_flow_state("error")
+            self._finalize_queue_run(
+                "error",
+                reason="Queue run failed to start.",
+                return_to_safe=True,
+                clear_plan=True,
+            )
             return
         self._save_queue_state()
 
@@ -652,12 +1057,14 @@ class MainWindow(QtWidgets.QMainWindow):
         """Execute queue commands that do not require a full measurement sequence."""
         if not self._queue_active:
             return
+        if self._queue_paused:
+            self.set_flow_state("paused")
+            return
         self._queue_current_sample = None
         lease: object | None = None
         command_type = command.command_type
         try:
-            if command_type in {"InitUp", "Holder", "Goto", "Flip"}:
-                lease = self.acquire_device("changer", "queue_workflow")
+            lease = self.acquire_device("changer", "queue_workflow")
 
             method_name: str
             arg: str | int | None
@@ -675,7 +1082,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 arg = None
             else:
                 raise ValueError(f"Unsupported queue command '{command_type}'.")
-
             self._run_device_command(
                 self._measurement_backend,
                 method_name,
@@ -684,18 +1090,19 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             self._set_queue_position_status(command_type, command)
             self._save_queue_state()
+            if self._queue_paused:
+                self.set_flow_state("paused")
+                return
             self._run_next_queue_command()
             return
         except Exception as exc:
             if self._queue_current_sample:
                 self._sample_queue.set_queue_sample_failed(self._queue_current_sample)
-            self._return_queue_to_safe_state()
-            self._queue_active = False
-            self._queue_current_command = None
-            self._queue_current_sample = None
-            self._save_queue_state()
-            self.set_status(f"Queue {command.command_type} failed: {exc}")
-            self.set_flow_state("error")
+            self._finalize_queue_run(
+                "error",
+                reason=f"Queue {command.command_type} failed: {exc}",
+                return_to_safe=True,
+            )
         finally:
             if lease is not None:
                 try:
@@ -794,6 +1201,27 @@ class MainWindow(QtWidgets.QMainWindow):
             self.set_status(f"Queue safe-state returned with warning: {exc}")
             self.log_event(f"Queue safe-state warning: {exc}")
 
+    def _queue_vacuum_fault_reason(self) -> str | None:
+        try:
+            require_vacuum_ready(
+                self._vacuum_backend,
+                warn_threshold=float(self.config.vacuum.warn_threshold),
+            )
+        except Exception as exc:
+            return str(exc)
+        return None
+
+    def _queue_squid_fault_reason(self) -> str | None:
+        if self.config.general.nocomm or getattr(self._squid_backend, "simulated", False):
+            return None
+        if not any(cmd.command_type == "Meas" for cmd in self._queue_plan):
+            return None
+        try:
+            require_squid_ready(self._squid_backend)
+        except Exception as exc:
+            return str(exc)
+        return None
+
     def _on_queue_sample_finished(self, aborted: bool, sample: str) -> None:
         if not self._queue_active:
             return
@@ -804,21 +1232,12 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if aborted:
             self._return_queue_to_safe_state()
-            self._queue_active = False
             self._sample_queue.set_queue_sample_failed(sample)
-            self._queue_current_sample = None
-            self._queue_current_command = None
-            self._save_queue_state()
-            self.set_status(f"Queue stopped after sample {sample}.")
+            self._finalize_queue_run("halted", reason=f"Queue stopped after sample {sample}.")
             return
         if had_error:
-            self._return_queue_to_safe_state()
-            self._queue_active = False
             self._sample_queue.set_queue_sample_failed(sample)
-            self._queue_current_sample = None
-            self._queue_current_command = None
-            self._save_queue_state()
-            self.set_status(f"Queue sample {sample} failed with an error.")
+            self._finalize_queue_run("error", reason=f"Queue sample {sample} failed with an error.")
             return
         self._sample_queue.mark_queue_sample_done(sample)
         if self._queue_current_command is not None:
@@ -915,7 +1334,7 @@ class MainWindow(QtWidgets.QMainWindow):
         vm.addAction("Step &Monitor", self._launch_step_monitor)
         vm.addAction("&Data Review", self._launch_data_viewer)
         vm.addAction("&Debug Console", self._launch_debug_console)
-        vm.addAction("&Sample Queue Monitor")
+        vm.addAction("&Sample Queue Monitor", self._launch_step_monitor)
         vm.addAction("&Reset Layout", self._reset_layout)
         vm.addSeparator()
         vm.addAction("&Webcam Monitor", self._launch_webcam)
@@ -935,19 +1354,22 @@ class MainWindow(QtWidgets.QMainWindow):
         af_sub = dm.addMenu("AF &Demagnetizer")
         af_sub.addAction("AF Demag Window",     self._launch_af)
         af_sub.addAction("Run AF Demo Sequence", self._launch_af_demo)
-        af_sub.addAction("AF Tuner / ClipTest")
-        af_sub.addAction("AF Field Calibration")
+        af_sub.addAction("Run AF Demo Queue", self._launch_af_queue_demo)
+        af_sub.addAction("AF Tuner / ClipTest", self._launch_af_tuner)
+        af_sub.addAction("AF Field Calibration", self._launch_af_tuner)
         irm_sub = dm.addMenu("&IRM / ARM")
         irm_sub.addAction("IRM / ARM Window",       self._launch_irm)
-        irm_sub.addAction("IRM Field Calibration")
-        irm_sub.addAction("IRM Voltage Calibration")
-        dm.addAction("908A &Gaussmeter")
-        dm.addAction("Susceptibility &Bridge")
+        irm_sub.addAction("IRM Field Calibration", self._launch_irm)
+        irm_sub.addAction("IRM Voltage Calibration", self._launch_irm_voltage_calibration)
+        dm.addAction("Thermal Routine Planning", self._launch_thermal_routine_planning)
+        dm.addAction("908A &Gaussmeter", self._launch_gaussmeter)
+        dm.addAction("Susceptibility &Bridge", self._launch_susceptibility_bridge)
         dm.addSeparator()
-        dm.addAction("&VRM Data Collection")
-        dm.addAction("Calibrate &Rod")
+        dm.addAction("&VRM Data Collection", self._launch_vrm)
+        dm.addAction("Calibrate &Rod", self._launch_calibrate_rod)
 
         hm = mb.addMenu("&Help")
+        hm.addAction("&Quick Start", self._launch_startup_guide)
         hm.addAction("&About RAPID", self._launch_about)
 
     # ── Navigation ────────────────────────────────────────────────────────────
@@ -969,6 +1391,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._measurement_backend = build_measurement_backend(self.config)
         self._vacuum_backend = build_vacuum_backend(self.config.vacuum, nocomm=bool(on))
         self._irm_arm_backend = build_irm_arm_backend(self.config.irm_arm, nocomm=bool(on))
+        self._af_demag_backend = build_af_demag_backend(self.config.af_demag, nocomm=bool(on))
         self._squid_backend = build_squid_backend(self.config.squid, nocomm=bool(on))
         self._dc_motor_backend = build_dcmotor_backend(
             port=(self.config.changer.port or "COM3").strip(),
@@ -987,7 +1410,7 @@ class MainWindow(QtWidgets.QMainWindow):
     # ── Diagnostic launchers ───────────────────────────────────────────────────
     def _launch_dc_motors(self) -> None:
         self._run_owned_dialog(
-            "dc_motors",
+            "changer",
             "dc_motors_panel",
             lambda owner: DCMotorDialog(
                 owner,
@@ -1016,7 +1439,24 @@ class MainWindow(QtWidgets.QMainWindow):
         """Run the AF demo sequence directly from the diagnostics launcher."""
         self._prepare_af_workflow(auto_start=True)
 
-    def _prepare_af_workflow(self, *, auto_start: bool) -> bool:
+    def _launch_af_queue_demo(self) -> None:
+        """Run the AF demo sequence as a queue sample for automated handling."""
+        self._prepare_af_workflow(auto_start=True, queue_mode=True)
+
+    def _build_af_demo_queue_samples(self, *, sample_name: str = "AF_DEMO") -> list[QueueSample]:
+        """Build a single synthetic queue sample for AF demo automation."""
+        return [
+            QueueSample(
+                sample_name=sample_name,
+                file_id="AF_DEMO",
+                hole=1,
+                do_up=True,
+                do_both=False,
+                measurement_step_count=max(1, len(self._af_demo_labels())),
+            )
+        ]
+
+    def _prepare_af_workflow(self, *, auto_start: bool, queue_mode: bool = False) -> bool:
         """Load AF sequence defaults and optionally auto-start the run."""
         self.load_sequence_labels(self._af_demo_labels())
         self.set_current_sample("AF_DEMO")
@@ -1026,6 +1466,27 @@ class MainWindow(QtWidgets.QMainWindow):
                 depth="—",
                 treatment="AF workflow",
             )
+        if queue_mode:
+            self.set_status("AF demo loaded into queue workflow.")
+            self._nav_select(1)
+            if hasattr(self._measurement, "start_measurement_for_sample"):
+                # Measurement panel context is prepared so the queued run uses AF labels
+                # without requiring user intervention.
+                self.set_status("AF demo queue started.")
+            samples = self._build_af_demo_queue_samples()
+            options = QueueOptions(
+                ascending=True,
+                load_return=True,
+                do_return=True,
+                repeat_holder=True,
+                samples_between_holder=8,
+                use_xy_table=not bool(getattr(self.config.general, "nocomm", False)),
+            )
+            if self.start_queue_run(samples, options):
+                return True
+            self.set_status("Unable to start AF demo queue. Check automation readiness.")
+            return False
+
         self.set_status("AF workflow loaded in Live Measurement.")
         self._nav_select(3)
         if not auto_start:
@@ -1051,6 +1512,12 @@ class MainWindow(QtWidgets.QMainWindow):
             lambda owner: IrmArmDialog(owner, backend=self._irm_arm_backend),
         )
 
+    def _launch_af_tuner(self) -> None:
+        self._launch_external_tool(
+            target_path="af_tuner/main.py",
+            app_name="AF Tuner / ClipTest",
+        )
+
     def _launch_vacuum(self) -> None:
         self._run_owned_dialog(
             "vacuum",
@@ -1064,6 +1531,108 @@ class MainWindow(QtWidgets.QMainWindow):
             "squid_panel",
             lambda owner: SquidCommDialog(owner, backend=self._squid_backend),
         )
+
+    def _launch_gaussmeter(self) -> None:
+        self._launch_external_tool(
+            target_path="gaussmeter_control/main.py",
+            app_name="908A Gaussmeter",
+        )
+
+    def _launch_vrm(self) -> None:
+        context = build_vrm_launch_context(
+            active_automation=self._has_active_automation(),
+            nocomm=bool(getattr(self.config.general, "nocomm", False)),
+        )
+        try:
+            context_path = write_vrm_launch_context(context=context)
+        except OSError as exc:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "VRM launcher",
+                f"Unable to prepare VRM run context: {exc}",
+            )
+            return
+        self._launch_external_tool(
+            target_path="vrm_logger/main.py",
+            app_name="VRM Logger",
+            env={VRM_CONTEXT_ENV: str(context_path)},
+        )
+
+    def _launch_susceptibility_bridge(self) -> None:
+        self._run_owned_dialog(
+            "squid",
+            "squid_panel",
+            lambda owner: SquidCommDialog(owner, backend=self._squid_backend),
+        )
+
+    def _launch_calibrate_rod(self) -> None:
+        self._nav_select(5)
+        self._calibration_panel.set_procedure("gaussmeter_baseline")
+        self._calibration_panel.set_mode("automated")
+        self.set_status("Opened Calibration Center for rod-related SQUID workflow setup.")
+
+    def _launch_irm_voltage_calibration(self) -> None:
+        self._nav_select(5)
+        self._calibration_panel.set_procedure("irm_voltage")
+        self.set_status("Opened Calibration Center for IRM voltage calibration.")
+
+    def _launch_thermal_routine_planning(self) -> None:
+        self._nav_select(5)
+        self._calibration_panel.set_procedure("thermal_routine")
+        self.set_status("Opened Calibration Center for thermal routine planning.")
+
+    def _launch_external_tool(
+        self,
+        *,
+        target_path: str,
+        app_name: str,
+        env: dict[str, str] | None = None,
+    ) -> None:
+        """Launch a sibling package's main entry point as a helper process."""
+        if self._has_active_automation():
+            if (
+                QtWidgets.QMessageBox.question(
+                    self,
+                    "Active Automation",
+                    (
+                        "A live measurement or queue run is active.\n\n"
+                        "Launching this tool now may interfere with hardware ownership.\n"
+                        "Continue?"
+                    ),
+                    QtWidgets.QMessageBox.StandardButton.Yes
+                    | QtWidgets.QMessageBox.StandardButton.No,
+                    QtWidgets.QMessageBox.StandardButton.No,
+                )
+                != QtWidgets.QMessageBox.StandardButton.Yes
+            ):
+                return
+
+        script_path = Path(__file__).resolve().parent.parent.parent / target_path
+        if not script_path.exists():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Tool unavailable",
+                f"{app_name} entry point not found: {script_path}",
+            )
+            return
+
+        try:
+            base_root = Path(__file__).resolve().parents[2]
+            process_env = os.environ.copy()
+            if env:
+                process_env.update(env)
+            subprocess.Popen(
+                [sys.executable, str(script_path)],
+                cwd=str(base_root),
+                env=process_env,
+            )
+            self.set_status(f"Launched {app_name}.")
+        except Exception as exc:  # pragma: no cover - platform/environment dependent
+            QtWidgets.QMessageBox.warning(
+                self,
+                f"{app_name} launcher",
+                f"Unable to launch {app_name}: {exc}",
+            )
 
     def _run_owned_dialog(
         self,
@@ -1127,31 +1696,6 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             if lease is not None and modal:
                 lease.release()
-
-    def _run_owned_stub_dialog(
-        self,
-        resource: str,
-        owner: str,
-        title: str,
-        message: str,
-        *,
-        modal: bool = True,
-    ) -> None:
-        """Open a message-style action while owning a shared hardware resource."""
-
-        class _StubDialog:
-            def exec(self_inner) -> None:
-                _stub_dialog(self, title, message)
-
-            def show(self_inner) -> None:
-                _stub_dialog(self, title, message)
-
-        self._run_owned_dialog(
-            resource,
-            owner,
-            lambda _parent: _StubDialog(),
-            modal=modal,
-        )
 
     def closeEvent(self, event) -> None:
         """Confirm safe shutdown and persist layout settings before closing."""
@@ -1229,38 +1773,96 @@ class MainWindow(QtWidgets.QMainWindow):
     def _restore_layout_state(self) -> None:
         geometry = self._settings.value("ui/window_geometry")
         if geometry:
-            self.restoreGeometry(geometry)
+            if self.restoreGeometry(geometry):
+                self.showNormal()
+                self.setWindowState(QtCore.Qt.WindowState.WindowNoState)
+            # Avoid resurrecting legacy full-width restores after package
+            # upgrades: enforce compact startup bounds while preserving
+            # splitter/queue state persistence.
+            available = self._resolved_work_area()
+            self._clamp_window_to_work_area(available)
+            self._fit_window_to_current_screen()
         else:
-            self.resize(*_DEFAULT_WINDOW_SIZE)
+            screen = QtWidgets.QApplication.primaryScreen()
+            if screen is not None:
+                self.resize(*_clamp_main_window_size(screen.availableGeometry(), _DEFAULT_WINDOW_SIZE))
+            else:
+                self.resize(*_DEFAULT_WINDOW_SIZE)
 
         panel_index = self._settings.value("ui/active_panel", 0, type=int)
         self._nav_select(panel_index or 0)
 
-        sidebar_width = self._settings.value("ui/sidebar_width", _DEFAULT_SIDEBAR_WIDTH, type=int)
+        sidebar_width = self._settings.value("ui/sidebar_width", self._sidebar_default_width, type=int)
         splitter_state = self._settings.value("ui/main_splitter_state")
-        sidebar_target = _DEFAULT_SIDEBAR_WIDTH
+        sidebar_target = self._sidebar_default_width
+        sidebar_cap = clamp_sidebar_target(
+            self._sidebar_default_width,
+            window_width=self.width(),
+            minimum=self._sidebar_min_width,
+            maximum=_MAX_SIDEBAR_WIDTH,
+            ratio=_SIDEBAR_RESTORE_RATIO,
+        )
         if isinstance(sidebar_width, int):
-            sidebar_target = max(_MIN_SIDEBAR_WIDTH, sidebar_width)
+            sidebar_target = clamp_sidebar_target(
+                int(sidebar_width),
+                window_width=self.width(),
+                minimum=self._sidebar_min_width,
+                maximum=_MAX_SIDEBAR_WIDTH,
+                ratio=_SIDEBAR_RESTORE_RATIO,
+            )
 
         if splitter_state:
             self._main_splitter.restoreState(splitter_state)
-            if self._sidebar.width() < _DEFAULT_SIDEBAR_WIDTH:
-                self._main_splitter.setSizes(
-                    [_DEFAULT_SIDEBAR_WIDTH, max(1, self.width() - _DEFAULT_SIDEBAR_WIDTH)]
-                )
-        elif sidebar_target >= _MIN_SIDEBAR_WIDTH:
-            self._main_splitter.setSizes([sidebar_target, max(1, self.width() - sidebar_target)])
-        else:
-            self._main_splitter.setSizes(
-                [_DEFAULT_SIDEBAR_WIDTH, max(1, self.width() - _DEFAULT_SIDEBAR_WIDTH)]
+            sidebar_target = clamp_sidebar_target(
+                self._sidebar.width(),
+                window_width=self.width(),
+                minimum=self._sidebar_min_width,
+                maximum=_MAX_SIDEBAR_WIDTH,
+                ratio=_SIDEBAR_RESTORE_RATIO,
             )
+        self._main_splitter.setSizes([sidebar_target, max(1, self.width() - sidebar_target)])
         self._restore_queue_state()
 
+    def _on_splitter_moved(self, *_args: int) -> None:
+        """Persist manual sidebar width changes for the next launch."""
+        if not hasattr(self, "_main_splitter"):
+            return
+        width = int(self._sidebar.width())
+        width_cap = clamp_sidebar_target(
+            self._sidebar.width(),
+            window_width=self.width(),
+            minimum=self._sidebar_min_width,
+            maximum=_MAX_SIDEBAR_WIDTH,
+            ratio=_SIDEBAR_RESTORE_RATIO,
+        )
+        if width < self._sidebar_min_width:
+            width = self._sidebar_min_width
+            self._main_splitter.setSizes(
+                [width, max(1, self.width() - width)]
+            )
+            return
+        if width > width_cap:
+            width = width_cap
+            self._main_splitter.setSizes(
+                [width, max(1, self.width() - width)]
+            )
+        self._settings.setValue("ui/sidebar_width", width)
+
     def _save_layout_state(self) -> None:
+        self._clamp_window_to_work_area()
         self._settings.setValue("ui/window_geometry", self.saveGeometry())
         self._settings.setValue("ui/active_panel", self._stack.currentIndex())
         self._settings.setValue("ui/main_splitter_state", self._main_splitter.saveState())
-        self._settings.setValue("ui/sidebar_width", self._sidebar.width())
+        self._settings.setValue(
+            "ui/sidebar_width",
+            clamp_sidebar_target(
+                self._sidebar.width(),
+                window_width=self.width(),
+                minimum=self._sidebar_min_width,
+                maximum=_MAX_SIDEBAR_WIDTH,
+                ratio=_SIDEBAR_RESTORE_RATIO,
+            ),
+        )
         self._save_queue_state()
 
     def _save_queue_state(self) -> None:
@@ -1268,17 +1870,23 @@ class MainWindow(QtWidgets.QMainWindow):
             queue_rows = self._sample_queue.row_snapshot()
             self._settings.setValue(_QSETTINGS_QUEUE_ROWS, json.dumps(queue_rows))
             self._settings.setValue(_QSETTINGS_QUEUE_PROGRESS, int(self._queue_pos))
+            self._settings.setValue(_QSETTINGS_QUEUE_RESUME_POS, int(self._queue_resume_pos))
             self._settings.setValue(
                 _QSETTINGS_QUEUE_CURRENT_SAMPLE, self._queue_current_sample or ""
             )
             self._settings.setValue(_QSETTINGS_QUEUE_ACTIVE, bool(self._queue_active))
+            self._settings.sync()
         except Exception:
             self._settings.remove(_QSETTINGS_QUEUE_ROWS)
             self._settings.remove(_QSETTINGS_QUEUE_PROGRESS)
+            self._settings.remove(_QSETTINGS_QUEUE_RESUME_POS)
             self._settings.remove(_QSETTINGS_QUEUE_CURRENT_SAMPLE)
             self._settings.remove(_QSETTINGS_QUEUE_ACTIVE)
 
     def _restore_queue_state(self) -> None:
+        # Pull settings written by another window/process before rebuilding the
+        # queue.  QSettings otherwise may retain a stale per-instance cache.
+        self._settings.sync()
         raw = self._settings.value(_QSETTINGS_QUEUE_ROWS)
         if not raw:
             self._queue_current_sample = None
@@ -1287,18 +1895,26 @@ class MainWindow(QtWidgets.QMainWindow):
             rows = json.loads(raw) if isinstance(raw, str) else raw
             if isinstance(rows, list):
                 self._sample_queue.load_rows(rows)
+                self._queue_resume_pos = int(
+                    self._settings.value(_QSETTINGS_QUEUE_RESUME_POS, 0, type=int)
+                )
+                self._queue_pos = int(
+                    self._settings.value(_QSETTINGS_QUEUE_PROGRESS, 0, type=int)
+                )
                 was_active = bool(
                     self._settings.value(_QSETTINGS_QUEUE_ACTIVE, False, type=bool)
                 )
                 recovered = self._sample_queue.recover_interrupted_samples()
                 if recovered:
                     self.set_status(
-                        f"Recovered {recovered} interrupted queue row(s) from last session."
+                        f"Recovered {recovered} interrupted queue row(s) from last session; choose Resume, Re-run, Skip, or Abort."
                     )
                 elif was_active:
                     self.set_status(
                         "Previous queue run was active; review pending rows and press Run Queue to continue."
                     )
+                if self._queue_resume_pos > 0 and not was_active:
+                    self.set_status(f"Recovered queue progress index {self._queue_resume_pos}.")
         except Exception:
             return
 
@@ -1311,9 +1927,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._settings.remove(_QSETTINGS_QUEUE_PROGRESS)
         self._settings.remove(_QSETTINGS_QUEUE_CURRENT_SAMPLE)
         self._settings.remove(_QSETTINGS_QUEUE_ACTIVE)
-        self.resize(*_DEFAULT_WINDOW_SIZE)
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen is None:
+            self.resize(*_DEFAULT_WINDOW_SIZE)
+        else:
+            self.resize(*_clamp_main_window_size(screen.availableGeometry(), _DEFAULT_WINDOW_SIZE))
         self._main_splitter.setSizes(
-            [_DEFAULT_SIDEBAR_WIDTH, max(1, self.width() - _DEFAULT_SIDEBAR_WIDTH)]
+            [self._sidebar_default_width, max(1, self.width() - self._sidebar_default_width)]
         )
         self._nav_select(0)
         QtWidgets.QMessageBox.information(self, "Reset Layout", "Layout reset to defaults.")
@@ -1324,12 +1944,72 @@ class MainWindow(QtWidgets.QMainWindow):
     def _launch_about(self) -> None:
         AboutDialog(self).exec()
 
+    def _show_startup_guide_enabled(self) -> bool:
+        return bool(
+            self._settings.value(
+                _QSETTINGS_SHOW_STARTUP_GUIDE,
+                True,
+                type=bool,
+            )
+        )
+
+    def _set_show_startup_guide(self, enabled: bool) -> None:
+        self._settings.setValue(_QSETTINGS_SHOW_STARTUP_GUIDE, bool(enabled))
+        self._settings.sync()
+
+    def _schedule_startup_guide(self) -> None:
+        if self._startup_guide_scheduled:
+            return
+        self._startup_guide_scheduled = True
+        if self._show_startup_guide_enabled():
+            QtCore.QTimer.singleShot(350, self._launch_startup_guide_if_enabled)
+
+    def _launch_startup_guide_if_enabled(self) -> None:
+        if self._show_startup_guide_enabled():
+            self._launch_startup_guide()
+
+    def _launch_startup_guide(self) -> None:
+        dialog = self._startup_guide_dialog
+        if dialog is None:
+            dialog = StartupGuideDialog(
+                self,
+                show_at_startup=self._show_startup_guide_enabled(),
+            )
+            dialog.show_at_startup_changed.connect(self._set_show_startup_guide)
+            dialog.open_settings_requested.connect(lambda: self._open_startup_guide_panel(4))
+            dialog.open_queue_requested.connect(lambda: self._open_startup_guide_panel(1))
+            self._startup_guide_dialog = dialog
+        else:
+            dialog.set_show_at_startup(self._show_startup_guide_enabled())
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _open_startup_guide_panel(self, index: int) -> None:
+        self._nav_select(index)
+        if self._startup_guide_dialog is not None:
+            self._startup_guide_dialog.hide()
+
     def _launch_debug_console(self) -> None:
         if not hasattr(self, "_debug_dlg") or not self._debug_dlg.isVisible():
-            self._debug_dlg = DebugConsoleDialog(self)
+            self._debug_dlg = DebugConsoleDialog(
+                self,
+                snapshot_provider=self._diagnostic_status_lines,
+            )
             self._debug_dlg.setModal(False)
         self._debug_dlg.show()
         self._debug_dlg.raise_()
+
+    def _diagnostic_status_lines(self):
+        return collect_diagnostic_status(
+            {
+                "Vacuum": self._vacuum_backend,
+                "AF Demag": self._af_demag_backend,
+                "IRM/ARM": self._irm_arm_backend,
+                "SQUID": self._squid_backend,
+                "DC Motors": self._dc_motor_backend,
+            }
+        )
 
     def _launch_step_monitor(self) -> None:
         if not hasattr(self, "_step_dlg") or not self._step_dlg.isVisible():
@@ -1439,7 +2119,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "validating": "flowValidating",
             "saving": "flowSaving",
             "returning": "flowReturning",
-            "complete": "flowRunning",
+            "complete": "flowComplete",
             "error": "flowError",
         }
         self._flow_lbl.setText(icons.get(state, state))
@@ -1448,14 +2128,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self._flow_lbl.style().polish(self._flow_lbl)
 
     def toggle_queue_pause(self) -> None:
-        """Pause or resume active measurement automation."""
+        """Pause or resume active queue automation."""
+        if not self._queue_active:
+            if hasattr(self._measurement, "is_active") and self._measurement.is_active():
+                if hasattr(self._measurement, "toggle_pause"):
+                    self._measurement.toggle_pause()
+                elif hasattr(self._measurement, "pause_run"):
+                    self._measurement.pause_run()
+            return
+
+        self._queue_paused = not self._queue_paused
+        if self._queue_paused:
+            if hasattr(self._measurement, "toggle_pause"):
+                self._measurement.toggle_pause()
+            self.set_flow_state("paused")
+            self.set_status("Queue paused.")
+            return
+
+        self._queue_paused = False
         if hasattr(self._measurement, "toggle_pause"):
             self._measurement.toggle_pause()
-        elif hasattr(self._measurement, "pause_run"):
-            self._measurement.pause_run()
+        self.set_status("Queue resumed.")
+        self._run_next_queue_command()
 
     def halt_measurement(self) -> None:
         """Stop active measurement and queue automation in a single action."""
+        self._queue_paused = False
         if hasattr(self._measurement, "halt_run"):
             self._measurement.halt_run()
         self.cancel_queue_run("Queue halted by user.")
@@ -1487,17 +2185,62 @@ def _vline() -> QtWidgets.QFrame:
     return f
 
 
-def _stub_dialog(parent: QtWidgets.QWidget, title: str, msg: str) -> None:
-    QtWidgets.QMessageBox.information(parent, title, msg)
-
-
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
+    apply_window_bounds_guard(app)
     apply_liquid_glass_theme(app)
     app.setStyleSheet(app.styleSheet() + _EXTRA_CSS)
     assets_dir = Path(__file__).resolve().parent.parent / "assets"
-    set_app_icon(app, "rapid_main_window_icon.png", assets_dir)
+    icon_candidates = (
+        "rapid_main_icon.ico",
+        "rapid_main_window_icon.ico",
+        "rapid_main_window_icon.png",
+        "rapid_main_icon.png",
+        "rapid_icon.ico",
+        "rapid_icon.png",
+    )
+    icon_name = "rapid_main_icon.png"
+    for candidate in icon_candidates:
+        if (assets_dir / candidate).exists():
+            icon_name = candidate
+            break
+    set_app_icon(app, icon_name, assets_dir)
     window = MainWindow()
-    set_app_icon(window, "rapid_main_window_icon.png", assets_dir)
+    set_app_icon(window, icon_name, assets_dir)
+    screen = app.primaryScreen()
+    if screen is not None:
+        window.setWindowState(QtCore.Qt.WindowState.WindowNoState)
+        compact_w, compact_h = _clamp_main_window_size(
+            screen.availableGeometry(),
+            (window.width(), window.height()),
+        )
+        window.setMaximumSize(compact_w, compact_h)
+        window.resize(min(window.width(), compact_w), min(window.height(), compact_h))
+        window._fit_window_to_current_screen()
+        QtCore.QTimer.singleShot(75, window._fit_window_to_current_screen)
     window.show()
+
+    def _enforce_startup_fit() -> None:
+        # If restore/load paths briefly re-expand on the way in, enforce the
+        # compact guard immediately after first paint and when monitor metrics
+        # have not yet fully settled.
+        active = window.screen() or app.primaryScreen()
+        if active is None:
+            return
+        compact_w, compact_h = _clamp_main_window_size(
+            active.availableGeometry(),
+            (window.width(), window.height()),
+        )
+        window.setWindowState(QtCore.Qt.WindowState.WindowNoState)
+        window.setMaximumSize(compact_w, compact_h)
+        if window.isMaximized() or window.isFullScreen():
+            window.showNormal()
+        window.resize(min(window.width(), compact_w), min(window.height(), compact_h))
+        window._fit_window_to_current_screen()
+
+    QtCore.QTimer.singleShot(0, _enforce_startup_fit)
+    QtCore.QTimer.singleShot(150, _enforce_startup_fit)
+    QtCore.QTimer.singleShot(350, _enforce_startup_fit)
+    QtCore.QTimer.singleShot(750, _enforce_startup_fit)
+    QtCore.QTimer.singleShot(1400, _enforce_startup_fit)
     return app.exec()

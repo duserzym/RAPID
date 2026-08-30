@@ -2,23 +2,34 @@ from __future__ import annotations
 
 from PySide6 import QtCore, QtWidgets
 
+from rapid_main.diagnostic_services import (
+    VacuumBackend,
+    VacuumNoCommBackend,
+    read_vacuum_snapshot,
+)
+
 
 class VacuumDialog(QtWidgets.QDialog):
     """Vacuum pressure monitor — replaces VB6 frmVacuum."""
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QtWidgets.QWidget | None = None,
+        backend: VacuumBackend | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._backend: VacuumBackend = backend or VacuumNoCommBackend()
         self.setWindowTitle("Vacuum Monitor")
         self.setMinimumWidth(380)
         self.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowContextHelpButtonHint)
         self._build_ui()
+        self._sync_from_backend()
 
-        # Simulated live refresh timer (Phase 3 will poll real hardware)
+        # Periodic pressure refresh from backend.
         self._timer = QtCore.QTimer(self)
         self._timer.timeout.connect(self._refresh)
         self._timer.start(2000)
 
-    # ── Public API ─────────────────────────────────────────────────────────
     def set_pressure(self, mtorr: float) -> None:
         self._pressure_lbl.setText(f"{mtorr:.3f}")
         warn = mtorr > float(self._warn_spin.value())
@@ -31,7 +42,6 @@ class VacuumDialog(QtWidgets.QDialog):
             f"color: {'#b91c1c' if warn else '#15803d'}; font-size: 12px;"
         )
 
-    # ── UI ─────────────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
         vl = QtWidgets.QVBoxLayout(self)
         vl.setContentsMargins(20, 16, 20, 16)
@@ -41,7 +51,6 @@ class VacuumDialog(QtWidgets.QDialog):
         hdr.setStyleSheet("font-size: 14px; font-weight: 700; color: #7A0219;")
         vl.addWidget(hdr)
 
-        # Live pressure readout
         read_frame = QtWidgets.QFrame()
         read_frame.setStyleSheet(
             "QFrame { background: rgba(122,2,25,0.04); border: 1px solid rgba(122,2,25,0.12);"
@@ -59,16 +68,19 @@ class VacuumDialog(QtWidgets.QDialog):
         unit_lbl.setAlignment(QtCore.Qt.AlignCenter)
         unit_lbl.setStyleSheet("color: #9a8885; font-size: 13px;")
 
-        self._status_lbl = QtWidgets.QLabel("Not connected (Phase 3)")
+        self._status_lbl = QtWidgets.QLabel("Initializing...")
         self._status_lbl.setAlignment(QtCore.Qt.AlignCenter)
         self._status_lbl.setStyleSheet("color: #6b7280; font-size: 12px;")
 
         rl.addWidget(self._pressure_lbl)
         rl.addWidget(unit_lbl)
         rl.addWidget(self._status_lbl)
+        self._pump_state_lbl = QtWidgets.QLabel("Pump: unknown")
+        self._pump_state_lbl.setAlignment(QtCore.Qt.AlignCenter)
+        self._pump_state_lbl.setStyleSheet("color: #6b7280; font-size: 12px;")
+        rl.addWidget(self._pump_state_lbl)
         vl.addWidget(read_frame)
 
-        # Settings
         grp = QtWidgets.QGroupBox("Threshold")
         fl = QtWidgets.QFormLayout(grp)
         fl.setSpacing(8)
@@ -88,16 +100,14 @@ class VacuumDialog(QtWidgets.QDialog):
 
         vl.addWidget(grp)
 
-        # Pump control
         pump_row = QtWidgets.QHBoxLayout()
-        self._pump_btn = QtWidgets.QPushButton("⏻  Pump On")
+        self._pump_btn = QtWidgets.QPushButton("▶  Pump On")
         self._pump_btn.setCheckable(True)
         self._pump_btn.toggled.connect(self._on_pump_toggle)
         pump_row.addWidget(self._pump_btn)
         pump_row.addStretch()
         vl.addLayout(pump_row)
 
-        # Close button
         close_btn = QtWidgets.QPushButton("Close")
         close_btn.clicked.connect(self.close)
         btn_row = QtWidgets.QHBoxLayout()
@@ -105,12 +115,74 @@ class VacuumDialog(QtWidgets.QDialog):
         btn_row.addWidget(close_btn)
         vl.addLayout(btn_row)
 
+    def _annotate_status(self, text: str) -> str:
+        status = text.strip()
+        if self._backend.simulated and "sim" not in status.lower():
+            status = f"{status} (simulated)"
+        return status
+
+    def _set_status(self, text: str) -> None:
+        self._status_lbl.setText(self._annotate_status(text))
+
+    def _set_pump_state(self, on: bool) -> None:
+        state = "On" if on else "Off"
+        self._pump_state_lbl.setText(f"Pump: {state}")
+        self._pump_btn.setText("⏹  Pump Off" if on else "▶  Pump On")
+
+    def _sync_from_backend(self) -> None:
+        cfg = getattr(self._backend, "_cfg", None)
+        if cfg is not None:
+            self._target_spin.setValue(getattr(cfg, "target_pressure", self._target_spin.value()))
+            self._warn_spin.setValue(getattr(cfg, "warn_threshold", self._warn_spin.value()))
+        self._pump_btn.blockSignals(True)
+        try:
+            self._pump_btn.setChecked(self._backend.is_pump_on())
+        finally:
+            self._pump_btn.blockSignals(False)
+
+        if self._backend.is_connected():
+            self._set_status(self._backend.status())
+            self._status_lbl.setStyleSheet("color: #15803d; font-size: 12px;")
+        else:
+            self._set_status("Disconnected")
+            self._status_lbl.setStyleSheet("color: #9a8885; font-size: 12px;")
+
+        self._set_pump_state(self._backend.is_pump_on())
+
     def _on_pump_toggle(self, on: bool) -> None:
-        self._pump_btn.setText("⏹  Pump Off" if on else "⏻  Pump On")
+        try:
+            self._backend.set_pump(on)
+            self._set_status(f"Pump {'On' if on else 'Off'}")
+            self._status_lbl.setStyleSheet("color: #15803d; font-size: 12px;")
+        except Exception as exc:
+            self._set_status(f"Pump error: {exc}")
+            self._status_lbl.setStyleSheet("color: #b45309; font-size: 12px;")
+        else:
+            self._set_pump_state(on)
+        self._refresh()
 
     def _refresh(self) -> None:
-        """Phase 3: poll hardware. For now display stub."""
-        pass
+        snapshot = read_vacuum_snapshot(
+            self._backend,
+            warn_threshold=float(self._warn_spin.value()),
+        )
+        self._set_pump_state(snapshot.pump_on)
+        if snapshot.pressure_mtorr is None:
+            self._status_lbl.setText(snapshot.fault_reason)
+            self._status_lbl.setStyleSheet("color: #b45309; font-size: 12px;")
+            return
+
+        self.set_pressure(snapshot.pressure_mtorr)
+
+        if snapshot.fault:
+            self._status_lbl.setText(snapshot.fault_reason)
+            self._status_lbl.setStyleSheet("color: #b91c1c; font-size: 12px;")
+        elif snapshot.connected:
+            self._set_status(snapshot.status)
+            self._status_lbl.setStyleSheet("color: #15803d; font-size: 12px;")
+        else:
+            self._set_status("Disconnected")
+            self._status_lbl.setStyleSheet("color: #9a8885; font-size: 12px;")
 
     def closeEvent(self, event: "QtCore.QEvent") -> None:  # type: ignore[override]
         self._timer.stop()

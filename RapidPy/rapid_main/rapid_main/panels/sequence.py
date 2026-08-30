@@ -5,6 +5,8 @@ from pathlib import Path
 
 from PySide6 import QtCore, QtWidgets
 
+from rapid_main.rockmag import compile_rockmag_routine, rockmag_the_works
+
 
 @dataclass
 class SequenceConfig:
@@ -39,6 +41,8 @@ class SequencePanel(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._cfg = SequenceConfig()
+        self._compiled_routine_labels: list[str] | None = None
+        self._applying_preset = False
 
         root = QtWidgets.QHBoxLayout(self)
         root.setContentsMargins(16, 12, 16, 16)
@@ -70,11 +74,9 @@ class SequencePanel(QtWidgets.QWidget):
         note.setStyleSheet("color: #7a6f6e; font-size: 12px;")
         cl.addWidget(note)
 
-        row = QtWidgets.QGridLayout()
+        row = QtWidgets.QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
-        row.setHorizontalSpacing(10)
-        row.setVerticalSpacing(8)
-        row.setColumnStretch(1, 1)
+        row.setSpacing(10)
 
         hw_btn = QtWidgets.QPushButton("Hawaiian AF Preset")
         hw_btn.setMinimumHeight(52)
@@ -95,8 +97,8 @@ class SequencePanel(QtWidgets.QWidget):
         rw_btn.setToolTip("NRM + ARM + IRM + AF/IRM")
         rw_btn.clicked.connect(self._preset_works)
 
-        row.addWidget(hw_btn, 0, 0)
-        row.addWidget(rw_btn, 0, 1)
+        row.addWidget(hw_btn, 1)
+        row.addWidget(rw_btn, 1)
         cl.addLayout(row)
         return card
 
@@ -106,7 +108,7 @@ class SequencePanel(QtWidgets.QWidget):
         card.setObjectName("card")
         cl = QtWidgets.QVBoxLayout(card)
         cl.setContentsMargins(18, 14, 18, 18)
-        cl.setSpacing(0)
+        cl.setSpacing(10)
 
         hdr = QtWidgets.QLabel("MEASUREMENT STEPS")
         hdr.setObjectName("sectionHdr")
@@ -132,7 +134,7 @@ class SequencePanel(QtWidgets.QWidget):
         cl.addSpacing(6)
 
         # ── RRM ──
-        self._chk_rrm = QtWidgets.QCheckBox("RRM  — rps step:")
+        self._chk_rrm = QtWidgets.QCheckBox("RRM  — rps step")
         self._chk_rrm.toggled.connect(self._rebuild_preview)
         rrm_row, self._rrm_step, self._rrm_max, self._rrm_af = self._param_row(
             self._chk_rrm,
@@ -146,12 +148,12 @@ class SequencePanel(QtWidgets.QWidget):
         self._chk_rrm.toggled.connect(self._chk_rrm_neg.setEnabled)
         self._chk_rrm_neg.toggled.connect(self._rebuild_preview)
         cl.addWidget(self._chk_rrm)
-        cl.addLayout(rrm_row)
+        cl.addWidget(rrm_row)
         cl.addWidget(self._chk_rrm_neg)
         cl.addSpacing(6)
 
         # ── ARM ──
-        self._chk_arm = QtWidgets.QCheckBox("ARM  — step size (G):")
+        self._chk_arm = QtWidgets.QCheckBox("ARM  — step size (G)")
         self._chk_arm.toggled.connect(self._rebuild_preview)
         arm_row, self._arm_step, self._arm_max, self._arm_af = self._param_row(
             self._chk_arm,
@@ -160,11 +162,11 @@ class SequencePanel(QtWidgets.QWidget):
              ("in AF (mT)",   100.0, 1.0, 1200.0)],
         )
         cl.addWidget(self._chk_arm)
-        cl.addLayout(arm_row)
+        cl.addWidget(arm_row)
         cl.addSpacing(6)
 
         # ── AF / IRM ──
-        self._chk_irm = QtWidgets.QCheckBox("AF / IRM  — log step factor:")
+        self._chk_irm = QtWidgets.QCheckBox("AF / IRM  — log step factor")
         self._chk_irm.toggled.connect(self._rebuild_preview)
         irm_row, self._irm_log, self._irm_min, self._irm_af_max, self._irm_irm_max = \
             self._param_row(
@@ -175,7 +177,7 @@ class SequencePanel(QtWidgets.QWidget):
                  ("IRM max (G)",  1200.0, 1.0, 5000.0)],
             )
         cl.addWidget(self._chk_irm)
-        cl.addLayout(irm_row)
+        cl.addWidget(irm_row)
         cl.addSpacing(6)
 
         # ── DC Backfield ──
@@ -193,44 +195,56 @@ class SequencePanel(QtWidgets.QWidget):
 
         return card
 
-    def _param_row(self, parent_chk: QtWidgets.QCheckBox,
-                   params: list[tuple[str, float, float, float]]
-                   ) -> tuple[QtWidgets.QLayout, ...]:
-        row = QtWidgets.QVBoxLayout()
-        row.setContentsMargins(22, 2, 6, 2)
-        row.setSpacing(6)
+    def _param_row(
+        self,
+        parent_chk: QtWidgets.QCheckBox,
+        params: list[tuple[str, float, float, float]],
+    ) -> tuple[QtWidgets.QWidget, ...]:
+        row = QtWidgets.QWidget()
+        row_layout = QtWidgets.QVBoxLayout(row)
+        row_layout.setContentsMargins(18, 2, 6, 2)
+        row_layout.setSpacing(6)
         spins = []
         for label, default, lo, hi in params:
-            row_widget = QtWidgets.QWidget()
-            row_layout = QtWidgets.QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(6)
+            field = QtWidgets.QWidget()
+            field_layout = QtWidgets.QHBoxLayout(field)
+            field_layout.setContentsMargins(0, 0, 0, 0)
+            field_layout.setSpacing(8)
 
             lbl = QtWidgets.QLabel(f"{label}:")
             lbl.setObjectName("readLbl")
-            lbl.setWordWrap(True)
+            lbl.setAlignment(
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+            )
             lbl.setSizePolicy(
-                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Preferred,
                 QtWidgets.QSizePolicy.Policy.Fixed,
             )
-            lbl.setMinimumWidth(102)
+            label_min_width = lbl.fontMetrics().horizontalAdvance(f"{label}:")
+            lbl.setMinimumWidth(int(label_min_width) + 12)
             spin = QtWidgets.QDoubleSpinBox()
             spin.setRange(lo, hi)
             spin.setValue(default)
+            spin.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
             spin.setSizePolicy(
-                QtWidgets.QSizePolicy.Policy.Fixed,
+                QtWidgets.QSizePolicy.Policy.MinimumExpanding,
                 QtWidgets.QSizePolicy.Policy.Fixed,
             )
-            spin.setMinimumWidth(126)
+            # Reserve enough room for the widest configured value (no visible clipping).
+            sample_text = spin.textFromValue(hi)
+            content_width = spin.fontMetrics().horizontalAdvance(sample_text)
+            spin.setMinimumWidth(max(170, content_width + 68))
+            spin.setMaximumWidth(max(260, content_width + 92))
+            spin.setContentsMargins(0, 0, 0, 0)
             spin.setDecimals(3)
-            spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+            spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+            spin.setFixedHeight(30)
             spin.setEnabled(False)
             spin.valueChanged.connect(self._rebuild_preview)
             parent_chk.toggled.connect(spin.setEnabled)
-            row_layout.addWidget(lbl)
-            row_layout.addWidget(spin)
-            row_layout.setStretch(1, 1)
-            row.addWidget(row_widget)
+            field_layout.addWidget(lbl)
+            field_layout.addWidget(spin, 1)
+            row_layout.addWidget(field)
             spins.append(spin)
         return (row, *spins)
 
@@ -249,6 +263,8 @@ class SequencePanel(QtWidgets.QWidget):
         self._preview = QtWidgets.QPlainTextEdit()
         self._preview.setObjectName("console")
         self._preview.setReadOnly(True)
+        self._preview.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._preview.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         cl.addWidget(self._preview, 1)
 
         btn_row = QtWidgets.QHBoxLayout()
@@ -275,6 +291,9 @@ class SequencePanel(QtWidgets.QWidget):
 
     def generate_labels(self) -> list[str]:
         """Compute the flat list of step labels from the current configuration."""
+        if self._compiled_routine_labels is not None:
+            return list(self._compiled_routine_labels)
+
         labels: list[str] = []
 
         if self._chk_nrm.isChecked():
@@ -324,6 +343,8 @@ class SequencePanel(QtWidgets.QWidget):
 
     @QtCore.Slot()
     def _rebuild_preview(self) -> None:
+        if not self._applying_preset and self.sender() is not None:
+            self._compiled_routine_labels = None
         labels = self.generate_labels()
         lines = ["Configured measurement sequence:\n"]
         if labels:
@@ -394,6 +415,7 @@ class SequencePanel(QtWidgets.QWidget):
 
     # ── Preset loaders ────────────────────────────────────────────────────────
     def _preset_hawaiian(self) -> None:
+        self._compiled_routine_labels = None
         for chk in (self._chk_nrm, self._chk_rrm, self._chk_arm,
                     self._chk_irm, self._chk_backfield, self._chk_susc):
             chk.setChecked(False)
@@ -401,11 +423,17 @@ class SequencePanel(QtWidgets.QWidget):
         self._rebuild_preview()
 
     def _preset_works(self) -> None:
-        self._chk_nrm.setChecked(True)
-        self._chk_arm.setChecked(True)
-        self._chk_irm.setChecked(True)
-        self._chk_backfield.setChecked(True)
-        self._chk_susc.setChecked(True)
+        plan = compile_rockmag_routine(rockmag_the_works())
+        self._compiled_routine_labels = plan.to_queue_labels()
+        self._applying_preset = True
+        try:
+            self._chk_nrm.setChecked(True)
+            self._chk_arm.setChecked(True)
+            self._chk_irm.setChecked(True)
+            self._chk_backfield.setChecked(True)
+            self._chk_susc.setChecked(True)
+        finally:
+            self._applying_preset = False
         self._rebuild_preview()
 
 

@@ -2,7 +2,7 @@
 measurement_worker.py — QThread-based measurement flow engine for RAPID v4.
 
 Implements the measurement loop that was previously ``frmMeasure`` +
-``modFlow.bas`` in VB6.  Runs on a worker thread so the UI stays responsive.
+``modFlow.bas`` in VB6. Runs on a worker thread so the UI stays responsive.
 
 Responsibilities
 ----------------
@@ -12,9 +12,9 @@ Responsibilities
   MagIC measurements.txt simultaneously (dual-write)
 * Emit Qt signals for UI updates: step progress, live readings, completion
 
-The worker is designed to be hardware-agnostic: actual I/O is delegated to
-``HardwareBackend`` (abstract) so the engine runs without hardware in
-``NO_COMM`` / simulation mode.
+The worker delegates hardware I/O to a backend contract shared across the app
+(``rapid_main.hardware_contracts``). In ``NO_COMM``/offline mode this defaults to
+the simulator backend.
 
 Usage::
 
@@ -31,85 +31,29 @@ Usage::
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+import json
 import threading
-from datetime import datetime
+from concurrent.futures import Future
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Protocol
+import time
+import math
+from typing import Optional, Callable, TypeVar
 
 from PySide6 import QtCore
 
-from rapid_main.data_model import MeasurementStep, RmgRecord, SpecimenMeta
-from rapid_main.io.magic_writer import append_measurement
-from rapid_main.io.rmg_writer import append_rmg_record
-from rapid_main.io.specimen_writer import append_step, write_header
+from rapid_main.analysis import ReadingCycleStatistics, reading_cycle_statistics
+from rapid_main.communication_log import CommunicationLogger
+from rapid_main.data_model import MeasurementStep, SpecimenMeta
+from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
+from rapid_main.geometry import Cartesian3D, cartesian3d_to_angular3d
+from rapid_main.magnetometer import MagnetometerReading
+from rapid_main.status_codes import OperatorStatus, error_status, status_for_phase, warning_status
+from rapid_main.susceptibility import write_susceptibility_summary_json
+from rapid_main.workflow import WorkflowPhase, WorkflowStateMachine
+from rapid_main.io.measurement_bundle import MeasurementBundleWriter
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Hardware backend protocol
-# ─────────────────────────────────────────────────────────────────────────────
-
-class HardwareBackend(Protocol):
-    """
-    Interface that the measurement engine uses to talk to hardware.
-
-    Implementations:
-      • ``NoCommBackend`` (this file) — returns synthetic data, no I/O
-      • Future: ``SquidBackend``, ``AdwinBackend``, etc.
-    """
-
-    def read_squid(self) -> tuple[float, float, float]:
-        """
-        Return (x_emu, y_emu, z_emu) raw SQUID readings in emu.
-        May block until the measurement settles.
-        """
-        ...
-
-    def set_demag_step(self, label: str) -> None:
-        """Apply the demagnetisation step corresponding to *label*."""
-        ...
-
-    def read_susceptibility(self) -> float:
-        """Return current susceptibility reading in emu/Oe (0.0 if unavailable)."""
-        ...
-
-    def is_available(self) -> bool:
-        """True if hardware communication is functioning."""
-        ...
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# No-comm (simulation) backend
-# ─────────────────────────────────────────────────────────────────────────────
-
-class NoCommBackend:
-    """Simulated backend — returns synthetic sinusoidal data, no hardware I/O."""
-
-    def __init__(self) -> None:
-        self._step_count = 0
-
-    def read_squid(self) -> tuple[float, float, float]:
-        import math
-        t = self._step_count
-        decay = math.exp(-t * 0.15)
-        x = 1.23e-6 * decay * math.cos(math.radians(t * 12.5))
-        y = 1.23e-6 * decay * math.sin(math.radians(t * 12.5))
-        z = 0.5e-6  * decay
-        return (x, y, z)
-
-    def set_demag_step(self, label: str) -> None:
-        self._step_count += 1
-
-    def read_susceptibility(self) -> float:
-        import math
-        return 1e-3 * math.exp(-self._step_count * 0.1)
-
-    def is_available(self) -> bool:
-        return True
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Measurement result
-# ─────────────────────────────────────────────────────────────────────────────
 
 class StepResult:
     """Holds the result of a single measurement step (passed via signals)."""
@@ -120,16 +64,25 @@ class StepResult:
         susceptibility: float,
         step_idx: int,
         total_steps: int,
+        cycle_stats: ReadingCycleStatistics | None = None,
     ) -> None:
         self.step = step
         self.susceptibility = susceptibility
         self.step_idx = step_idx
         self.total_steps = total_steps
+        self.cycle_stats = cycle_stats
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Measurement worker (QThread)
-# ─────────────────────────────────────────────────────────────────────────────
+T = TypeVar("T")
+
+
+class MeasurementTimeoutError(TimeoutError):
+    """Raised when a hardware call exceeds the configured timeout."""
+
+
+class MeasurementHaltRequested(RuntimeError):
+    """Raised when operator requests an in-flight halt."""
+
 
 class MeasurementWorker(QtCore.QThread):
     """
@@ -148,34 +101,42 @@ class MeasurementWorker(QtCore.QThread):
     """
 
     # Qt signals
-    step_started  = QtCore.Signal(int, str)          # idx, label
-    step_complete = QtCore.Signal(object)             # StepResult
-    run_finished  = QtCore.Signal(bool)               # aborted?
-    error_occurred = QtCore.Signal(str)               # error message
+    step_started = QtCore.Signal(int, str)  # idx, label
+    step_complete = QtCore.Signal(object)  # StepResult
+    run_finished = QtCore.Signal(bool)  # aborted?
+    error_occurred = QtCore.Signal(str)  # error message
+    preflight_warning = QtCore.Signal(str)  # preflight warning
+    phase_changed = QtCore.Signal(str)  # workflow-state label
+    status_event = QtCore.Signal(object)  # OperatorStatus
 
     def __init__(
         self,
         meta: SpecimenMeta,
         labels: list[str],
         output_dir: Path,
-        backend: HardwareBackend | None = None,
+        backend: MeasurementBackend | None = None,
         operator: str = "",
+        samples_per_position: int = 1,
         parent: Optional[QtCore.QObject] = None,
     ) -> None:
         super().__init__(parent)
-        self._meta       = meta
-        self._labels     = list(labels)
+        self._meta = meta
+        self._labels = list(labels)
         self._output_dir = Path(output_dir)
-        self._backend    = backend or NoCommBackend()
-        self._operator   = operator
+        self._backend = backend or NoCommBackend()
+        self._operator = operator
+        self._samples_per_position = max(1, int(samples_per_position))
 
         # Control flags (thread-safe via threading.Event)
-        self._pause_event  = threading.Event()
-        self._pause_event.set()   # not paused initially
-        self._halt_flag    = False
+        self._pause_event = threading.Event()
+        self._pause_event.set()  # not paused initially
+        self._halt_flag = False
+        self._timeout_epsilon = 0.05
+        self._state = WorkflowStateMachine()
+        self._comm_logger: CommunicationLogger | None = None
+        self._phase_history: list[dict[str, object]] = []
 
-    # ── Control API (call from main thread) ───────────────────────────────────
-
+    # Control API
     def pause(self) -> None:
         """Suspend execution after the current step completes."""
         self._pause_event.clear()
@@ -189,144 +150,561 @@ class MeasurementWorker(QtCore.QThread):
         self._halt_flag = True
         self._pause_event.set()  # unblock if paused
 
-    # ── Main loop ─────────────────────────────────────────────────────────────
-
     def run(self) -> None:
         """QThread entry point — executes the full sequence."""
-        # Prepare output paths
-        self._output_dir.mkdir(parents=True, exist_ok=True)
-        specimen_file = self._output_dir / self._meta.name
-        rmg_file      = self._output_dir / f"{self._meta.name}.rmg"
-        magic_file    = self._output_dir / "measurements.txt"
+        if self._halt_flag:
+            self._emit_phase(WorkflowPhase.HALTED)
+            self._finish_run(aborted=True)
+            return
 
-        # Write specimen file header (creates / overwrites)
         try:
-            write_header(specimen_file, self._meta)
+            self._emit_phase(WorkflowPhase.PREFLIGHT)
+            preflight = self._call_with_timeout(
+                self._backend.preflight,
+                timeout=self._get_backend_timeout("preflight_timeout"),
+                phase="preflight",
+            )
+        except MeasurementHaltRequested:
+            self._emit_phase(WorkflowPhase.HALTED)
+            self._finish_run(aborted=True)
+            return
+        except Exception as exc:
+            self._emit_error(f"Preflight failed: {exc}", phase=WorkflowPhase.PREFLIGHT)
+            self._emit_phase(WorkflowPhase.ERROR)
+            self._finish_run(aborted=True)
+            return
+
+        if not preflight.ok:
+            reasons = "; ".join(preflight.blockers) if preflight.blockers else "preflight failed"
+            self._emit_error(f"Preflight failed: {reasons}", phase=WorkflowPhase.PREFLIGHT)
+            self._emit_phase(WorkflowPhase.ERROR)
+            self._finish_run(aborted=True)
+            return
+
+        if preflight.warnings:
+            self._emit_warning("; ".join(preflight.warnings))
+
+        if not self._backend.is_available():
+            self._emit_error("Hardware backend is not available.", phase=WorkflowPhase.PREFLIGHT)
+            self._emit_phase(WorkflowPhase.ERROR)
+            self._finish_run(aborted=True)
+            return
+
+        if self._halt_flag:
+            self._emit_phase(WorkflowPhase.HALTED)
+            self._finish_run(aborted=True)
+            return
+
+        self._emit_phase(WorkflowPhase.LOADING)
+
+        # Prepare bundle writer (VB6 specimen + RMG + MagIC measurement/specimen)
+        try:
+            self._emit_phase(WorkflowPhase.SAVING)
+            bundle = MeasurementBundleWriter(self._output_dir, self._meta)
+            self._comm_logger = CommunicationLogger("measurement-worker", port=self._meta.name)
+            self._comm_logger.info("bundle initialized")
         except OSError as exc:
-            self.error_occurred.emit(f"Failed to write specimen header: {exc}")
-            self.run_finished.emit(True)
+            self._emit_error(f"Failed to initialize output bundle: {exc}", phase=WorkflowPhase.SAVING)
+            self._emit_phase(WorkflowPhase.ERROR)
+            self._finish_run(aborted=True)
             return
 
         total = len(self._labels)
         aborted = False
+        susceptibility_records: list[dict[str, object]] = []
 
         for idx, label in enumerate(self._labels):
-            # ── Check for halt ──
+            # Halt has top priority
             if self._halt_flag:
                 aborted = True
+                self._emit_phase(WorkflowPhase.HALTED)
                 break
 
-            # ── Emit step start ──
             self.step_started.emit(idx, label)
 
-            # ── Apply demagnetisation step ──
+            # Apply treatment step
             try:
-                self._backend.set_demag_step(label)
+                self._emit_phase(WorkflowPhase.TREATING)
+                self._comm_sent(label, detail="set_demag_step")
+                self._call_with_timeout(
+                    lambda: self._backend.set_demag_step(label),
+                    timeout=self._get_backend_timeout("step_timeout"),
+                    phase="set_demag_step",
+                )
+                self._emit_phase(WorkflowPhase.POSITIONING)
+                self._validate_position()
+            except MeasurementHaltRequested:
+                aborted = True
+                self._emit_phase(WorkflowPhase.HALTED)
+                break
             except Exception as exc:
-                self.error_occurred.emit(f"Hardware error at step {label}: {exc}")
+                self._emit_error(f"Hardware error at step {label}: {exc}", phase=WorkflowPhase.TREATING)
+                self._emit_phase(WorkflowPhase.ERROR)
                 aborted = True
                 break
 
-            # ── Wait if paused ──
+            # Pause handling
             self._pause_event.wait()
             if self._halt_flag:
                 aborted = True
+                self._emit_phase(WorkflowPhase.HALTED)
                 break
 
-            # ── Read SQUID ──
+            # Read the configured SQUID cycle, retaining its quality evidence.
             try:
-                sdx, sdy, sdz = self._backend.read_squid()
+                self._emit_phase(WorkflowPhase.MEASURING)
+                cycle_stats = self._read_squid_cycle(label)
+                sdx, sdy, sdz = cycle_stats.mean_vector
+            except MeasurementHaltRequested:
+                aborted = True
+                self._emit_phase(WorkflowPhase.HALTED)
+                break
             except Exception as exc:
-                self.error_occurred.emit(f"SQUID read error at step {label}: {exc}")
+                self._emit_error(f"SQUID read error at step {label}: {exc}", phase=WorkflowPhase.MEASURING)
+                self._emit_phase(WorkflowPhase.ERROR)
                 aborted = True
                 break
 
-            # ── Read susceptibility ──
             susc = 0.0
             try:
-                susc = self._backend.read_susceptibility()
+                self._emit_phase(WorkflowPhase.MEASURING)
+                susc = self._call_with_timeout(
+                    self._backend.read_susceptibility,
+                    timeout=self._get_backend_timeout("susceptibility_timeout"),
+                    phase="read_susceptibility",
+                )
+                self._comm_received(susc, detail="read_susceptibility")
+            except MeasurementHaltRequested:
+                aborted = True
+                self._emit_phase(WorkflowPhase.HALTED)
+                break
             except Exception:
                 pass  # susceptibility is optional
 
-            # ── Build MeasurementStep ──
             step = _build_step(
                 label=label,
-                sdx=sdx, sdy=sdy, sdz=sdz,
-                meta=self._meta,
+                sdx=sdx,
+                sdy=sdy,
+                sdz=sdz,
                 operator=self._operator,
                 timestamp=datetime.now(),
             )
 
-            # ── Dual write: specimen + .rmg + MagIC ──
             try:
-                append_step(specimen_file, step)
-                append_rmg_record(rmg_file, step, susceptibility=susc)
-                append_measurement(magic_file, self._meta, step)
-            except OSError as exc:
-                self.error_occurred.emit(f"File write error at step {label}: {exc}")
+                self._emit_phase(WorkflowPhase.VALIDATING)
+                self._validate_step(step)
+                self._emit_phase(WorkflowPhase.SAVING)
+                bundle.append_step(step, susceptibility=susc)
+                susceptibility_records.append(
+                    {
+                        "step_index": idx,
+                        "label": label,
+                        "susceptibility": float(susc),
+                    }
+                )
+            except Exception as exc:
+                self._emit_error(f"File write error at step {label}: {exc}", phase=WorkflowPhase.SAVING)
+                self._emit_phase(WorkflowPhase.ERROR)
                 aborted = True
                 break
 
-            # ── Emit step complete ──
-            result = StepResult(step, susc, idx, total)
+            result = StepResult(
+                step=step,
+                susceptibility=susc,
+                step_idx=idx,
+                total_steps=total,
+                cycle_stats=cycle_stats,
+            )
             self.step_complete.emit(result)
 
-        self.run_finished.emit(aborted)
+        # Return to safe state on both normal completion and interrupted execution
+        self._emit_phase(WorkflowPhase.RETURNING)
+        try:
+            return_to_safe_state = getattr(self._backend, "return_to_safe_state")
+            if callable(return_to_safe_state):
+                self._comm_info("return_to_safe_state")
+                self._call_with_timeout(
+                    lambda: return_to_safe_state(),
+                    timeout=self._get_backend_timeout("return_timeout"),
+                    phase="return_to_safe_state",
+                )
+        except AttributeError:
+            pass
+        except Exception as exc:
+            self._emit_error(f"Failed to return to safe state: {exc}", phase=WorkflowPhase.RETURNING)
+            self._emit_phase(WorkflowPhase.ERROR)
+            aborted = True
 
-    # ── Properties ────────────────────────────────────────────────────────────
+        if not aborted:
+            try:
+                write_susceptibility_summary_json(
+                    self._output_dir / "susceptibility.json",
+                    susceptibility_records,
+                    sample=self._meta.name,
+                    operator=self._operator,
+                )
+            except Exception as exc:
+                self._emit_error(
+                    f"Failed to write susceptibility summary: {exc}",
+                    phase=WorkflowPhase.SAVING,
+                )
+                self._emit_phase(WorkflowPhase.ERROR)
+                aborted = True
+
+        if not aborted:
+            self._emit_phase(WorkflowPhase.COMPLETE)
+        self._finish_run(aborted=aborted)
 
     @property
     def is_paused(self) -> bool:
         return not self._pause_event.is_set()
 
+    def _get_backend_timeout(self, key: str) -> float | None:
+        """Read timeout values from backend without hard coupling.
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helper: build MeasurementStep from raw SQUID readings
-# ─────────────────────────────────────────────────────────────────────────────
+        Backends can provide:
+        - ``preflight_timeout``
+        - ``step_timeout``
+        - ``read_timeout``
+        - ``susceptibility_timeout``
+        - ``return_timeout``
+        """
+        value = getattr(self._backend, key, None)
+        if value is None:
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return None if parsed <= 0 else parsed
+
+    def _call_with_timeout(
+        self,
+        call: Callable[[], T],
+        *,
+        timeout: float | None,
+        phase: str,
+    ) -> T:
+        if timeout is None:
+            # No timeout configured: run directly to avoid overhead.
+            return call()
+
+        deadline = time.monotonic() + timeout
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future: Future[T] = executor.submit(call)
+            while True:
+                if self._halt_flag:
+                    return self._raise_halted(phase)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    return future.result(timeout=min(remaining, self._timeout_epsilon))
+                except FutureTimeout:
+                    continue
+
+        future.cancel()
+        raise MeasurementTimeoutError(f"{phase} exceeded timeout of {timeout:.2f}s")
+
+    def _raise_halted(self, phase: str) -> T:
+        raise MeasurementHaltRequested(f"{phase} canceled by user halt")
+
+    def _emit_phase(self, phase: WorkflowPhase) -> None:
+        """Emit a phase transition that obeys the shared state machine."""
+        try:
+            self._state.advance(phase)
+        except Exception:
+            # State corruption at this level should not abort the entire run;
+            # recover to the requested state so we keep a best-effort phase stream.
+            self._state = WorkflowStateMachine(phase)
+        status = status_for_phase(phase)
+        self._phase_history.append(
+            {
+                "timestamp_iso": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                "phase": phase.value,
+                "status_code": getattr(status.code, "value", str(status.code)),
+                "severity": getattr(status.severity, "value", str(status.severity)),
+            }
+        )
+        self.phase_changed.emit(phase.value)
+        self.status_event.emit(status)
+
+    def _emit_warning(self, message: str) -> None:
+        self._comm_warning(message)
+        self.status_event.emit(warning_status(message))
+        self.preflight_warning.emit(message)
+
+    def _emit_error(self, message: str, *, phase: WorkflowPhase | None = None) -> None:
+        if self._comm_logger is not None:
+            self._comm_logger.error(message)
+        self.status_event.emit(error_status(message, phase=phase))
+        self.error_occurred.emit(message)
+
+    def _validate_position(self) -> None:
+        """Optional real positioning validation through backend hook."""
+        validator = getattr(self._backend, "validate_position", None)
+        if validator is None or not callable(validator):
+            return
+
+        result = self._call_with_timeout(
+            lambda: validator(),
+            timeout=self._get_backend_timeout("position_timeout"),
+            phase="validate_position",
+        )
+
+        if isinstance(result, bool):
+            if not result:
+                raise ValueError("backend position validation failed")
+            return
+
+        if isinstance(result, tuple) and len(result) == 2:
+            ok, message = result
+            if bool(ok):
+                return
+            detail = str(message).strip() if message else "backend reported position invalid"
+            raise ValueError(f"position validation failed: {detail}")
+
+        if result is not None and not isinstance(result, bool):
+            detail = str(result).strip()
+            raise ValueError(f"position validation failed: {detail}")
+
+    def _validate_step(self, step: MeasurementStep) -> None:
+        if not math.isfinite(step.sdx + step.sdy + step.sdz):
+            raise ValueError("measurement step contains non-finite values")
+        if step.moment <= 0:
+            raise ValueError("measurement step has non-positive moment")
+
+    def _coerce_squid_reading(self, reading: object, label: str) -> tuple[float, float, float]:
+        """Accept legacy tuple reads or calibrated magnetometer evidence."""
+        quality_flags: tuple[str, ...] = ()
+        if isinstance(reading, MagnetometerReading):
+            sdx, sdy, sdz = reading.moment_emu
+            quality_flags = reading.flags
+        else:
+            try:
+                sdx, sdy, sdz = reading  # type: ignore[misc]
+            except Exception as exc:
+                raise ValueError(f"SQUID read returned unsupported payload: {reading!r}") from exc
+
+        if quality_flags:
+            self._emit_warning(
+                f"SQUID read quality at step {label}: {', '.join(quality_flags)}"
+            )
+        return (float(sdx), float(sdy), float(sdz))
+
+    def _read_squid_cycle(self, label: str) -> ReadingCycleStatistics:
+        """Read and summarize the configured number of SQUID samples."""
+
+        readings: list[tuple[float, float, float]] = []
+        for _ in range(self._samples_per_position):
+            squid_reading = self._call_with_timeout(
+                self._backend.read_squid,
+                timeout=self._get_backend_timeout("read_timeout"),
+                phase="read_squid",
+            )
+            vector = self._coerce_squid_reading(squid_reading, label)
+            readings.append(vector)
+            self._comm_received(vector, detail="read_squid")
+        return reading_cycle_statistics(readings)
+
+    def _comm_info(self, detail: str) -> None:
+        if self._comm_logger is not None:
+            self._comm_logger.info(detail)
+
+    def _comm_warning(self, detail: str) -> None:
+        if self._comm_logger is not None:
+            self._comm_logger.info(f"warning: {detail}")
+
+    def _comm_sent(self, payload: object, *, detail: str) -> None:
+        if self._comm_logger is not None:
+            self._comm_logger.sent(payload, detail=detail)
+
+    def _comm_received(self, payload: object, *, detail: str) -> None:
+        if self._comm_logger is not None:
+            self._comm_logger.received(payload, detail=detail)
+
+    def _write_workflow_summary(self, *, aborted: bool) -> None:
+        payload = {
+            "schema": "rapidpy.measurement.workflow_summary.v1",
+            "sample": self._meta.name,
+            "operator": self._operator,
+            "labels": list(self._labels),
+            "aborted": bool(aborted),
+            "phase_count": len(self._phase_history),
+            "final_phase": self._phase_history[-1]["phase"] if self._phase_history else "",
+            "phases": list(self._phase_history),
+            "hardware_validation_required": True,
+            "hardware_validation_statement": (
+                "Software workflow phase evidence only; live hardware transition, "
+                "safe-state, and recovery behavior require physical acceptance testing."
+            ),
+        }
+        try:
+            self._output_dir.mkdir(parents=True, exist_ok=True)
+            (self._output_dir / "workflow_summary.json").write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            if self._comm_logger is not None:
+                self._comm_logger.error(f"workflow summary write failed: {exc}")
+
+    def _write_communication_transcript(self) -> None:
+        if self._comm_logger is None:
+            return
+        try:
+            self._comm_logger.write_text(self._output_dir / "communication.tsv")
+        except Exception as exc:
+            self.error_occurred.emit(f"Failed to write communication transcript: {exc}")
+
+    def _finish_run(self, *, aborted: bool) -> None:
+        self._write_workflow_summary(aborted=aborted)
+        self._write_communication_transcript()
+        self._write_artifact_index(aborted=aborted)
+        self.run_finished.emit(aborted)
+
+    def _write_artifact_index(self, *, aborted: bool) -> None:
+        artifact_path = self._output_dir / "artifact_index.json"
+
+        def entry(
+            name: str,
+            path: Path,
+            *,
+            required: bool,
+            producer: str,
+            description: str,
+        ) -> dict[str, object]:
+            exists = path.exists()
+            size = path.stat().st_size if exists else 0
+            return {
+                "name": name,
+                "relative_path": self._relative_artifact_path(path),
+                "required": required,
+                "exists": exists,
+                "size_bytes": size,
+                "producer": producer,
+                "description": description,
+            }
+
+        payload = {
+            "schema": "rapidpy.measurement.artifact_index.v1",
+            "sample": self._meta.name,
+            "operator": self._operator,
+            "aborted": bool(aborted),
+            "generated_at_iso": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "artifacts": [
+                entry(
+                    "vb6_specimen_file",
+                    self._output_dir / self._meta.name,
+                    required=not aborted,
+                    producer="MeasurementBundleWriter",
+                    description="Legacy specimen output compatible with VB6/CIT review paths.",
+                ),
+                entry(
+                    "rmg_file",
+                    self._output_dir / f"{self._meta.name}.rmg",
+                    required=not aborted,
+                    producer="MeasurementBundleWriter",
+                    description="RMG sidecar with per-step treatment and susceptibility values.",
+                ),
+                entry(
+                    "magic_measurements",
+                    self._output_dir / "measurements.txt",
+                    required=not aborted,
+                    producer="MeasurementBundleWriter",
+                    description="MagIC measurements table emitted in lockstep with specimen output.",
+                ),
+                entry(
+                    "magic_specimens",
+                    self._output_dir / "specimens.txt",
+                    required=not aborted,
+                    producer="MeasurementBundleWriter",
+                    description="MagIC specimen metadata table for the run bundle.",
+                ),
+                entry(
+                    "susceptibility_summary",
+                    self._output_dir / "susceptibility.json",
+                    required=not aborted,
+                    producer="MeasurementWorker",
+                    description="Per-step susceptibility readings and summary statistics.",
+                ),
+                entry(
+                    "workflow_summary",
+                    self._output_dir / "workflow_summary.json",
+                    required=True,
+                    producer="MeasurementWorker",
+                    description="Phase/status trace for completion, abort, or preflight failure evidence.",
+                ),
+                entry(
+                    "communication_transcript",
+                    self._output_dir / "communication.tsv",
+                    required=False,
+                    producer="CommunicationLogger",
+                    description="Transport-neutral transcript emitted when bundle execution begins.",
+                ),
+                entry(
+                    "quicklook_summary",
+                    self._output_dir / "quicklook.json",
+                    required=False,
+                    producer="MeasurementPanel",
+                    description="Panel-level quicklook plot contract, written after completed UI runs.",
+                ),
+            ],
+            "hardware_validation_required": True,
+            "hardware_validation_statement": (
+                "Artifact presence proves software bundle generation only; live hardware run "
+                "association and physical safe-state behavior require bench acceptance testing."
+            ),
+        }
+        try:
+            self._output_dir.mkdir(parents=True, exist_ok=True)
+            artifact_path.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            if self._comm_logger is not None:
+                self._comm_logger.error(f"artifact index write failed: {exc}")
+
+    def _relative_artifact_path(self, path: Path) -> str:
+        try:
+            return path.relative_to(self._output_dir).as_posix()
+        except ValueError:
+            return path.name
+
 
 def _build_step(
     label: str,
     sdx: float,
     sdy: float,
     sdz: float,
-    meta: SpecimenMeta,
     operator: str,
     timestamp: datetime,
 ) -> MeasurementStep:
-    """
-    Convert raw SQUID Cartesian readings to a ``MeasurementStep``.
+    """Convert raw SQUID Cartesian readings to a ``MeasurementStep``."""
+    moment = (sdx**2 + sdy**2 + sdz**2) ** 0.5
 
-    Orientation correction (specimen → geographic) is a placeholder — full
-    tilt/strike correction will be added in Phase 3D hardware integration.
-    """
-    import math
-
-    moment = math.sqrt(sdx**2 + sdy**2 + sdz**2)
-
-    # Specimen coordinates → declination/inclination
-    # (simplified: no orientation correction applied yet)
-    horiz = math.sqrt(sdx**2 + sdy**2)
-    sdec  = math.degrees(math.atan2(sdy, sdx)) % 360.0
-    sinc  = math.degrees(math.atan2(sdz, horiz))
-
-    # Geographic = specimen for now (Phase 3D will apply orientation matrix)
+    direction = cartesian3d_to_angular3d(
+        vector=Cartesian3D(sdx, sdy, sdz)
+    )
+    sdec = direction.dec
+    sinc = direction.inc
     gdec = sdec
     ginc = sinc
 
-    # Core dec/inc = geographic (placeholder)
-    crdec = gdec
-    crinc = ginc
-
-    error_angle = 0.0   # placeholder — SQUID RMS noise not yet computed
-
     return MeasurementStep(
         demag_label=label,
-        gdec=gdec, ginc=ginc,
-        sdec=sdec, sinc=sinc,
+        gdec=gdec,
+        ginc=ginc,
+        sdec=sdec,
+        sinc=sinc,
         moment=moment,
-        error_angle=error_angle,
-        crdec=crdec, crinc=crinc,
-        sdx=sdx, sdy=sdy, sdz=sdz,
+        error_angle=0.0,
+        crdec=gdec,
+        crinc=ginc,
+        sdx=sdx,
+        sdy=sdy,
+        sdz=sdz,
         operator=operator[:8] if operator else "",
         timestamp=timestamp,
     )

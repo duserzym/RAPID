@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 from typing import Sequence
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    np = None  # type: ignore[assignment]
+
 from PySide6 import QtCore, QtGui, QtWidgets
+from rapidpy_common.ui import clamp_window_geometry
 
 try:
     import pyqtgraph as pg
@@ -28,6 +35,53 @@ def _cart_to_inc_dec(x: float, y: float, z: float) -> tuple[float, float]:
     inc = math.degrees(math.atan2(-z, h))  # positive = below horizontal
     dec = math.degrees(math.atan2(y, x)) % 360.0
     return inc, dec
+
+
+def build_quicklook_summary(
+    north: Sequence[float],
+    east: Sequence[float],
+    up: Sequence[float],
+    labels: Sequence[str],
+) -> dict[str, object]:
+    """Build the backend-independent quicklook payload without creating a dialog."""
+
+    n = list(north)
+    e = list(east)
+    u = list(up)
+    step_labels = list(labels)
+    down = [-z for z in u]
+    intensity = [math.sqrt(x**2 + y**2 + z**2) for x, y, z in zip(n, e, u)]
+    inc: list[float] = []
+    dec: list[float] = []
+    for x, y, z in zip(n, e, u):
+        i, d = _cart_to_inc_dec(x, y, z)
+        inc.append(i)
+        dec.append(d)
+    return {
+        "step_count": len(step_labels),
+        "labels": step_labels,
+        "vectors": {
+            "north": n,
+            "east": e,
+            "up": u,
+            "down": down,
+        },
+        "intensity": intensity,
+        "inclination": inc,
+        "declination": dec,
+    }
+
+
+def write_quicklook_json(path: str | Path, summary: dict[str, object]) -> Path:
+    """Write a quicklook summary as a deterministic JSON sidecar artifact."""
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return target
 
 
 # ── Stereonet widget (custom QPainter, no pyqtgraph dependency) ───────────────
@@ -214,6 +268,51 @@ class PlotsDialog(QtWidgets.QDialog):
         self._build_ui()
         self._load_demo()
 
+    def showEvent(self, event: QtCore.QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        QtCore.QTimer.singleShot(0, self._fit_to_screen)
+        handle = self.windowHandle()
+        if handle is not None and not getattr(self, "_screen_signal_connected", False):
+            if handle.screen() is not None:
+                handle.screen().availableGeometryChanged.connect(self._fit_to_screen)
+            handle.screenChanged.connect(self._fit_to_screen)
+            self._screen_signal_connected = True
+
+    def _fit_to_screen(self, screen: QtCore.QObject | None = None) -> None:
+        active_screen = (
+            screen
+            if isinstance(screen, QtCore.QScreen)
+            else (self.screen() or QtWidgets.QApplication.primaryScreen())
+        )
+        if active_screen is None:
+            return
+        available = active_screen.availableGeometry()
+        max_w, max_h = clamp_window_geometry(available, (self.width(), self.height()))
+        min_size = self.minimumSize()
+        if min_size.isValid() and not min_size.isNull():
+            self.setMinimumSize(min(min_size.width(), max_w), min(min_size.height(), max_h))
+        self.resize(min(self.width(), max_w), min(self.height(), max_h))
+        frame = self.frameGeometry()
+        frame.setSize(
+            QtCore.QSize(
+                min(frame.width(), max_w),
+                min(frame.height(), max_h),
+            )
+        )
+        if frame.width() > available.width() or frame.height() > available.height():
+            frame.moveCenter(available.center())
+        else:
+            new_x = max(
+                available.left(),
+                min(frame.left(), available.right() - frame.width() + 1),
+            )
+            new_y = max(
+                available.top(),
+                min(frame.top(), available.bottom() - frame.height() + 1),
+            )
+            frame.moveTopLeft(QtCore.QPoint(new_x, new_y))
+        self.setGeometry(frame)
+
     # ── Public API ─────────────────────────────────────────────────────────
     def set_data(
         self,
@@ -223,19 +322,52 @@ class PlotsDialog(QtWidgets.QDialog):
         labels: Sequence[str],
     ) -> None:
         """Update all three plots.  Coordinates in A/m (N, E, Up)."""
-        down = [-z for z in up]
-        self._zij.set_data(north, east, down)
+        summary = build_quicklook_summary(north, east, up, labels)
+        vectors = summary["vectors"]
+        self._zij.set_data(vectors["north"], vectors["east"], vectors["down"])
+        self._int_plot.set_data(
+            list(range(len(summary["intensity"]))),
+            summary["intensity"],
+        )
+        self._stereo.set_data(
+            summary["inclination"],
+            summary["declination"],
+            summary["labels"],
+        )
+        self._last_plot_data = {
+            "north": vectors["north"],
+            "east": vectors["east"],
+            "up": vectors["up"],
+            "down": vectors["down"],
+            "labels": summary["labels"],
+            "intensity": summary["intensity"],
+            "inclination": summary["inclination"],
+            "declination": summary["declination"],
+        }
 
-        intensity = [math.sqrt(n**2 + e**2 + u**2) for n, e, u in zip(north, east, up)]
-        self._int_plot.set_data(list(range(len(intensity))), intensity)
+    def quicklook_summary(self) -> dict[str, object]:
+        """Return a reproducible summary of the current quicklook data."""
 
-        inc = []
-        dec = []
-        for n, e, u in zip(north, east, up):
-            i, d = _cart_to_inc_dec(n, e, u)
-            inc.append(i)
-            dec.append(d)
-        self._stereo.set_data(inc, dec, labels)
+        data = getattr(self, "_last_plot_data", {})
+        labels = list(data.get("labels", []))
+        return {
+            "step_count": len(labels),
+            "labels": labels,
+            "vectors": {
+                "north": list(data.get("north", [])),
+                "east": list(data.get("east", [])),
+                "up": list(data.get("up", [])),
+                "down": list(data.get("down", [])),
+            },
+            "intensity": list(data.get("intensity", [])),
+            "inclination": list(data.get("inclination", [])),
+            "declination": list(data.get("declination", [])),
+        }
+
+    def write_quicklook_json(self, path: str | Path) -> Path:
+        """Write the current quicklook summary as a JSON sidecar artifact."""
+
+        return write_quicklook_json(path, self.quicklook_summary())
 
     # ── UI ─────────────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
@@ -289,19 +421,39 @@ class PlotsDialog(QtWidgets.QDialog):
 
     def _load_demo(self) -> None:
         """Synthetic demagnetization sequence for demonstration."""
-        rng = np.random.default_rng(42)
-        nrm = np.array([0.85, 0.45, -0.12])
+        if np is not None:
+            rng = np.random.default_rng(42)
+            nrm = np.array([0.85, 0.45, -0.12])
+            decay = 0.76
+            steps = [nrm]
+            for _ in range(8):
+                prev = steps[-1]
+                noise = rng.normal(0, 0.008, 3)
+                steps.append(prev * decay + noise)
+            steps_arr = np.array(steps)
+            labels = ["NRM", "5", "10", "15", "20", "25", "30", "40", "50"]
+            self.set_data(
+                steps_arr[:, 0].tolist(),
+                steps_arr[:, 1].tolist(),
+                steps_arr[:, 2].tolist(),
+                labels,
+            )
+            return
+
+        import random
+
+        rng = random.Random(42)
+        nrm = [0.85, 0.45, -0.12]
         decay = 0.76
         steps = [nrm]
         for _ in range(8):
             prev = steps[-1]
-            noise = rng.normal(0, 0.008, 3)
-            steps.append(prev * decay + noise)
-        steps_arr = np.array(steps)
+            noise = [rng.gauss(0, 0.008) for _ in range(3)]
+            steps.append([prev[i] * decay + noise[i] for i in range(3)])
         labels = ["NRM", "5", "10", "15", "20", "25", "30", "40", "50"]
         self.set_data(
-            steps_arr[:, 0].tolist(),
-            steps_arr[:, 1].tolist(),
-            steps_arr[:, 2].tolist(),
+            [row[0] for row in steps],
+            [row[1] for row in steps],
+            [row[2] for row in steps],
             labels,
         )

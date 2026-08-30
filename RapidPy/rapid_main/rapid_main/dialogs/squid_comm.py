@@ -2,18 +2,24 @@ from __future__ import annotations
 
 from PySide6 import QtCore, QtWidgets
 
+from rapid_main.diagnostic_services import SquidBackend, SquidNoCommBackend
+
 
 class SquidCommDialog(QtWidgets.QDialog):
     """SQUID serial communication settings & test — replaces VB6 frmSquid."""
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QtWidgets.QWidget | None = None,
+        backend: SquidBackend | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._backend: SquidBackend = backend or SquidNoCommBackend()
         self.setWindowTitle("SQUID Communication Settings")
         self.setMinimumWidth(420)
         self.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowContextHelpButtonHint)
         self._build_ui()
 
-    # ── UI ─────────────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
         vl = QtWidgets.QVBoxLayout(self)
         vl.setContentsMargins(20, 16, 20, 16)
@@ -23,7 +29,6 @@ class SquidCommDialog(QtWidgets.QDialog):
         hdr.setStyleSheet("font-size: 14px; font-weight: 700; color: #7A0219;")
         vl.addWidget(hdr)
 
-        # ── Port settings ────────────────────────────────────────────────
         grp_port = QtWidgets.QGroupBox("Connection")
         fl = QtWidgets.QFormLayout(grp_port)
         fl.setSpacing(8)
@@ -42,10 +47,8 @@ class SquidCommDialog(QtWidgets.QDialog):
         self._parity = QtWidgets.QComboBox()
         self._parity.addItems(["None", "Even", "Odd"])
         fl.addRow("Parity:", self._parity)
-
         vl.addWidget(grp_port)
 
-        # ── Measurement settings ─────────────────────────────────────────
         grp_meas = QtWidgets.QGroupBox("Measurement")
         fl2 = QtWidgets.QFormLayout(grp_meas)
         fl2.setSpacing(8)
@@ -69,17 +72,16 @@ class SquidCommDialog(QtWidgets.QDialog):
 
         vl.addWidget(grp_meas)
 
-        # ── Test connection ──────────────────────────────────────────────
         test_row = QtWidgets.QHBoxLayout()
         self._test_btn = QtWidgets.QPushButton("Test Connection")
         self._test_btn.clicked.connect(self._test_connection)
-        self._status_lbl = QtWidgets.QLabel("Not tested")
+        self._status_lbl = QtWidgets.QLabel()
         self._status_lbl.setStyleSheet("color: #9a8885; font-size: 11px;")
+        self._set_status(self._backend.status())
         test_row.addWidget(self._test_btn)
         test_row.addWidget(self._status_lbl, 1)
         vl.addLayout(test_row)
 
-        # ── Buttons ──────────────────────────────────────────────────────
         btns = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
         )
@@ -87,7 +89,26 @@ class SquidCommDialog(QtWidgets.QDialog):
         btns.rejected.connect(self.reject)
         vl.addWidget(btns)
 
+    def _annotate_status(self, text: str) -> str:
+        status = text.strip()
+        if self._backend.simulated and "sim" not in status.lower():
+            status = f"{status} (simulated)"
+        return status
+
+    def _set_status(self, text: str) -> None:
+        self._status_lbl.setText(self._annotate_status(text))
+
     def _test_connection(self) -> None:
-        """Stub — Phase 3 will open the serial port and send a query."""
-        self._status_lbl.setText("⚠  Hardware not connected (Phase 3)")
-        self._status_lbl.setStyleSheet("color: #b45309; font-size: 11px;")
+        try:
+            connected = bool(self._backend.test_connection())
+        except Exception as exc:
+            self._set_status(f"Connection failed: {exc}")
+            self._status_lbl.setStyleSheet("color: #b45309; font-size: 11px;")
+            return
+
+        if connected:
+            self._set_status(f"Connected: {self._backend.status()}")
+            self._status_lbl.setStyleSheet("color: #15803d; font-size: 11px;")
+        else:
+            self._set_status("Not connected")
+            self._status_lbl.setStyleSheet("color: #9a8885; font-size: 11px;")

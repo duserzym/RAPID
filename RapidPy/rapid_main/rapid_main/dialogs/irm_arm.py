@@ -2,15 +2,22 @@ from __future__ import annotations
 
 from PySide6 import QtCore, QtWidgets
 
+from rapid_main.diagnostic_services import IrmArmBackend, IrmArmNoCommBackend
+
 
 class IrmArmDialog(QtWidgets.QDialog):
     """IRM / ARM control dialog — replaces VB6 frmIRMARM."""
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QtWidgets.QWidget | None = None,
+        backend: IrmArmBackend | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("IRM / ARM Control")
         self.setMinimumWidth(440)
         self.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowContextHelpButtonHint)
+        self._backend = backend or IrmArmNoCommBackend()
         self._build_ui()
 
     # ── UI ─────────────────────────────────────────────────────────────────
@@ -82,7 +89,8 @@ class IrmArmDialog(QtWidgets.QDialog):
         self._arm_grp.setVisible(False)
 
         # ── Status ───────────────────────────────────────────────────────
-        self._status_lbl = QtWidgets.QLabel("Ready — no hardware connected (Phase 3)")
+        status_suffix = " (simulated)" if self._backend.simulated else ""
+        self._status_lbl = QtWidgets.QLabel(f"Ready{status_suffix}")
         self._status_lbl.setStyleSheet("color: #9a8885; font-size: 11px;")
         vl.addWidget(self._status_lbl)
 
@@ -109,11 +117,32 @@ class IrmArmDialog(QtWidgets.QDialog):
         self._arm_grp.setVisible(idx == 1)
 
     def _apply(self) -> None:
-        """Phase 3: send ramp command to hardware."""
-        self._status_lbl.setText("⚠  Hardware not connected (Phase 3)")
-        self._status_lbl.setStyleSheet("color: #b45309; font-size: 11px;")
+        try:
+            if self._mode.currentIndex() == 0:
+                msg = self._backend.apply_irm(
+                    max_field_mT=float(self._irm_field.value()),
+                    axis=self._irm_axis.currentText(),
+                    ramp_label=self._irm_ramp.currentText(),
+                    steps=10,
+                )
+            else:
+                msg = self._backend.apply_arm(
+                    peak_af_mT=float(self._arm_peak_af.value()),
+                    bias_mT=float(self._arm_bias.value()),
+                )
+        except Exception as exc:
+            msg = str(exc)
+            self._status_lbl.setStyleSheet("color: #b45309; font-size: 11px;")
+        else:
+            self._status_lbl.setStyleSheet("color: #15803d; font-size: 11px;")
+        self._status_lbl.setText(msg)
 
     def _reset(self) -> None:
-        """Phase 3: ramp field down to zero."""
-        self._status_lbl.setText("⚠  Hardware not connected (Phase 3)")
-        self._status_lbl.setStyleSheet("color: #b45309; font-size: 11px;")
+        try:
+            msg = self._backend.reset_field()
+        except Exception as exc:
+            msg = str(exc)
+            self._status_lbl.setStyleSheet("color: #b45309; font-size: 11px;")
+        else:
+            self._status_lbl.setStyleSheet("color: #15803d; font-size: 11px;")
+        self._status_lbl.setText(msg)

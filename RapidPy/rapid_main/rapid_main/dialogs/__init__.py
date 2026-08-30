@@ -8,6 +8,8 @@ from .irm_arm import IrmArmDialog
 from .sample_select import SampleSelectDialog
 from .plots import PlotsDialog
 from .webcam_dialog import WebcamDialog
+from .dc_motors import DCMotorDialog
+from .startup_guide import StartupGuideDialog
 
 __all__ = [
     "AboutDialog",
@@ -20,5 +22,7 @@ __all__ = [
     "SampleSelectDialog",
     "PlotsDialog",
     "WebcamDialog",
+    "DCMotorDialog",
+    "StartupGuideDialog",
 ]
 

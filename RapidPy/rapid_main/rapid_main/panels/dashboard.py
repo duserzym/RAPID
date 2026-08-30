@@ -161,6 +161,8 @@ class DashboardPanel(QtWidgets.QWidget):
         self._log = QtWidgets.QPlainTextEdit()
         self._log.setObjectName("console")
         self._log.setReadOnly(True)
+        self._log.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._log.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._log.setFixedHeight(160)
         self._log.setPlaceholderText("System events will appear here…")
         clear_btn.clicked.connect(self._log.clear)

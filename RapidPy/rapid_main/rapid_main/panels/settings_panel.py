@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6 import QtCore, QtWidgets
 
 from rapid_main.config import AppConfig, SequenceTimesConfig
+from rapid_main.legacy_ini import import_vb6_ini
 
 
 def _sec_hdr(text: str) -> QtWidgets.QLabel:
@@ -46,12 +49,15 @@ class SettingsPanel(QtWidgets.QWidget):
         self._tabs.addTab(self._build_sequence_tab(),   "Sequence")
 
         bottom = QtWidgets.QHBoxLayout()
-        bottom.addStretch()
+        import_btn = QtWidgets.QPushButton("⬆️  Import VB6 INI…")
+        import_btn.clicked.connect(self._import_vb6_ini)
         save_btn = QtWidgets.QPushButton("💾  Save Settings")
         save_btn.setObjectName("accent")
         save_btn.clicked.connect(self._save)
         cancel_btn = QtWidgets.QPushButton("Cancel")
         cancel_btn.clicked.connect(self._revert)
+        bottom.addWidget(import_btn)
+        bottom.addStretch()
         bottom.addWidget(cancel_btn)
         bottom.addWidget(save_btn)
         root.addLayout(bottom)
@@ -169,6 +175,32 @@ class SettingsPanel(QtWidgets.QWidget):
         self._irm_steps.setRange(1, 50)
         self._irm_steps.setValue(10)
         fl.addRow("Default step count:", self._irm_steps)
+
+        fl.addRow(_sec_hdr("IRM voltage calibration"))
+
+        self._irm_voltage_slope = QtWidgets.QDoubleSpinBox()
+        self._irm_voltage_slope.setRange(0.0, 1.0)
+        self._irm_voltage_slope.setDecimals(6)
+        self._irm_voltage_slope.setSingleStep(0.001)
+        self._irm_voltage_slope.setValue(0.01)
+        self._irm_voltage_slope.setSuffix(" V/mT")
+        fl.addRow("Field-to-voltage slope:", self._irm_voltage_slope)
+
+        self._irm_voltage_intercept = QtWidgets.QDoubleSpinBox()
+        self._irm_voltage_intercept.setRange(0.0, 10.0)
+        self._irm_voltage_intercept.setDecimals(6)
+        self._irm_voltage_intercept.setSingleStep(0.01)
+        self._irm_voltage_intercept.setValue(0.0)
+        self._irm_voltage_intercept.setSuffix(" V")
+        fl.addRow("Voltage intercept:", self._irm_voltage_intercept)
+
+        self._irm_max_voltage = QtWidgets.QDoubleSpinBox()
+        self._irm_max_voltage.setRange(0.1, 10.0)
+        self._irm_max_voltage.setDecimals(3)
+        self._irm_max_voltage.setSingleStep(0.1)
+        self._irm_max_voltage.setValue(10.0)
+        self._irm_max_voltage.setSuffix(" V")
+        fl.addRow("DAC voltage limit:", self._irm_max_voltage)
 
         fl.addRow(_sec_hdr("ARM (Anhysteretic Remanence)"))
 
@@ -560,6 +592,9 @@ class SettingsPanel(QtWidgets.QWidget):
         self._irm_axis.setCurrentText(ia.irm_axis)
         self._irm_ramp.setCurrentText(ia.irm_ramp)
         self._irm_steps.setValue(ia.irm_steps)
+        self._irm_voltage_slope.setValue(ia.irm_voltage_slope)
+        self._irm_voltage_intercept.setValue(ia.irm_voltage_intercept)
+        self._irm_max_voltage.setValue(ia.irm_max_voltage)
         self._arm_peak_af.setValue(ia.arm_peak_af)
         self._arm_bias.setValue(ia.arm_bias)
 
@@ -651,6 +686,9 @@ class SettingsPanel(QtWidgets.QWidget):
         ia.irm_axis      = self._irm_axis.currentText()
         ia.irm_ramp      = self._irm_ramp.currentText()
         ia.irm_steps     = self._irm_steps.value()
+        ia.irm_voltage_slope = self._irm_voltage_slope.value()
+        ia.irm_voltage_intercept = self._irm_voltage_intercept.value()
+        ia.irm_max_voltage = self._irm_max_voltage.value()
         ia.arm_peak_af   = self._arm_peak_af.value()
         ia.arm_bias      = self._arm_bias.value()
 
@@ -721,6 +759,8 @@ class SettingsPanel(QtWidgets.QWidget):
         if hasattr(mw, "config"):
             self.save_to_config(mw.config)
             mw.config.save()
+            if hasattr(mw, "_on_nocomm_toggled"):
+                mw._on_nocomm_toggled(mw.config.general.nocomm)
             # Propagate updated step times to the runtime estimator
             if hasattr(mw, "_estimator"):
                 mw._estimator.step_times = mw.config.sequence.as_estimator_dict()
@@ -730,3 +770,58 @@ class SettingsPanel(QtWidgets.QWidget):
         mw = self.window()
         if hasattr(mw, "navigate_to"):
             mw.navigate_to("dashboard")
+
+    def _import_vb6_ini(self) -> None:
+        mw = self.window()
+        if not hasattr(mw, "config"):
+            QtWidgets.QMessageBox.warning(self, "Import VB6 INI", "Unable to access application settings model.")
+            return
+
+        initial_dir = ""
+        cfg = getattr(mw, "config", None)
+        if hasattr(cfg, "general"):
+            general = cfg.general
+            if general.data_dir:
+                initial_dir = general.data_dir
+            elif general.backup_dir:
+                initial_dir = general.backup_dir
+            elif general.sample_dir:
+                initial_dir = general.sample_dir
+
+        if not initial_dir:
+            initial_dir = str(Path.home())
+
+        selected, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Import VB6 INI",
+            initial_dir,
+            "INI Files (*.ini *.INI);;All Files (*)",
+        )
+        if not selected:
+            return
+
+        try:
+            report = import_vb6_ini(mw.config, selected)
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, "Import VB6 INI", f"Import failed:\n{exc}")
+            return
+
+        mw.config.save()
+        self.load_from_config(mw.config)
+        if hasattr(mw, "_on_nocomm_toggled"):
+            mw._on_nocomm_toggled(mw.config.general.nocomm)
+        if hasattr(mw, "_estimator"):
+            mw._estimator.step_times = mw.config.sequence.as_estimator_dict()
+
+        summary_lines = [f"Imported legacy VB6 INI: {Path(selected).name}"]
+        summary_lines.append(f"Mapped fields: {len(report.mapped_fields)}")
+        if report.unmapped_fields:
+            summary_lines.append(f"Unmapped fields: {len(report.unmapped_fields)}")
+        if report.warnings:
+            summary_lines.append("")
+            summary_lines.append("Warnings:")
+            summary_lines.extend(f"• {w}" for w in report.warnings[:15])
+            if len(report.warnings) > 15:
+                summary_lines.append(f"… and {len(report.warnings) - 15} additional warnings.")
+        message = "\n".join(summary_lines)
+        QtWidgets.QMessageBox.information(self, "Import VB6 INI", message)
