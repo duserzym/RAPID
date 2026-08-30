@@ -13,6 +13,7 @@ Modern replacements live under `RapidPy/` — self-contained Python apps with a 
 RapidPy is now beyond the initial three-app milestone. The repository currently contains seven released modules, additional in-progress migration panels, and bench or support utilities, with public app pages under the GitHub Pages site and recent one-file Windows builds landing in the repo-root `dist/` folder.
 
 - **Website overview:** https://duserzym.github.io/RAPID/
+- **Interactive system map:** https://duserzym.github.io/RAPID/architecture.html
 - **App pages:** https://duserzym.github.io/RAPID/apps/index.html
 - **Manual index:** [docs/compiled-apps-manual-index.md](docs/compiled-apps-manual-index.md)
 
@@ -43,6 +44,28 @@ RapidPy is now beyond the initial three-app milestone. The repository currently 
 ---
 
 ## Architecture
+
+[![RapidPy architecture: operator shell and panels feed a queue compiler and measurement worker; a bracketed acquisition, flux-count guard, and holder correction sit inside the P0 integrity gates and publish through a bundle transaction; fail-closed hardware contracts reach the SQUID, sample changer, AF demagnetiser, and vacuum system.](docs/site/images/rapidpy-architecture.png)](https://duserzym.github.io/RAPID/architecture.html)
+
+**[Open the interactive system map ↗](https://duserzym.github.io/RAPID/architecture.html)** — pan, zoom, hover any box for its source files, or step through four guided views:
+
+| View | What it shows |
+|---|---|
+| [01 · Measurement block path](https://duserzym.github.io/RAPID/architecture.html#view=measurement-path) | One specimen from the sequence panel to a published, provenance-stamped output bundle |
+| [02 · Flux-count rejection](https://duserzym.github.io/RAPID/architecture.html#view=flux-rejection) | A one-count step between the bracketing zeros is rejected; the holder correction never moves |
+| [03 · Fail-closed hardware mode](https://duserzym.github.io/RAPID/architecture.html#view=fail-closed) | A missing driver, port, adapter, or calibration blocks preflight instead of becoming a simulator |
+| [04 · Evidence and replay](https://duserzym.github.io/RAPID/architecture.html#view=evidence) | Recorded blocks replay through the same guard, and only a complete run is ever published |
+
+Reading it left to right: the **operator shell** drives a **workflow engine**, which runs the
+**measurement core** — a bracketed acquisition (zero, four orientations, zero), a flux-count
+guard that validates before it reduces, and a measured holder correction. Only an accepted
+block reaches the transactional bundle writer. The **hardware abstraction** composes that core
+and fails closed, so every instrument is reached through exactly one serial adapter.
+
+The diagram is generated with [archify](https://github.com/tt-a1i/archify) from a typed JSON
+source of truth — see [docs/architecture/](docs/architecture/) to regenerate it.
+
+### Repository layout
 
 ```
 RapidPy/
@@ -117,6 +140,8 @@ conda run -n paleomag cmd /c build_windows.bat
 | Document | Description |
 |---|---|
 | [compiled-apps-manual-index.md](docs/compiled-apps-manual-index.md) | Current compiled-app status, manual coverage, and VB6 transition-sheet tracking |
+| [docs/architecture/](docs/architecture/) | Typed JSON source and regeneration steps for the interactive system map |
+| [docs/site/architecture.html](docs/site/architecture.html) | Generated interactive system map published on GitHub Pages |
 | [docs/site/index.html](docs/site/index.html) | Static source for the GitHub Pages homepage |
 | [docs/site/apps/index.html](docs/site/apps/index.html) | Static source for the GitHub Pages app-detail pages |
 | [fw-bell-gaussmeter-user-guide.md](docs/fw-bell-gaussmeter-user-guide.md) | Operator setup, driver installation, DLL placement, and GUI usage |

@@ -598,6 +598,68 @@
     .arch-tree .file { color: rgba(255,255,255,.65); }
     .arch-tree .comment { color: #6EE7B7; }
 
+    /* ── Interactive architecture diagram ─────────────────────────────── */
+    .arch-diagram {
+      display: block;
+      margin: 0 0 1.25rem;
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      transition: transform var(--transition), box-shadow var(--transition), border-color var(--transition);
+    }
+
+    .arch-diagram:hover,
+    .arch-diagram:focus-visible {
+      transform: translateY(-3px);
+      border-color: var(--gold);
+      box-shadow: 0 18px 48px rgba(0,0,0,.45);
+    }
+
+    .arch-diagram img { display: block; width: 100%; height: auto; }
+
+    .arch-views {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .6rem;
+      margin-bottom: 2.25rem;
+    }
+
+    .arch-view-link {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .75rem;
+      letter-spacing: .02em;
+      text-decoration: none;
+      color: rgba(255,255,255,.82);
+      background: rgba(255,255,255,.07);
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 999px;
+      padding: .45rem .95rem;
+      transition: background var(--transition), color var(--transition), border-color var(--transition);
+    }
+
+    .arch-view-link:hover,
+    .arch-view-link:focus-visible {
+      background: var(--gold);
+      border-color: var(--gold);
+      color: #1A1A1A;
+    }
+
+    .arch-view-link.is-primary {
+      background: var(--gold);
+      border-color: var(--gold);
+      color: #1A1A1A;
+      font-weight: 600;
+    }
+
+    .arch-subhead {
+      font-size: .78rem;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--gold-light);
+      margin-bottom: .75rem;
+    }
+
     /* ── Stack strip ──────────────────────────────────────────────────── */
     .stack-strip {
       display: flex;
@@ -757,6 +819,7 @@
     <li><a href="#manuals-transition">Manuals</a></li>
     <li><a href="#modules">Modules</a></li>
     <li><a href="#architecture">Architecture</a></li>
+    <li><a href="architecture.html">System map ↗</a></li>
     <li><a href="#roadmap">Roadmap</a></li>
     <li><a href="https://github.com/duserzym/RAPID" target="_blank">GitHub ↗</a></li>
   </ul>
@@ -1331,9 +1394,26 @@
     <p class="section-eyebrow">Codebase</p>
     <h2 class="section-title">Architecture</h2>
     <p class="section-subtitle">
-      A shared hardware abstraction layer sits beneath all subsystem apps,
-      keeping driver code in one place and subsystem UIs thin.
+      One operator shell drives a workflow engine, a measurement core that
+      validates every SQUID block before it counts, a fail-closed hardware
+      abstraction, and one serial adapter per instrument.
     </p>
+
+    <a class="arch-diagram" href="architecture.html" title="Open the interactive RapidPy system map">
+      <img src="images/rapidpy-architecture.png"
+           alt="RapidPy architecture: operator shell and panels feed a queue compiler and measurement worker; a bracketed acquisition, flux-count guard, and holder correction sit inside the P0 integrity gates and publish through a bundle transaction; fail-closed hardware contracts reach the SQUID, sample changer, AF demagnetiser, and vacuum system."
+           width="2048" height="1180" loading="lazy" />
+    </a>
+
+    <div class="arch-views">
+      <a class="arch-view-link is-primary" href="architecture.html">Open interactive map ↗</a>
+      <a class="arch-view-link" href="architecture.html#view=measurement-path">01 · Measurement block path</a>
+      <a class="arch-view-link" href="architecture.html#view=flux-rejection">02 · Flux-count rejection</a>
+      <a class="arch-view-link" href="architecture.html#view=fail-closed">03 · Fail-closed hardware mode</a>
+      <a class="arch-view-link" href="architecture.html#view=evidence">04 · Evidence and replay</a>
+    </div>
+
+    <p class="arch-subhead">Repository layout</p>
 
     <pre class="arch-tree">
 <span class="dir">RAPID/</span>

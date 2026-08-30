@@ -1,0 +1,801 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "RapidPy — RAPID magnetometer control architecture",
+    "subtitle": "Operator shell → workflow engine → measurement core → hardware abstraction → serial transports → instruments",
+    "output": "rapidpy-architecture.html",
+    "quality_profile": "showcase",
+    "visual_preset": "signal-flow",
+    "animation": "trace",
+    "viewBox": [
+      1362,
+      900
+    ],
+    "repository": {
+      "url": "https://github.com/duserzym/RAPID",
+      "revision": "05096dfa2417969a9099e25cfae715881bb5b785"
+    },
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "frontend": {
+          "label": "Operator UI (PySide6)"
+        },
+        "backend": {
+          "label": "Services"
+        },
+        "security": {
+          "label": "Integrity gates — fail closed"
+        },
+        "database": {
+          "label": "Persisted evidence"
+        },
+        "cloud": {
+          "label": "Simulation — always labelled"
+        },
+        "external": {
+          "label": "Instruments + their adapters"
+        }
+      }
+    },
+    "views": [
+      {
+        "id": "measurement-path",
+        "label": "Measurement block path",
+        "focus": [
+          "shell",
+          "panels",
+          "queue",
+          "worker",
+          "acquisition",
+          "guard",
+          "holder",
+          "bundle",
+          "outputs"
+        ],
+        "note": "Follow one specimen from the sequence panel to a published, provenance-stamped output bundle."
+      },
+      {
+        "id": "flux-rejection",
+        "label": "Flux-count rejection",
+        "focus": [
+          "worker",
+          "acquisition",
+          "guard",
+          "holder",
+          "holderfile",
+          "squid"
+        ],
+        "note": "A one-count step between the bracketing zeros is rejected; the holder correction never moves."
+      },
+      {
+        "id": "fail-closed",
+        "label": "Fail-closed hardware mode",
+        "focus": [
+          "contracts",
+          "factories",
+          "nocomm",
+          "squid",
+          "stage",
+          "afsys",
+          "vac"
+        ],
+        "note": "A missing driver, port, adapter, or calibration blocks preflight instead of becoming a simulator."
+      },
+      {
+        "id": "evidence",
+        "label": "Evidence and replay",
+        "focus": [
+          "replay",
+          "workflow",
+          "guard",
+          "bundle",
+          "outputs",
+          "holderfile"
+        ],
+        "note": "Recorded blocks replay through the same guard, and only a complete run is ever published."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "panels",
+      "type": "frontend",
+      "label": "Operator panels",
+      "sublabel": "Sequence · Queue · Meas",
+      "pos": [
+        40,
+        130
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/panels/measurement.py",
+          "label": "Measurement panel"
+        },
+        {
+          "path": "RapidPy/rapid_main/rapid_main/panels/sample_queue.py",
+          "label": "Sample queue panel"
+        }
+      ]
+    },
+    {
+      "id": "shell",
+      "type": "frontend",
+      "label": "RAPID v4 shell",
+      "sublabel": "MainWindow",
+      "pos": [
+        40,
+        275
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/app.py",
+          "label": "MainWindow"
+        }
+      ],
+      "tag": "PySide6"
+    },
+    {
+      "id": "dialogs",
+      "type": "frontend",
+      "label": "Diagnostic dialogs",
+      "sublabel": "SQUID · Vacuum · Motors",
+      "pos": [
+        40,
+        420
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/dialogs/squid_comm.py",
+          "label": "SQUID comm dialog"
+        }
+      ]
+    },
+    {
+      "id": "apps",
+      "type": "frontend",
+      "label": "16 standalone apps",
+      "sublabel": "Gaussmeter · VRM · XY",
+      "pos": [
+        40,
+        565
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapidpy_common/ui.py",
+          "label": "Shared UI and window guard"
+        }
+      ],
+      "tag": "one-file EXE"
+    },
+    {
+      "id": "queue",
+      "type": "backend",
+      "label": "Queue compiler",
+      "sublabel": "VB6 queue order",
+      "pos": [
+        314,
+        130
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/queue_compiler.py",
+          "label": "compile_queue"
+        }
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "Measurement worker",
+      "sublabel": "QThread run loop",
+      "pos": [
+        314,
+        275
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/measurement_worker.py",
+          "label": "MeasurementWorker"
+        }
+      ],
+      "tag": "timeouts + halt"
+    },
+    {
+      "id": "workflow",
+      "type": "backend",
+      "label": "Phase state machine",
+      "sublabel": "Phases · status codes",
+      "pos": [
+        314,
+        420
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/workflow.py",
+          "label": "WorkflowStateMachine"
+        },
+        {
+          "path": "RapidPy/rapid_main/rapid_main/status_codes.py",
+          "label": "Operator status codes"
+        }
+      ]
+    },
+    {
+      "id": "replay",
+      "type": "cloud",
+      "label": "Block replay",
+      "sublabel": "Recorded 2G blocks",
+      "pos": [
+        314,
+        565
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/replay.py",
+          "label": "ReplaySquidBackend"
+        }
+      ],
+      "tag": "no hardware"
+    },
+    {
+      "id": "acquisition",
+      "type": "backend",
+      "label": "Bracketed acquisition",
+      "sublabel": "zero · 4 turns · zero",
+      "pos": [
+        588,
+        130
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/acquisition.py",
+          "label": "BracketedAcquisitionService"
+        }
+      ],
+      "tag": "Measure_ReadSample"
+    },
+    {
+      "id": "guard",
+      "type": "security",
+      "label": "Flux-count guard",
+      "sublabel": "Validate, then reduce",
+      "pos": [
+        588,
+        275
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/magnetometer.py",
+          "label": "validate_zero_pair + reduce"
+        },
+        {
+          "path": "VB6/modMeasure.bas",
+          "label": "VB6 parity source"
+        }
+      ],
+      "tag": "never relaxed"
+    },
+    {
+      "id": "holder",
+      "type": "security",
+      "label": "Holder correction",
+      "sublabel": "Measured · atomic",
+      "pos": [
+        588,
+        420
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/holder_state.py",
+          "label": "HolderStateStore"
+        },
+        {
+          "path": "RapidPy/rapid_main/rapid_main/holder_measurement.py",
+          "label": "HolderMeasurementService"
+        }
+      ],
+      "tag": "gates samples"
+    },
+    {
+      "id": "bundle",
+      "type": "database",
+      "label": "Bundle transaction",
+      "sublabel": "Stage · fsync · rename",
+      "pos": [
+        588,
+        565
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/io/measurement_bundle.py",
+          "label": "MeasurementBundleWriter"
+        }
+      ],
+      "tag": "abort discards"
+    },
+    {
+      "id": "outputs",
+      "type": "database",
+      "label": "Published outputs",
+      "sublabel": "CIT · rmg · MagIC",
+      "pos": [
+        588,
+        710
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/io/specimen_writer.py",
+          "label": "CIT specimen writer"
+        },
+        {
+          "path": "RapidPy/rapid_main/rapid_main/io/magic_writer.py",
+          "label": "MagIC measurements writer"
+        }
+      ]
+    },
+    {
+      "id": "contracts",
+      "type": "backend",
+      "label": "Hardware contracts",
+      "sublabel": "QueueHardwareBackend",
+      "pos": [
+        862,
+        130
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/hardware_contracts.py",
+          "label": "QueueHardwareBackend"
+        }
+      ],
+      "tag": "typed protocols"
+    },
+    {
+      "id": "factories",
+      "type": "security",
+      "label": "Backend factories",
+      "sublabel": "diagnostic_services",
+      "pos": [
+        862,
+        275
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/diagnostic_services.py",
+          "label": "build_* + UnavailableBackend"
+        }
+      ],
+      "tag": "fail closed"
+    },
+    {
+      "id": "nocomm",
+      "type": "cloud",
+      "label": "No-comm simulators",
+      "sublabel": "Explicit mode only",
+      "pos": [
+        862,
+        420
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/hardware_contracts.py",
+          "label": "NoCommBackend"
+        }
+      ],
+      "tag": "simulated = True"
+    },
+    {
+      "id": "holderfile",
+      "type": "database",
+      "label": "holder_correction",
+      "sublabel": "Identity · age · vectors",
+      "pos": [
+        862,
+        565
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/holder_state.py",
+          "label": "atomic install"
+        }
+      ]
+    },
+    {
+      "id": "squid",
+      "type": "external",
+      "label": "2G 581 SQUID",
+      "sublabel": "Three-axis magnetometer",
+      "pos": [
+        1136,
+        130
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapid_main/rapid_main/squid_transport.py",
+          "label": "RawSquidTransport"
+        },
+        {
+          "path": "RapidPy/updown_control/updown_control/app.py",
+          "label": "RawSquidClient"
+        }
+      ],
+      "tag": "RawSquidTransport"
+    },
+    {
+      "id": "stage",
+      "type": "external",
+      "label": "Sample changer",
+      "sublabel": "Lift · turning · tray",
+      "pos": [
+        1136,
+        275
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapidpy_common/hardware.py",
+          "label": "MotorSerialClient"
+        }
+      ],
+      "tag": "MotorSerialClient"
+    },
+    {
+      "id": "afsys",
+      "type": "external",
+      "label": "AF demagnetiser",
+      "sublabel": "Coils · IRM / ARM",
+      "pos": [
+        1136,
+        420
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/rapidpy_common/adwin_af.py",
+          "label": "ADwin AF ramp backend"
+        }
+      ],
+      "tag": "ADwin AF / DAC"
+    },
+    {
+      "id": "vac",
+      "type": "external",
+      "label": "Vacuum system",
+      "sublabel": "Valve · pump · gauge",
+      "pos": [
+        1136,
+        565
+      ],
+      "size": [
+        186,
+        66
+      ],
+      "sources": [
+        {
+          "path": "RapidPy/updown_control/updown_control/app.py",
+          "label": "VacuumController"
+        }
+      ],
+      "tag": "VacuumController"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "RapidPy · Python 3.12 · PySide6",
+      "wraps": [
+        "panels",
+        "shell",
+        "dialogs",
+        "apps",
+        "queue",
+        "worker",
+        "workflow",
+        "replay",
+        "acquisition",
+        "guard",
+        "holder",
+        "bundle",
+        "outputs",
+        "contracts",
+        "factories",
+        "nocomm",
+        "holderfile"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "P0 integrity gates",
+      "wraps": [
+        "acquisition",
+        "guard",
+        "holder"
+      ],
+      "pad": 18
+    },
+    {
+      "kind": "region",
+      "label": "Instruments + adapters",
+      "wraps": [
+        "squid",
+        "stage",
+        "afsys",
+        "vac"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "shell-panels",
+      "from": "shell",
+      "to": "panels"
+    },
+    {
+      "id": "shell-dialogs",
+      "from": "shell",
+      "to": "dialogs"
+    },
+    {
+      "id": "dialogs-apps",
+      "from": "dialogs",
+      "to": "apps",
+      "label": "launches",
+      "variant": "dashed",
+      "labelDy": 24
+    },
+    {
+      "id": "panels-queue",
+      "from": "panels",
+      "to": "queue",
+      "label": "compile"
+    },
+    {
+      "id": "queue-worker",
+      "from": "queue",
+      "to": "worker",
+      "label": "commands",
+      "labelDy": 24
+    },
+    {
+      "id": "worker-acquisition",
+      "from": "worker",
+      "to": "acquisition",
+      "label": "read_squid()",
+      "variant": "emphasis"
+    },
+    {
+      "id": "worker-workflow",
+      "from": "worker",
+      "to": "workflow",
+      "label": "phase",
+      "variant": "dashed",
+      "labelDy": 24
+    },
+    {
+      "id": "replay-worker",
+      "from": "replay",
+      "to": "worker",
+      "label": "recorded",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "left",
+      "via": [
+        [
+          266,
+          598
+        ],
+        [
+          266,
+          308
+        ]
+      ]
+    },
+    {
+      "id": "contracts-acquisition",
+      "from": "contracts",
+      "to": "acquisition",
+      "label": "composes",
+      "variant": "security",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "acquisition-guard",
+      "from": "acquisition",
+      "to": "guard",
+      "label": "block",
+      "variant": "emphasis",
+      "labelDy": 24
+    },
+    {
+      "id": "guard-holder",
+      "from": "guard",
+      "to": "holder",
+      "label": "subtract",
+      "labelDy": 24
+    },
+    {
+      "id": "holder-bundle",
+      "from": "holder",
+      "to": "bundle",
+      "label": "accepted",
+      "variant": "emphasis",
+      "labelDy": 24
+    },
+    {
+      "id": "bundle-outputs",
+      "from": "bundle",
+      "to": "outputs",
+      "label": "publish",
+      "variant": "emphasis",
+      "labelDy": 24
+    },
+    {
+      "id": "holder-holderfile",
+      "from": "holder",
+      "to": "holderfile",
+      "label": "install",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "contracts-factories",
+      "from": "contracts",
+      "to": "factories",
+      "label": "build",
+      "variant": "security",
+      "labelDy": 24
+    },
+    {
+      "id": "factories-nocomm",
+      "from": "factories",
+      "to": "nocomm",
+      "label": "no-comm",
+      "variant": "dashed",
+      "labelDy": 24
+    },
+    {
+      "id": "contracts-squid",
+      "from": "contracts",
+      "to": "squid",
+      "label": "latch",
+      "variant": "emphasis"
+    },
+    {
+      "id": "contracts-stage",
+      "from": "contracts",
+      "to": "stage",
+      "label": "motion"
+    },
+    {
+      "id": "factories-af",
+      "from": "factories",
+      "to": "afsys"
+    },
+    {
+      "id": "factories-vac",
+      "from": "factories",
+      "to": "vac",
+      "fromSide": "right",
+      "toSide": "left"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Measurement integrity",
+      "items": [
+        "One block = zero, four orientations at 0/90/180/270, zero",
+        "A one-flux-count step between the zeros is rejected outright",
+        "Recovery re-zeros and repeats the whole block, never a value"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Fail closed on hardware",
+      "items": [
+        "Missing driver, port, adapter, or calibration blocks preflight",
+        "Simulators exist only in explicit no-comm mode and are labelled",
+        "Unconfigured lift positions block a run rather than being invented"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Evidence you can audit",
+      "items": [
+        "Counter and DVM kept apart, tied to one latch identity",
+        "Output staged, fsynced, then published with an atomic rename",
+        "Provenance names the holder record, calibration, and commit"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "VB6 parity",
+      "items": [
+        "Baseline weights i/5 and the four CorrectedSample rotations",
+        "Fischer CSD, induced vector, and the three signal ratios",
+        "Deterministic fixtures pin the numbers against modMeasure.bas"
+      ]
+    }
+  ]
+}
