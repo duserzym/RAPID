@@ -245,11 +245,20 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **376 passed** (`python -m unittest discover -s
-  tests -t .` from `RapidPy/rapid_main`).
-- New coverage added in this pass: bracketed acquisition sequence and faults
-  (22), live transport and backend facade (21), holder state and holder command
-  (19), queue-level fail-closed and holder behavior (12), transactional output
-  and simulation isolation (15), VB6 parity fixtures (18), holder UI (4).
+- Full RapidMain test suite: **390 passed** (`python -m unittest discover -s
+  tests -t .` from `RapidPy/rapid_main`); the pre-existing baseline was 261.
+- New coverage added in this pass (121 tests): bracketed acquisition sequence
+  and faults (22), live transport and backend facade (21), holder state and
+  holder command (19), queue-level fail-closed and holder behavior (13),
+  transactional output and simulation isolation (15), VB6 parity fixtures (18),
+  replay fixtures (13), and holder UI (4, inside `test_measurement_panel`).
+- `python -m compileall` is clean across `rapid_main`, its tests,
+  `updown_control`, and `rapidpy_common`. The repository configures no linter
+  or type checker (no ruff/flake8/mypy config and no lint CI job), so none was
+  introduced here.
+- VB6 static check: `modMeasure.bas`, `MeasurementBlock.cls`, and
+  `modMotor.bas` have balanced `If`/`With`/`For`/`Select`/`Do`/procedure blocks
+  with continuations joined and single-line `If` forms excluded. No VB6 source
+  was changed in this pass.
 - VB6 source: static review and launch preflight only. No compile or runtime
   verification is possible on this computer until gates 2–4 are closed.

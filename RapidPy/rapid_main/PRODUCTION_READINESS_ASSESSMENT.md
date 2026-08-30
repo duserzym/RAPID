@@ -21,11 +21,12 @@ tests; none of it has been validated against the physical RAPID system.
 | Simulation isolation and labelling | Yes | n/a | `rapid_main/io/measurement_bundle.py`, `tests/test_output_integrity.py` |
 | Transactional output, duplicate-free resume | Yes | **No** | `tests/test_output_integrity.py`, `tests/test_vb6_parity.py` |
 | Specimen metadata resolution | Yes | **No** | `rapid_main/specimen_metadata.py`, `tests/test_output_integrity.py` |
+| Replay of recorded blocks (acceptance step D1) | Yes | n/a | `rapid_main/replay.py`, `tests/fixtures/`, `tests/test_replay_fixtures.py` |
 | Motion and interlock behavior | Verified in software only | **No** | Every motion is verified and a failure aborts the block |
 | Output parity against VB6 | Fixtures only | **No** | Side-by-side blocked by the VB6 build gates |
 
-Full suite: **376 tests passing** (`python -m unittest discover -s tests -t .`
-from `RapidPy/rapid_main`).
+Full suite: **390 tests passing** (`python -m unittest discover -s tests -t .`
+from `RapidPy/rapid_main`), up from a 261-test baseline.
 
 ### Behavior changes an operator will notice
 
