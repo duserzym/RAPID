@@ -28,8 +28,9 @@ _bootstrap_common_imports()
 
 from .config import AppConfig, _auto_find_ini, load_config, read_calibration_from_ini, save_config
 from .models import MeasurementSample
+from .session_manifest import load_handoff_context, write_vrm_output_manifest
 from .squid_serial import SquidCommunicationError, SquidSerialClient
-from rapidpy_common.ui import apply_liquid_glass_theme, set_app_icon
+from rapidpy_common.ui import apply_liquid_glass_theme, apply_window_bounds_guard, clamp_window_geometry, set_app_icon
 
 
 class AbsoluteTimeAxis(pg.AxisItem):
@@ -481,6 +482,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if self._config.window_geometry:
             self.restoreGeometry(QtCore.QByteArray.fromHex(self._config.window_geometry.encode("ascii")))
+        if self.isMaximized() or self.isFullScreen():
+            self.showNormal()
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            max_w, max_h = clamp_window_geometry(avail, (self.width(), self.height()))
+            if self.width() > max_w or self.height() > max_h:
+                self.resize(max_w, max_h)
 
     def _refresh_ports(self) -> None:
         current = self.port_combo.currentText()
@@ -671,6 +680,25 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._session_start_epoch = time.time()
         self._abs_axis.set_session_start(self._session_start_epoch)
+        try:
+            manifest_path = write_vrm_output_manifest(
+                output_path,
+                session_start_epoch=self._session_start_epoch,
+                interval_s=self.interval_spin.value(),
+                spacing_mode=self.spacing_combo.currentText(),
+                display_unit=self.unit_combo.currentText(),
+                baseline_volts=self._baseline_raw,
+                calibration={
+                    "x": float(self.cal_x.value()),
+                    "y": float(self.cal_y.value()),
+                    "z": float(self.cal_z.value()),
+                    "range_factor": float(self.range_fact_spin.value()),
+                },
+                handoff_context=load_handoff_context(),
+            )
+            self._append_console(f"VRM session manifest: {manifest_path}")
+        except OSError as exc:
+            self._append_console(f"VRM session manifest could not be written: {exc}")
 
         self._time.clear()
         self._x_vals.clear()
@@ -884,6 +912,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
+    apply_window_bounds_guard(app)
     apply_liquid_glass_theme(app)
     set_app_icon(app, "vrm_icon.png", _assets_dir())
     pg.setConfigOptions(antialias=True)

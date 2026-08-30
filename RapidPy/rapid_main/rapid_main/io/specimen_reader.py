@@ -17,11 +17,13 @@ Specimen file layout (from VB6 Sample.cls ReadSpec / ReadUpMeasurements):
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
+from rapid_main.geometry import Angular3D, angular3d_to_viewer_cartesian3d
 
 
 # ---------------------------------------------------------------------------
@@ -52,26 +54,35 @@ def _parse_header_line(line: str) -> dict:
 # Step-line parser (lines 3+ of specimen file)
 # ---------------------------------------------------------------------------
 
+_SPLIT_LABEL_PREFIXES = ("TT", "AF", "TH", "TEMP", "IRM", "ARM", "ZF", "IF", "PTRM", "IZ", "ZI")
+_STEP_VALUE_PATTERN = re.compile(r"^[+-]?\d+(?:\.\d+)?(?:_[+-]?\d+(?:\.\d+)?)?$")
+
+def _normalize_demag_tokens(parts: list[str]) -> tuple[str, int]:
+    """Normalize split CIT labels such as `TT 100` to `TT100`."""
+    if len(parts) >= 2 and parts[0].upper() in _SPLIT_LABEL_PREFIXES and _STEP_VALUE_PATTERN.fullmatch(parts[1]):
+        return f"{parts[0]}{parts[1]}", 1
+    return parts[0], 0
+
 def _parse_step_line(line: str) -> Optional[MeasurementStep]:
     """Parse one space-delimited step record.  Returns None on failure."""
     parts = line.split()
     if len(parts) < 12:
         return None
     try:
-        demag    = parts[0]
-        gdec     = float(parts[1])
-        ginc     = float(parts[2])
-        sdec     = float(parts[3])
-        sinc     = float(parts[4])
-        moment   = float(parts[5])
-        errangle = float(parts[6])
-        crdec    = float(parts[7])
-        crinc    = float(parts[8])
-        sdx      = float(parts[9])
-        sdy      = float(parts[10])
-        sdz      = float(parts[11])
-        operator = parts[12] if len(parts) > 12 else ""
-        ts_str   = " ".join(parts[13:15]) if len(parts) > 14 else ""
+        demag, offset = _normalize_demag_tokens(parts)
+        base = 1 + offset
+        gdec     = float(parts[base + 0])
+        ginc     = float(parts[base + 1])
+        sdec     = float(parts[base + 2])
+        sinc     = float(parts[base + 3])
+        moment   = float(parts[base + 4])
+        errangle = float(parts[base + 5])
+        crdec    = float(parts[base + 6])
+        crinc    = float(parts[base + 7])
+        cart = angular3d_to_viewer_cartesian3d(Angular3D(dec=sdec, inc=sinc, mag=moment))
+        sdx, sdy, sdz = cart.x, cart.y, cart.z
+        operator = parts[base + 11] if len(parts) > base + 11 else ""
+        ts_str   = " ".join(parts[base + 12:base + 14]) if len(parts) > base + 13 else ""
         try:
             ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
         except ValueError:

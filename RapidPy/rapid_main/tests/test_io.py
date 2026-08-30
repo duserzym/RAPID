@@ -76,6 +76,13 @@ class TestSamReader(unittest.TestCase):
             names = read_sam(sam)
             self.assertEqual(names, ["SPEC01", "SPEC02", "SPEC03"])
 
+    def test_read_sam_skips_cit_header(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            sam = Path(td) / "cutface.sam"
+            sam.write_text("2020_thermal_demag_1\n 47.7 -90.4   0.0\nCF-1a\nCF-2a\n")
+            names = read_sam(sam)
+            self.assertEqual(names, ["CF-1a", "CF-2a"])
+
     def test_read_sam_empty(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             sam = Path(td) / "empty.sam"
@@ -141,6 +148,23 @@ class TestSpecimenIO(unittest.TestCase):
             _, steps = read_specimen(sp)
             self.assertEqual(len(steps), 1)
             self.assertEqual(steps[0].demag_label, "TT400")
+
+    def test_reads_split_cit_thermal_label(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            sp = Path(td) / "CF-1a"
+            sp.write_text(
+                "comment\n"
+                "    1.1 227.5   2.0   0.0   0.0   1.0\n"
+                "TT 100 304.0  43.3 304.0  43.3 1.25E-03 003.0 166.9  41.3 3.441384 5.222291 2.175471 hargrave 2020-09-01 16:24:53\n",
+                encoding="latin-1",
+            )
+            _, steps = read_specimen(sp, "CF-1a")
+
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0].demag_label, "TT100")
+        self.assertAlmostEqual(steps[0].gdec, 304.0, places=1)
+        self.assertAlmostEqual(steps[0].moment, 1.25e-3, places=8)
+        self.assertLess(steps[0].sdz, 0.0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

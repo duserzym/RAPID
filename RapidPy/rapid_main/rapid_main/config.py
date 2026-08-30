@@ -59,6 +59,9 @@ class IrmArmConfig:
     irm_steps:      int   = 10
     arm_peak_af:    float = 100.0    # mT
     arm_bias:       float = 0.05     # mT
+    irm_voltage_slope: float = 0.01  # V / mT
+    irm_voltage_intercept: float = 0.0  # V
+    irm_max_voltage: float = 10.0  # V
 
 
 @dataclass
