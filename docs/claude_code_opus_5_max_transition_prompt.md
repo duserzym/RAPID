@@ -24,6 +24,29 @@ Read these files first:
 
 Preserve all current user changes and existing commits. Inspect `git status`, `git diff`, and recent history before editing. Never use destructive Git commands. Split your work into focused commits and list every commit in your handoff.
 
+## Verified VB6 environment state on this computer
+
+The VB6 launch section in `docs/rapidpy_transition_readiness_2026-08-29.md` is stale. Update that document as part of this handoff; do not repeat its claim that the IDE and Microsoft controls are absent.
+
+The following was verified directly on this computer without rebooting:
+
+- English VB6 RTM `6.00.8176` is installed at `C:\Program Files (x86)\Microsoft Visual Studio\VB98\VB6.EXE`.
+- The IDE opens normally to the English New Project dialog and can load a small test project without a startup error.
+- DAO 3.5, `VB6.OLB`, `VB6EXT.OLB`, `MSDERUN.DLL`, `MSO97RT.DLL`, `MRT7ENU.DLL`, and the required Microsoft OCX files were restored or registered.
+- Mixed Simplified Chinese VB6 templates, T-SQL components, wizards, Common Tools binaries, Designer satellites, and five system components were replaced with hash-matching English-media versions. The active VB6/Common/Designer trees had zero files reporting Chinese language metadata after repair.
+- Displaced files are preserved at `C:\VB6-English-Repair-Backup-20260829-2`. Do not delete that backup.
+- The Visual Studio setup front end that requested a reboot was terminated, and the machine was not rebooted.
+- The Paleomag project must currently be launched as administrator to avoid `Error accessing the system registry` during design-time component loading.
+
+Do not claim that the VB6 project is build-ready yet. These blockers remain:
+
+1. `VB6.EXE /make` reports `No make available in the Working Model Edition`. The English Enterprise edition/license registration is incomplete or inconsistent. Do not bypass licensing, invent a product key, or modify license-related registry data. Record this as an environment blocker requiring legitimate licensed media/registration.
+2. `VB6/Paleomag v3.vbp` requires `MSCOMCTL.OCX` type library `2.2`, while the installed English `C:\Windows\SysWOW64\MSCOMCTL.OCX` is file version `6.01.9782` and registers type library `2.0`. Registration succeeds but the real project reports that `MSCOMCTL.OCX` could not be loaded. A disposable copy of the project loaded completely when only that reference was changed from `2.2` to `2.0`; the repository project was deliberately left unchanged. Do not downgrade the committed reference or alias the type library without explicit user approval and cross-machine compatibility evidence.
+3. The base English Visual Studio/VB6 Service Pack 6 is not installed. Microsoft's signed `VB60SP6-KB2708437-x86-ENU.msi` refused with exit `1603` because SP6 was absent. Obtain the legitimate English base SP6 package first, then apply the current signed Microsoft common-controls/security rollup with restart disabled. Do not extract and overwrite OCXs to evade installer prerequisites.
+4. `vbSendMail_v3.0.dll` is still missing. It is referenced by the project and documented in `VB6/README.txt`, but it is not in this repository or its Git history. Obtain it from the authorized legacy RAPID archive or original licensed/source package, verify it, and register its 32-bit COM server. Do not use generic DLL-download sites.
+
+Before changing VB6 source, re-run `VB6/Test-LaunchReadiness.ps1`, inspect the real project references, and distinguish IDE startup, project loading, and compilation as three separate gates. Do not install system software, edit registry permissions, actuate hardware, or reboot from Claude Code unless the user explicitly authorizes that action in the active session.
+
 ## Known safety defect and code already present
 
 The archived defect is a discrete 2G flux-count step between the two zero readings that bracket four holder orientations. Observed one-count increments are approximately X `0.090`, Y `0.106`, and Z `0.066` in calibrated raw units. Linear interpolation across the step creates a monotonic ramp; rotating the four contaminated readings into the holder frame creates a false pattern separated by roughly 90 degrees.
@@ -116,7 +139,7 @@ For work that requires the physical RAPID system, provide an executable acceptan
 
 ## Required verification
 
-Run the smallest relevant tests while iterating, then the full RapidPy suite. Add type/lint checks already supported by the repository. Perform static checks on VB6 changes; if VB6 is installed, compile the project and run no-communication-mode smoke tests. Do not connect or actuate hardware unless the operator explicitly authorizes it and confirms the physical area is safe.
+Run the smallest relevant tests while iterating, then the full RapidPy suite. Add type/lint checks already supported by the repository. Perform static checks on VB6 changes. Attempt a VB6 compile and no-communication-mode smoke test only after the licensed-edition, SP6, `MSCOMCTL` `2.2`, and `vbSendMail_v3.0.dll` gates above are satisfied; until then, report those gates precisely instead of treating IDE startup as compile verification. Do not connect or actuate hardware unless the operator explicitly authorizes it and confirms the physical area is safe.
 
 Before finishing:
 
@@ -125,6 +148,14 @@ Before finishing:
 3. update the readiness assessment with code-complete versus hardware-validated status;
 4. produce focused commits, with tests paired with their implementation;
 5. report exactly what is complete, what remains, tests and counts, commits, hardware evidence obtained, and the first safe test to run when the system is connected.
+
+Also report the VB6 gates separately in the final handoff:
+
+- English IDE startup: verified or regressed;
+- real `Paleomag v3.vbp` load: verified or blocked, with the exact reference/dialog;
+- compiler edition and `/make`: verified or blocked;
+- no-communication runtime smoke test: verified or blocked;
+- physical RAPID-system test: not attempted unless explicitly authorized, otherwise include the exact safe procedure.
 
 Acceptance for the replacement claim requires all P0 items to be code-complete and pass replay/fault tests, plus signed physical-system evidence for measurement sequence, rejection/recovery, motion/interlocks, safe halt, holder integrity, output parity, and restart behavior. Until then, label RapidPy as transition/testing software, not a full VB6 replacement.
 
