@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -8,6 +9,7 @@ from PySide6 import QtCore, QtWidgets
 
 from rapid_main.analysis import ReadingCycleStatistics, reading_cycle_statistics
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
+from rapid_main.specimen_metadata import resolve_specimen_meta
 from rapid_main.device_ownership import DeviceOwnershipError
 from rapid_main.dialogs.plots import build_quicklook_summary, write_quicklook_json
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
@@ -420,15 +422,25 @@ class MeasurementPanel(QtWidgets.QWidget):
             backend = NoCommBackend()
         op = cfg.general.operator if cfg else ""
         out = Path(cfg.general.data_dir) if cfg and cfg.general.data_dir else Path.home() / "RAPID_data"
-        meta = SpecimenMeta(
-            name=self._current_sample,
-            comment="",
-            sample="",
-            site="",
-            location="",
+        # VB6 reads comment, orientation, volume, and the sample hierarchy from
+        # the specimen header and the .sam registry, and writes them into every
+        # output. Resolve the same values instead of starting with blanks.
+        resolution = resolve_specimen_meta(
+            self._current_sample,
+            sample_dir=(cfg.general.sample_dir if cfg else None),
+            data_dir=(cfg.general.data_dir if cfg else None),
+            registrations=getattr(mw, "sample_registrations", None),
         )
+        meta = resolution.meta
+        if resolution.defaulted_fields:
+            self._on_preflight_warning(
+                "Specimen metadata defaulted for: "
+                + ", ".join(resolution.defaulted_fields)
+                + ". Check the specimen header or sample index before archiving."
+            )
         run_output_dir = out / meta.name
         self._current_output_dir = run_output_dir
+        run_id = f"{meta.name}-{datetime.now().strftime('%Y%m%dT%H%M%S')}"
 
         self._worker = MeasurementWorker(
             meta=meta,
@@ -440,6 +452,7 @@ class MeasurementPanel(QtWidgets.QWidget):
                 1,
                 int(getattr(getattr(cfg, "squid", None), "samples_per_pos", 1)),
             ),
+            run_id=run_id,
             parent=self,
         )
         self._worker.step_started.connect(self._on_step_started)

@@ -49,15 +49,22 @@ from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
 from rapid_main.geometry import Cartesian3D, cartesian3d_to_angular3d
 from rapid_main.magnetometer import (
+    BlockAudit,
     BracketedMeasurementBlock,
+    BracketedMeasurementResult,
     FluxCountDiscontinuityError,
     MagnetometerReading,
+    ObservationIntegrityError,
     reduce_bracketed_measurement,
 )
 from rapid_main.status_codes import OperatorStatus, error_status, status_for_phase, warning_status
 from rapid_main.susceptibility import write_susceptibility_summary_json
 from rapid_main.workflow import WorkflowPhase, WorkflowStateMachine
-from rapid_main.io.measurement_bundle import MeasurementBundleWriter
+from rapid_main import software_version
+from rapid_main.io.measurement_bundle import (
+    SIMULATION_STATEMENT,
+    MeasurementBundleWriter,
+)
 
 
 class StepResult:
@@ -122,6 +129,9 @@ class MeasurementWorker(QtCore.QThread):
         backend: MeasurementBackend | None = None,
         operator: str = "",
         samples_per_position: int = 1,
+        run_id: str = "",
+        resume: bool = False,
+        allow_simulated_production_output: bool = False,
         parent: Optional[QtCore.QObject] = None,
     ) -> None:
         super().__init__(parent)
@@ -131,6 +141,19 @@ class MeasurementWorker(QtCore.QThread):
         self._backend = backend or NoCommBackend()
         self._operator = operator
         self._samples_per_position = max(1, int(samples_per_position))
+        self._run_id = str(run_id)
+        self._resume = bool(resume)
+        self._allow_simulated_production_output = bool(allow_simulated_production_output)
+        # A backend that declares itself simulated taints every artifact it
+        # produces: the run is labelled and kept out of the production path.
+        self._simulated = bool(getattr(self._backend, "simulated", False))
+        self._last_block_audit: BlockAudit | None = None
+        self._holder_record_id = ""
+        self._holder_recorded_iso = ""
+        self._skipped_labels: list[str] = []
+        self._recovery_count = 0
+        self._published_paths: dict[str, str] = {}
+        self._publish_dir = self._output_dir
 
         # Control flags (thread-safe via threading.Event)
         self._pause_event = threading.Event()
@@ -200,14 +223,30 @@ class MeasurementWorker(QtCore.QThread):
             self._finish_run(aborted=True)
             return
 
+        if self._simulated:
+            self._emit_warning(
+                "SIMULATED RUN: this backend produces synthetic values. Output is "
+                "written to the SIMULATED directory and is not hardware evidence."
+            )
+
+        self._apply_measurement_context()
         self._emit_phase(WorkflowPhase.LOADING)
 
         # Prepare bundle writer (VB6 specimen + RMG + MagIC measurement/specimen)
         try:
             self._emit_phase(WorkflowPhase.SAVING)
-            bundle = MeasurementBundleWriter(self._output_dir, self._meta)
+            bundle = MeasurementBundleWriter(
+                self._output_dir,
+                self._meta,
+                simulated=self._simulated,
+                allow_simulated_production_output=self._allow_simulated_production_output,
+                resume=self._resume,
+                provenance=self._base_provenance(),
+            )
             self._comm_logger = CommunicationLogger("measurement-worker", port=self._meta.name)
-            self._comm_logger.info("bundle initialized")
+            self._comm_logger.info(
+                "bundle initialized (simulated)" if self._simulated else "bundle initialized"
+            )
         except OSError as exc:
             self._emit_error(f"Failed to initialize output bundle: {exc}", phase=WorkflowPhase.SAVING)
             self._emit_phase(WorkflowPhase.ERROR)
@@ -299,7 +338,12 @@ class MeasurementWorker(QtCore.QThread):
                 self._emit_phase(WorkflowPhase.VALIDATING)
                 self._validate_step(step)
                 self._emit_phase(WorkflowPhase.SAVING)
-                bundle.append_step(step, susceptibility=susc)
+                if not bundle.append_step(step, susceptibility=susc):
+                    self._skipped_labels.append(label)
+                    self._emit_warning(
+                        f"Step {label} is already present from an interrupted run; "
+                        "it was not written twice."
+                    )
                 susceptibility_records.append(
                     {
                         "step_index": idx,
@@ -321,6 +365,30 @@ class MeasurementWorker(QtCore.QThread):
                 cycle_stats=cycle_stats,
             )
             self.step_complete.emit(result)
+
+        # Publish only a complete, accepted run. An abort discards the staged
+        # copy so the production output path is never partially updated.
+        if aborted:
+            bundle.abort()
+        else:
+            try:
+                self._emit_phase(WorkflowPhase.SAVING)
+                bundle.set_provenance(**self._run_provenance())
+                published = bundle.commit()
+                self._published_paths = {
+                    "specimen_file": str(published.specimen_file),
+                    "rmg_file": str(published.rmg_file),
+                    "magic_measurements": str(published.magic_measurements_file),
+                    "magic_specimens": str(published.magic_specimens_file),
+                }
+                self._publish_dir = bundle.publish_dir
+            except Exception as exc:
+                bundle.abort()
+                self._emit_error(
+                    f"Failed to publish measurement bundle: {exc}", phase=WorkflowPhase.SAVING
+                )
+                self._emit_phase(WorkflowPhase.ERROR)
+                aborted = True
 
         # Return to safe state on both normal completion and interrupted execution
         self._emit_phase(WorkflowPhase.RETURNING)
@@ -484,6 +552,7 @@ class MeasurementWorker(QtCore.QThread):
         quality_flags: tuple[str, ...] = ()
         if isinstance(reading, BracketedMeasurementBlock):
             result = reduce_bracketed_measurement(reading)
+            self._record_block_evidence(reading, result)
             sdx, sdy, sdz = result.moment_emu
         elif isinstance(reading, MagnetometerReading):
             sdx, sdy, sdz = reading.moment_emu
@@ -526,6 +595,11 @@ class MeasurementWorker(QtCore.QThread):
             )
             try:
                 return self._coerce_squid_reading(squid_reading, label)
+            except ObservationIntegrityError as exc:
+                # Incoherent transport evidence is never recoverable by
+                # re-zeroing: the block and the reply stream disagree.
+                self._comm_warning(f"incoherent SQUID observation at {label}: {exc}")
+                raise
             except FluxCountDiscontinuityError as exc:
                 self._comm_warning(f"rejected SQUID block at {label}: {exc}")
                 recover = getattr(self._backend, "recover_flux_count_discontinuity", None)
@@ -540,7 +614,80 @@ class MeasurementWorker(QtCore.QThread):
                     timeout=self._get_backend_timeout("read_timeout"),
                     phase="recover_flux_count_discontinuity",
                 )
+                self._recovery_count += 1
         raise RuntimeError("unreachable SQUID retry state")
+
+    def _apply_measurement_context(self) -> None:
+        """Give the backend the identity that belongs in each block audit."""
+        setter = getattr(self._backend, "set_measurement_context", None)
+        if setter is None or not callable(setter):
+            return
+        try:
+            setter(
+                sample_name=self._meta.name,
+                run_id=self._run_id,
+                operator=self._operator,
+            )
+        except Exception as exc:
+            self._comm_warning(f"set_measurement_context failed: {exc}")
+
+    def _record_block_evidence(
+        self,
+        block: BracketedMeasurementBlock,
+        result: BracketedMeasurementResult,
+    ) -> None:
+        """Keep the audit identifiers of the last accepted block."""
+        del result
+        audit = block.audit
+        if audit is None:
+            return
+        self._last_block_audit = audit
+        if audit.holder_record_id:
+            self._holder_record_id = audit.holder_record_id
+            self._holder_recorded_iso = audit.holder_recorded_iso
+        if audit.simulated and not self._simulated:
+            # A backend that starts reporting simulated blocks mid-run must not
+            # keep writing into the production path.
+            self._simulated = True
+            self._emit_warning(
+                "SIMULATED BLOCK received from the measurement backend; the run is "
+                "no longer valid hardware evidence."
+            )
+
+    def _base_provenance(self) -> dict[str, object]:
+        return {
+            "run_id": self._run_id,
+            "operator": self._operator,
+            "labels_requested": list(self._labels),
+            "samples_per_position": self._samples_per_position,
+            "resumed": self._resume,
+            "simulated": self._simulated,
+            "software_version": software_version(),
+        }
+
+    def _run_provenance(self) -> dict[str, object]:
+        audit = self._last_block_audit
+        payload: dict[str, object] = {
+            "holder_record_id": self._holder_record_id,
+            "holder_recorded_iso": self._holder_recorded_iso,
+            "flux_recoveries": self._recovery_count,
+            "skipped_duplicate_labels": list(self._skipped_labels),
+            "simulated": self._simulated,
+        }
+        if audit is not None:
+            payload.update(
+                {
+                    "last_block_id": audit.block_id,
+                    "config_hash": audit.config_hash,
+                    "range_label": audit.range_label,
+                    "range_factor": audit.range_factor,
+                    "axis_calibration_applied": list(audit.axis_calibration_applied),
+                    "zero_position": audit.zero_position,
+                    "measurement_position": audit.measurement_position,
+                    "software_version": audit.software_version or software_version(),
+                }
+            )
+        return payload
 
     def _comm_info(self, detail: str) -> None:
         if self._comm_logger is not None:
@@ -565,6 +712,14 @@ class MeasurementWorker(QtCore.QThread):
             "operator": self._operator,
             "labels": list(self._labels),
             "aborted": bool(aborted),
+            "simulated": self._simulated,
+            "simulation_statement": (
+                SIMULATION_STATEMENT.strip() if self._simulated else ""
+            ),
+            "run_id": self._run_id,
+            "flux_recoveries": self._recovery_count,
+            "skipped_duplicate_labels": list(self._skipped_labels),
+            "holder_record_id": self._holder_record_id,
             "phase_count": len(self._phase_history),
             "final_phase": self._phase_history[-1]["phase"] if self._phase_history else "",
             "phases": list(self._phase_history),
@@ -626,6 +781,11 @@ class MeasurementWorker(QtCore.QThread):
             "sample": self._meta.name,
             "operator": self._operator,
             "aborted": bool(aborted),
+            "simulated": self._simulated,
+            "simulation_statement": (
+                SIMULATION_STATEMENT.strip() if self._simulated else ""
+            ),
+            "published_paths": dict(self._published_paths),
             "generated_at_iso": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
             "artifacts": [
                 entry(

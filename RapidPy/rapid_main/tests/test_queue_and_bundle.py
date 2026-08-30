@@ -274,6 +274,10 @@ class TestMeasurementBundleWriter(unittest.TestCase):
             writer.append_step(_step("NRM"), susceptibility=0.01)
             writer.append_step(_step("AF20"), susceptibility=0.005)
 
+            # Nothing is published until the transaction commits.
+            self.assertFalse(writer.paths.specimen_file.exists())
+            writer.commit()
+
             specimen = writer.paths.specimen_file
             rmg = writer.paths.rmg_file
             meas = writer.paths.magic_measurements_file
