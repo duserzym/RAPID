@@ -110,6 +110,58 @@ class ChangerConfig:
 
 
 @dataclass
+class MotionPositionsConfig:
+    """Lift positions used by the bracketed SQUID measurement block.
+
+    These map directly onto the legacy ``[SteppingMotor]`` INI keys. VB6
+    measures at ``ZeroPos + SampleHeight / 2`` and ``MeasPos + SampleHeight / 2``
+    where ``SampleHeight = SampleTop - SampleBottom``.
+
+    They default to ``0`` (unconfigured) on purpose: RapidPy must not invent
+    lift positions for a physical instrument. Until an operator imports the
+    legacy INI or enters real values, hardware-mode preflight blocks.
+    """
+
+    zero_pos:      int = 0    # motor steps
+    meas_pos:      int = 0    # motor steps
+    sample_top:    int = 0    # motor steps
+    sample_bottom: int = 0    # motor steps
+
+    @property
+    def sample_height(self) -> int:
+        """VB6 ``SampleHeight = SampleTop - SampleBottom``."""
+        return int(self.sample_top) - int(self.sample_bottom)
+
+    def zero_position(self) -> int:
+        """VB6 ``Int(ZeroPos + SampleHeight / 2)``."""
+        return int(self.zero_pos + self.sample_height / 2)
+
+    def measurement_position(self) -> int:
+        """VB6 ``Int(MeasPos + SampleHeight / 2)``."""
+        return int(self.meas_pos + self.sample_height / 2)
+
+    @property
+    def configured(self) -> bool:
+        """True only when both lift positions are set and distinct."""
+        return (
+            int(self.zero_pos) != 0
+            and int(self.meas_pos) != 0
+            and self.zero_position() != self.measurement_position()
+        )
+
+    def unconfigured_reason(self) -> str:
+        if int(self.zero_pos) == 0 or int(self.meas_pos) == 0:
+            return (
+                "Zero/measurement lift positions are not configured. Import the "
+                "legacy INI ([SteppingMotor] ZeroPos/MeasPos/SampleTop/SampleBottom) "
+                "or enter the measured positions before running on hardware."
+            )
+        if self.zero_position() == self.measurement_position():
+            return "Zero and measurement lift positions are identical."
+        return ""
+
+
+@dataclass
 class CalibrationConfig:
     cal_rod_moment: float = 1.234e-5   # A·m²
     cal_date_iso:   str   = ""         # ISO date string, e.g. "2026-05-12"
@@ -178,6 +230,7 @@ class AppConfig:
     data_files: DataFilesConfig    = field(default_factory=DataFilesConfig)
     changer:    ChangerConfig      = field(default_factory=ChangerConfig)
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
+    motion:     MotionPositionsConfig = field(default_factory=MotionPositionsConfig)
     sequence:   SequenceTimesConfig = field(default_factory=SequenceTimesConfig)
 
     # ── Persistence ───────────────────────────────────────────────────────────
@@ -233,5 +286,6 @@ class AppConfig:
             data_files= _merge(DataFilesConfig,     d.get("data_files",  {})),
             changer=    _merge(ChangerConfig,       d.get("changer",     {})),
             calibration=_merge(CalibrationConfig,   d.get("calibration", {})),
+            motion=     _merge(MotionPositionsConfig, d.get("motion",    {})),
             sequence=   _merge(SequenceTimesConfig, d.get("sequence",    {})),
         )

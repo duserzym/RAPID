@@ -320,7 +320,7 @@ class TestHardwareContracts(unittest.TestCase):
         backend = build_measurement_backend(cfg)
         self.assertIsInstance(backend, NoCommBackend)
 
-    def test_queue_backend_preflight_treats_warnings_as_non_blocking(self) -> None:
+    def test_queue_backend_preflight_blocks_without_configured_lift_positions(self) -> None:
         cfg = AppConfig()
         cfg.general.nocomm = False
         cfg.changer.port = "COM3"
@@ -336,11 +336,45 @@ class TestHardwareContracts(unittest.TestCase):
                 return True
 
         backend._measurement = _StubMeasurement()
+        result = backend.preflight()
+
+        self.assertFalse(result.ok)
+        self.assertTrue(
+            any("lift positions are not configured" in blocker for blocker in result.blockers),
+            result.blockers,
+        )
+
+    def test_queue_backend_preflight_treats_warnings_as_non_blocking(self) -> None:
+        cfg = AppConfig()
+        cfg.general.nocomm = False
+        cfg.changer.port = "COM3"
+        cfg.motion.zero_pos = -25886
+        cfg.motion.meas_pos = -30607
+
+        backend = QueueHardwareBackend(cfg)
+        backend._connected = True
+
+        class _StubMeasurement:
+            def is_connected(self) -> bool:
+                return True
+
+            def test_connection(self) -> bool:
+                return True
+
+        backend._measurement = _StubMeasurement()
+        # Simulate a station where every component constructed successfully.
+        backend._backend_errors.clear()
         backend._collect_preflight_warnings = lambda: ["measurement service degraded"]  # type: ignore[method-assign]
         result = backend.preflight()
         self.assertTrue(result.ok, f"warnings should not block preflight: {result.warnings}")
-        self.assertEqual(result.warnings, ("measurement service degraded",))
+        self.assertIn("measurement service degraded", result.warnings)
         self.assertEqual(result.blockers, ())
+        # A stub SQUID cannot supply a raw 2G client, so bracketed acquisition
+        # is reported as unavailable rather than silently skipped.
+        self.assertTrue(
+            any("Bracketed SQUID acquisition unavailable" in warning for warning in result.warnings),
+            result.warnings,
+        )
 
     def test_parse_demag_label_recognizes_af_irm_arm_patterns(self) -> None:
         self.assertEqual(_parse_demag_label("AF50"), ("AF", 50.0, None))

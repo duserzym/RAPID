@@ -177,8 +177,85 @@ def _field_mT_to_volts(
     return command.voltage_v
 
 
+#: Marker stamped on every simulated payload, log line, UI label, and file so a
+#: simulated run can never be mistaken for hardware evidence.
+SIMULATION_MARKER = "SIMULATED"
+SIMULATION_STATEMENT = (
+    "SIMULATED RUN - synthetic values from a no-communication backend. "
+    "Not hardware evidence and not valid for production measurement."
+)
+
+
 class DiagnosticContractError(RuntimeError):
     """Raised when a diagnostic backend fails a command."""
+
+
+class HardwareUnavailableError(DiagnosticContractError):
+    """Raised when a hardware-mode backend cannot be constructed.
+
+    Hardware mode must fail closed: a missing package, driver, port,
+    calibration, adapter, or connection blocks preflight instead of quietly
+    substituting a simulator.
+    """
+
+
+class UnavailableBackend:
+    """Placeholder for a hardware backend that could not be constructed.
+
+    This is deliberately **not** a simulator. It never produces a reading, it
+    reports the real construction error, and every action raises. It exists so
+    a diagnostics window can still open and show why the device is missing.
+    """
+
+    simulated = False
+
+    def __init__(self, name: str, reason: str) -> None:
+        self._name = str(name)
+        self._reason = str(reason)
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def reason(self) -> str:
+        return self._reason
+
+    def is_connected(self) -> bool:
+        return False
+
+    def is_available(self) -> bool:
+        return False
+
+    def status(self) -> str:
+        return f"{self._name} unavailable: {self._reason}"
+
+    def available_axes(self) -> tuple[str, ...]:
+        return ()
+
+    def __getattr__(self, item: str):
+        if item.startswith("_"):
+            raise AttributeError(item)
+
+        def _refuse(*args: object, **kwargs: object):
+            del args, kwargs
+            raise HardwareUnavailableError(f"{self._name} unavailable: {self._reason}")
+
+        return _refuse
+
+
+def build_backend_or_unavailable(name: str, factory, /, *args, **kwargs):
+    """Build a hardware backend, or return an explicit unavailable placeholder.
+
+    Used by long-lived UI surfaces that must open even when a device is
+    missing. Queue and measurement paths call the factories directly so the
+    failure blocks preflight.
+    """
+
+    try:
+        return factory(*args, **kwargs)
+    except HardwareUnavailableError as exc:
+        return UnavailableBackend(name, str(exc))
 
 
 @dataclass(frozen=True)
@@ -885,6 +962,15 @@ class SquidBackendAdapter(_BaseBackend, SquidBackend):
     def is_connected(self) -> bool:
         return self._reader is not None
 
+    @property
+    def raw_client(self):
+        """Underlying atomic 2G client, or ``None`` before connection.
+
+        ``QueueHardwareBackend`` uses this to compose bracketed acquisition
+        with the changer motion axes.
+        """
+        return getattr(self._reader, "raw_client", None)
+
     def test_connection(self) -> bool:
         if SquidMomentReader is None:
             raise DiagnosticContractError(
@@ -1363,44 +1449,96 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
         return float(self._state.pressure_mtorr)
 
 
-def build_vacuum_backend(cfg: VacuumConfig, *, nocomm: bool = False) -> VacuumBackend:
-    """Build a vacuum backend for the configured mode."""
+def build_vacuum_backend(
+    cfg: VacuumConfig,
+    *,
+    nocomm: bool = False,
+    allow_simulation_fallback: bool = False,
+) -> VacuumBackend:
+    """Build a vacuum backend for the configured mode.
+
+    Hardware mode fails closed: adapter construction failures raise
+    :class:`HardwareUnavailableError` instead of returning a simulator.
+    """
     if nocomm:
         return VacuumNoCommBackend(cfg)
     try:
         return VacuumBackendAdapter(cfg)
-    except Exception:
-        return VacuumNoCommBackend(cfg)
+    except Exception as exc:
+        if allow_simulation_fallback:
+            return VacuumNoCommBackend(cfg)
+        raise HardwareUnavailableError(
+            f"Vacuum backend is unavailable in hardware mode: {exc}"
+        ) from exc
 
 
-def build_irm_arm_backend(cfg: IrmArmConfig, *, nocomm: bool = False) -> IrmArmBackend:
-    """Build an IRM/ARM backend for the configured mode."""
+def build_irm_arm_backend(
+    cfg: IrmArmConfig,
+    *,
+    nocomm: bool = False,
+    allow_simulation_fallback: bool = False,
+) -> IrmArmBackend:
+    """Build an IRM/ARM backend for the configured mode.
+
+    Hardware mode fails closed: adapter construction failures raise
+    :class:`HardwareUnavailableError` instead of returning a simulator.
+    """
     if nocomm:
         return IrmArmNoCommBackend(cfg)
     try:
         return IrmArmBackendAdapter(cfg)
-    except Exception:
-        return IrmArmNoCommBackend(cfg)
+    except Exception as exc:
+        if allow_simulation_fallback:
+            return IrmArmNoCommBackend(cfg)
+        raise HardwareUnavailableError(
+            f"IRM/ARM backend is unavailable in hardware mode: {exc}"
+        ) from exc
 
 
-def build_af_demag_backend(cfg: AfDemagConfig, *, nocomm: bool = False) -> AfDemagBackend:
-    """Build an AF demagnetizer backend for the configured mode."""
+def build_af_demag_backend(
+    cfg: AfDemagConfig,
+    *,
+    nocomm: bool = False,
+    allow_simulation_fallback: bool = False,
+) -> AfDemagBackend:
+    """Build an AF demagnetizer backend for the configured mode.
+
+    Hardware mode fails closed: adapter construction failures raise
+    :class:`HardwareUnavailableError` instead of returning a simulator.
+    """
     if nocomm:
         return AfDemagNoCommBackend(cfg)
     try:
         return AfDemagBackendAdapter(cfg)
-    except Exception:
-        return AfDemagNoCommBackend(cfg)
+    except Exception as exc:
+        if allow_simulation_fallback:
+            return AfDemagNoCommBackend(cfg)
+        raise HardwareUnavailableError(
+            f"AF demagnetizer backend is unavailable in hardware mode: {exc}"
+        ) from exc
 
 
-def build_squid_backend(cfg: SquidConfig, *, nocomm: bool = False) -> SquidBackend:
-    """Build a SQUID backend for the configured mode."""
+def build_squid_backend(
+    cfg: SquidConfig,
+    *,
+    nocomm: bool = False,
+    allow_simulation_fallback: bool = False,
+) -> SquidBackend:
+    """Build a SQUID backend for the configured mode.
+
+    Hardware mode fails closed: adapter construction failures raise
+    :class:`HardwareUnavailableError` instead of returning a simulator.
+    """
     if nocomm:
         return SquidNoCommBackend(cfg)
     try:
         return SquidBackendAdapter(cfg)
-    except Exception:
-        return SquidNoCommBackend(cfg)
+    except Exception as exc:
+        if allow_simulation_fallback:
+            return SquidNoCommBackend(cfg)
+        raise HardwareUnavailableError(
+            f"SQUID backend is unavailable in hardware mode: {exc}"
+        ) from exc
 
 
 def build_dcmotor_backend(
@@ -1408,14 +1546,22 @@ def build_dcmotor_backend(
     port: str = "COM3",
     baud: int = 9600,
     nocomm: bool = False,
+    allow_simulation_fallback: bool = False,
 ) -> DCMotorBackend:
-    """Build a DC motor diagnostic backend."""
+    """Build a DC motor diagnostic backend.
+
+    Hardware mode fails closed. ``allow_simulation_fallback`` is an explicit,
+    caller-visible opt-in for training or offline development; the returned
+    simulator is labelled and reports ``simulated`` as ``True``.
+    """
     if nocomm:
         return DCMotorNoCommBackend(port=port, baud=baud)
     try:
         return DCMotorBackendAdapter(port=port, baud=baud)
-    except Exception:
-        # Fall back to a deterministic simulator so the dialog remains usable
-        # in constrained lab/test environments.
-        return DCMotorNoCommBackend(port=port, baud=baud)
+    except Exception as exc:
+        if allow_simulation_fallback:
+            return DCMotorNoCommBackend(port=port, baud=baud)
+        raise HardwareUnavailableError(
+            f"DC motor backend is unavailable in hardware mode: {exc}"
+        ) from exc
 

@@ -1063,6 +1063,11 @@ class SquidMomentReader:
     def is_connected(self) -> bool:
         return self._client.is_connected
 
+    @property
+    def raw_client(self) -> RawSquidClient:
+        """Expose the atomic 2G client for bracketed acquisition."""
+        return self._client
+
     def connect(self, port: str, baudrate: int = 1200) -> None:
         self._client.connect(port, baudrate=baudrate)
 

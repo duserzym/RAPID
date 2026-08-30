@@ -298,10 +298,11 @@ class TestWindowBootstrapContracts(unittest.TestCase):
         toggle_defs = [
             stmt
             for stmt in ast.walk(tree)
-            if isinstance(stmt, ast.FunctionDef) and stmt.name == "_on_nocomm_toggled"
+            if isinstance(stmt, ast.FunctionDef)
+            and stmt.name in ("_on_nocomm_toggled", "_rebuild_diagnostic_backends")
         ]
         self.assertEqual(len(status_defs), 1)
-        self.assertEqual(len(toggle_defs), 1)
+        self.assertEqual(len(toggle_defs), 2)
 
         status_constants = [
             node.value
@@ -309,9 +310,10 @@ class TestWindowBootstrapContracts(unittest.TestCase):
             if isinstance(node, ast.Constant)
         ]
         toggle_call_names = [
-            call.func.id
-            for call in ast.walk(toggle_defs[0])
-            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+            node.id
+            for definition in toggle_defs
+            for node in ast.walk(definition)
+            if isinstance(node, ast.Name)
         ]
 
         self.assertIn("AF Demag", status_constants)

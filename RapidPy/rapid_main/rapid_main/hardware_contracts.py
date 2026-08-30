@@ -6,11 +6,22 @@ serves as the core abstraction boundary for later real-backend adapters.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import dataclasses
+import hashlib
+import json
 import math
+from pathlib import Path
 import re
-from typing import Protocol
+from typing import Protocol, TYPE_CHECKING
 
+from rapid_main import software_version
 from rapid_main.config import AppConfig
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from rapid_main.holder_measurement import HolderMeasurementOutcome
+    from rapid_main.holder_state import HolderStateStore
+    from rapid_main.squid_transport import BracketedSquidBackend
+
 from rapidpy_common.hardware import (
     HardwareError as MotorHardwareError,
     MotorAxisConfig,
@@ -165,7 +176,14 @@ HardwareBackend = MeasurementBackend
 
 
 class NoCommBackend:
-    """No-comm simulator backend used until full hardware integration is live."""
+    """No-comm simulator backend used until full hardware integration is live.
+
+    Every value it returns is synthetic. ``simulated`` is part of the public
+    contract so the worker, UI, and output writers can label the run and keep
+    it out of production output paths.
+    """
+
+    simulated = True
 
     def __init__(self) -> None:
         self._step_count = 0
@@ -253,7 +271,12 @@ def _parse_thermal_label(label: str) -> tuple[str, float | None]:
 
 
 class QueueHardwareBackend(MeasurementAutomationBackend):
-    """Adapter that combines motor automation with measurement placeholders."""
+    """Adapter that combines motor automation with SQUID measurement.
+
+    Hardware mode fails closed. A component that cannot be constructed is
+    recorded as a preflight blocker instead of being replaced by a simulator,
+    and every measurement path raises rather than inventing a value.
+    """
 
     preflight_timeout: float | None = 12.0
     step_timeout: float | None = 45.0
@@ -261,34 +284,143 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
     susceptibility_timeout: float | None = 2.0
     return_timeout: float | None = 20.0
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        *,
+        holder_store: "HolderStateStore | None" = None,
+        clock=None,
+    ) -> None:
         self._config = config
+        # Injected only by tests; production uses the real wall/monotonic clock
+        # so the VB6 ARC and settling delays are actually observed.
+        self._acquisition_clock = clock
         self._motor_config = _build_motor_controller_config(config)
         self._client = MotorSerialClient(self._motor_config)
-        try:
-            from .diagnostic_services import build_af_demag_backend, build_irm_arm_backend, build_squid_backend
-            self._measurement = build_squid_backend(self._config.squid, nocomm=bool(self._config.general.nocomm))
-            self._irm_arm = build_irm_arm_backend(self._config.irm_arm, nocomm=bool(self._config.general.nocomm))
-            self._af_demag = build_af_demag_backend(self._config.af_demag, nocomm=bool(self._config.general.nocomm))
-        except Exception:
-            self._measurement = NoCommBackend()
-            from .diagnostic_services import AfDemagNoCommBackend, IrmArmNoCommBackend
-
-            self._irm_arm = IrmArmNoCommBackend()
-            self._af_demag = AfDemagNoCommBackend()
         self._axes = {
             "changer_x": MotorAxisConfig("ChangerX", 1, 1),
             "turning": MotorAxisConfig("Turning", 2, 2),
             "updown": MotorAxisConfig("UpDown", 3, 3),
             "changer_y": MotorAxisConfig("ChangerY", 4, 4),
         }
+        self._backend_errors: list[str] = []
+        nocomm = bool(config.general.nocomm)
+
+        from .diagnostic_services import (
+            build_af_demag_backend,
+            build_irm_arm_backend,
+            build_squid_backend,
+        )
+
+        self._measurement = self._build_component("SQUID", build_squid_backend, config.squid, nocomm=nocomm)
+        self._irm_arm = self._build_component("IRM/ARM", build_irm_arm_backend, config.irm_arm, nocomm=nocomm)
+        self._af_demag = self._build_component(
+            "AF demagnetizer", build_af_demag_backend, config.af_demag, nocomm=nocomm
+        )
+
         self._connected = False
         self._last_hole = 1
         self._last_flip = False
         self._sample_loaded = False
 
-    def read_squid(self) -> tuple[float, float, float]:
-        return self._measurement.read_squid()
+        self._holder_store = holder_store if holder_store is not None else _default_holder_store(config)
+        self._bracketed: "BracketedSquidBackend | None" = None
+        self._acquisition_error = ""
+        self._measuring_holder = False
+        self._direction_up = True
+        self._sample_name = ""
+        self._treatment_label = ""
+        self._run_id = ""
+        self._operator = str(config.general.operator or "")
+        self._last_holder_outcome: "HolderMeasurementOutcome | None" = None
+
+    # -- construction helpers ---------------------------------------------
+
+    def _build_component(self, name: str, factory, cfg, *, nocomm: bool):
+        try:
+            return factory(cfg, nocomm=nocomm)
+        except Exception as exc:
+            self._backend_errors.append(f"{name} backend unavailable: {exc}")
+            return None
+
+    def __getattr__(self, name: str):
+        """Expose the recovery hook only when a real recovery path exists.
+
+        ``MeasurementWorker`` retries a rejected block only when the backend
+        implements ``recover_flux_count_discontinuity``. Delegating through
+        ``__getattr__`` keeps that contract honest: with no bracketed backend
+        the attribute simply does not exist and the run fails instead of
+        pretending it recovered.
+        """
+        if name in ("recover_flux_count_discontinuity", "flux_discontinuity_retries"):
+            bracketed = self.__dict__.get("_bracketed")
+            if bracketed is not None:
+                attribute = getattr(bracketed, name, None)
+                if attribute is not None:
+                    return attribute
+        raise AttributeError(name)
+
+    # -- state exposed to the worker and UI --------------------------------
+
+    @property
+    def simulated(self) -> bool:
+        return bool(getattr(self._measurement, "simulated", False))
+
+    @property
+    def holder_store(self) -> "HolderStateStore":
+        return self._holder_store
+
+    @property
+    def last_holder_outcome(self) -> "HolderMeasurementOutcome | None":
+        return self._last_holder_outcome
+
+    @property
+    def acquisition_error(self) -> str:
+        return self._acquisition_error
+
+    def holder_status(self):
+        """Holder validity summary for the operator UI."""
+        return self._holder_store.status(is_up=self._direction_up)
+
+    def set_measurement_context(
+        self,
+        *,
+        sample_name: str = "",
+        treatment_label: str = "",
+        run_id: str = "",
+        operator: str = "",
+        is_up: bool | None = None,
+    ) -> None:
+        """Record identity carried into each block audit record."""
+        if sample_name:
+            self._sample_name = str(sample_name)
+        if treatment_label:
+            self._treatment_label = str(treatment_label)
+        if run_id:
+            self._run_id = str(run_id)
+        if operator:
+            self._operator = str(operator)
+        if is_up is not None:
+            self._direction_up = bool(is_up)
+
+    # -- measurement -------------------------------------------------------
+
+    def read_squid(self):
+        """Return one coherent bracketed block, or fail.
+
+        A sample block requires a valid holder correction; a holder block
+        subtracts nothing, matching VB6 ``blankHolder``.
+        """
+        self._ensure_bracketed()
+        if self._bracketed is None:
+            measurement = self._require_measurement()
+            return measurement.read_squid()
+        if not self._measuring_holder:
+            self._holder_store.require_valid(is_up=self._direction_up)
+        return self._bracketed.read_squid()
+
+    def read_susceptibility(self) -> float:
+        return self._require_measurement().read_susceptibility()
 
     def set_demag_step(self, label: str) -> None:
         """Apply a demagnetization step label to the measurement backend.
@@ -297,6 +429,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         labels are routed through the adapter-backed IRM/ARM backend.
         Other labels still use the measurement backend contract.
         """
+        self._treatment_label = str(label)
         step_type, field_mT, bias_mT = _parse_demag_label(label)
         if step_type.startswith("AF"):
             from .diagnostic_services import plan_af_demag_command
@@ -305,7 +438,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             if callable(method):
                 method(plan_af_demag_command(label, self._config.af_demag))
                 return
-            raise RuntimeError("AF demagnetizer adapter not available for AF treatment.")
+            raise HardwareError("AF demagnetizer adapter not available for AF treatment.")
 
         if step_type == "IRM":
             if field_mT is None:
@@ -319,7 +452,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                     steps=int(max(1, int(self._config.irm_arm.irm_steps))),
                 )
                 return
-            raise RuntimeError("IRM/ARM adapter not available for IRM treatment.")
+            raise HardwareError("IRM/ARM adapter not available for IRM treatment.")
 
         if step_type == "ARM":
             if field_mT is None:
@@ -332,7 +465,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                     steps=int(max(1, int(self._config.irm_arm.irm_steps))),
                 )
                 return
-            raise RuntimeError("IRM/ARM adapter not available for ARM treatment.")
+            raise HardwareError("IRM/ARM adapter not available for ARM treatment.")
 
         thermal_type, temperature_c = _parse_thermal_label(label)
         if temperature_c is not None:
@@ -349,24 +482,36 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             return
         method(label)
 
-    def read_susceptibility(self) -> float:
-        return self._measurement.read_susceptibility()
+    # -- preflight ---------------------------------------------------------
 
     def preflight(self) -> PreflightResult:
-        blockers: list[str] = []
+        blockers: list[str] = list(self._backend_errors)
         warnings: list[str] = []
         if self._config.general.nocomm:
             return PreflightResult.pass_ok()
 
         warnings.extend(self._collect_preflight_warnings())
-        if not self._measurement.is_connected():
+
+        positions = getattr(self._config, "motion", None)
+        if positions is not None and not positions.configured:
+            blockers.append(positions.unconfigured_reason())
+
+        if self._measurement is None:
+            blockers.append("SQUID measurement backend is not available in hardware mode.")
+        elif not _to_bool_connected(self._measurement.is_connected):
             try:
                 self._measurement.test_connection()
             except Exception as exc:
                 blockers.append(f"SQUID connection failed: {exc}")
 
+        if blockers:
+            return PreflightResult.blocked(*blockers, warnings=tuple(warnings))
+
         if self._connected and _to_bool_connected(self._measurement.is_connected):
-            return PreflightResult(ok=not blockers, blockers=tuple(blockers), warnings=tuple(warnings))
+            self._ensure_bracketed()
+            return PreflightResult(
+                ok=not blockers, blockers=tuple(blockers), warnings=tuple(warnings + self._acquisition_warnings())
+            )
 
         port = (self._config.changer.port or "").strip()
         if not port:
@@ -380,23 +525,128 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         try:
             self._client.connect(port, baudrate=baud)
             self._connected = True
-            return PreflightResult(ok=not blockers, blockers=tuple(blockers), warnings=tuple(warnings))
         except Exception as exc:
             return PreflightResult.blocked(
                 f"Cannot open changer serial port '{port}': {exc}",
                 warnings=tuple(warnings),
             )
 
+        self._ensure_bracketed()
+        return PreflightResult(
+            ok=True, blockers=(), warnings=tuple(warnings + self._acquisition_warnings())
+        )
+
+    def _acquisition_warnings(self) -> list[str]:
+        if self._bracketed is None and self._acquisition_error:
+            return [f"Bracketed SQUID acquisition unavailable: {self._acquisition_error}"]
+        return []
+
     def _collect_preflight_warnings(self) -> list[str]:
         return []
 
     def is_available(self) -> bool:
-        return self._connected and _to_bool_connected(self._measurement.is_connected)
+        return (
+            self._connected
+            and self._measurement is not None
+            and _to_bool_connected(self._measurement.is_connected)
+        )
+
+    def _require_measurement(self):
+        if self._measurement is None:
+            raise HardwareError(
+                "; ".join(self._backend_errors)
+                or "SQUID measurement backend is not available in hardware mode."
+            )
+        return self._measurement
+
+    def _ensure_bracketed(self) -> None:
+        """Compose the bracketed acquisition once transports exist."""
+        if self._bracketed is not None or self._config.general.nocomm:
+            return
+        from .acquisition import BracketedAcquisitionService
+        from .squid_transport import (
+            BracketedSquidBackend,
+            MotorTurningController,
+            MotorVerticalController,
+            RawSquidTransport,
+            SquidTransportConfig,
+            acquisition_config_from_app_config,
+        )
+
+        positions = getattr(self._config, "motion", None)
+        if positions is None or not positions.configured:
+            self._acquisition_error = (
+                positions.unconfigured_reason() if positions is not None else "motion positions missing"
+            )
+            return
+        raw_client = getattr(self._measurement, "raw_client", None)
+        if raw_client is None:
+            self._acquisition_error = (
+                "the active SQUID backend does not expose a raw 2G client"
+            )
+            return
+        try:
+            transport = RawSquidTransport(
+                raw_client,
+                config=SquidTransportConfig(
+                    port=str(self._config.squid.port),
+                    baud=int(self._config.squid.baud or 1200),
+                    settle_delay_s=float(self._config.squid.settle_time),
+                ),
+            )
+            service = BracketedAcquisitionService(
+                transport,
+                MotorVerticalController(self._client, self._axes["updown"]),
+                MotorTurningController(self._client, self._axes["turning"]),
+                config=acquisition_config_from_app_config(
+                    self._config,
+                    zero_position=positions.zero_position(),
+                    measurement_position=positions.measurement_position(),
+                ),
+                clock=self._acquisition_clock,
+            )
+        except Exception as exc:
+            self._acquisition_error = str(exc)
+            return
+        self._bracketed = BracketedSquidBackend(
+            service,
+            holder_provider=self._holder_positions,
+            direction_provider=lambda: self._direction_up,
+            context_provider=self._block_context,
+            simulated=self.simulated,
+        )
+        self._acquisition_error = ""
+
+    def _holder_positions(self):
+        if self._measuring_holder:
+            return None
+        return self._holder_store.positions_for(self._direction_up)
+
+    def _block_context(self):
+        from .acquisition import BlockContext
+
+        current = self._holder_store.current
+        return BlockContext(
+            sample_name=self._sample_name,
+            treatment_label=self._treatment_label,
+            run_id=self._run_id,
+            operator=self._operator,
+            software_version=software_version(),
+            config_hash=config_fingerprint(self._config),
+            holder_record_id=current.record_version if current is not None else "",
+            holder_recorded_iso=current.measured_at_iso if current is not None else "",
+            is_holder_block=self._measuring_holder,
+            simulated=self.simulated,
+        )
+
+    # -- queue automation --------------------------------------------------
 
     def holder(self, hole: int) -> None:
-        """Move to the nearest holder position.
+        """Move to the holder position and measure a replacement correction.
 
-        This maps VB6 queue-holder movement into the motor changer motion domain.
+        VB6 ``SampleCommand`` "Holder" is a measurement, not just motion. The
+        previous correction stays active unless the new block passes every
+        check.
         """
         self._ensure_connected()
         hole = int(hole)
@@ -405,15 +655,43 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             self._client.sample_dropoff(self._axes["updown"])
             self._sample_loaded = False
 
-        if hole <= 0:
-            return
+        if hole > 0:
+            self._client.changer_motor_to_hole(self._axes["changer_x"], float(hole), wait_for_stop=True)
+            self._last_hole = hole
+            pickup = self._client.sample_pickup(self._axes["updown"])
+            if not pickup.success:
+                raise QueueAutomationError(f"sample pickup failed at hole {hole}")
+            self._sample_loaded = True
 
-        self._client.changer_motor_to_hole(self._axes["changer_x"], float(hole), wait_for_stop=True)
-        self._last_hole = hole
-        pickup = self._client.sample_pickup(self._axes["updown"])
-        if not pickup.success:
-            raise QueueAutomationError(f"sample pickup failed at hole {hole}")
-        self._sample_loaded = True
+        self._measure_holder(hole)
+
+    def _measure_holder(self, hole: int) -> None:
+        from .holder_measurement import HolderMeasurementService
+
+        self._ensure_bracketed()
+        if self._bracketed is None:
+            raise QueueAutomationError(
+                "Holder measurement is unavailable: "
+                + (self._acquisition_error or "no bracketed SQUID acquisition is configured")
+            )
+        previous_sample = self._sample_name
+        self._sample_name = "Holder"
+        self._measuring_holder = True
+        try:
+            service = HolderMeasurementService(
+                self._bracketed.read_squid,
+                self._holder_store,
+                recover=self._bracketed.recover_flux_count_discontinuity,
+                averaging_cycles=max(1, int(self._config.squid.samples_per_pos or 1)),
+                flux_discontinuity_retries=int(self._bracketed.flux_discontinuity_retries),
+            )
+            outcome = service.measure(holder_id=_holder_identity(hole), hole=hole)
+        finally:
+            self._measuring_holder = False
+            self._sample_name = previous_sample
+        self._last_holder_outcome = outcome
+        if not outcome.installed:
+            raise QueueAutomationError(outcome.rejection_reason)
 
     def goto_hole(self, hole: int) -> None:
         if hole <= 0:
@@ -431,10 +709,12 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         # A 180° rotation emulates switching to the reverse face.
         self._client.turning_motor_rotate(self._axes["turning"], 180.0, wait_for_stop=True)
         self._last_flip = not self._last_flip
+        self._direction_up = not self._direction_up
 
     def init_up(self, file_id: str) -> None:
         del file_id
         self._ensure_connected()
+        self._direction_up = True
         if self._sample_loaded:
             try:
                 self._client.sample_dropoff(self._axes["updown"])
@@ -469,11 +749,35 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             raise QueueAutomationError("; ".join(preflight.blockers))
 
 
+def _holder_identity(hole: int) -> str:
+    return f"holder-{int(hole):03d}" if int(hole) > 0 else "holder"
+
+
+def _default_holder_store(config: AppConfig) -> "HolderStateStore":
+    from .holder_state import HolderStateStore
+
+    data_dir = (config.general.data_dir or "").strip()
+    path = Path(data_dir) / "holder_correction.json" if data_dir else None
+    return HolderStateStore(path, allow_simulated=bool(config.general.nocomm))
+
+
+def config_fingerprint(config: AppConfig) -> str:
+    """Stable short hash of the active configuration for audit records."""
+
+    try:
+        payload = json.dumps(dataclasses.asdict(config), sort_keys=True, default=str)
+    except Exception:
+        payload = repr(config)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 def build_measurement_backend(config: AppConfig) -> MeasurementAutomationBackend:
-    """Construct the active measurement backend from configuration."""
-    # Phase 2 keeps this as a hard interface boundary. Hardware backends can be
-    # added here without changing the UI or worker contracts.
+    """Construct the active measurement backend from configuration.
+
+    ``NO_COMM`` mode returns the labelled simulator. Hardware mode returns the
+    queue backend, which records construction failures as preflight blockers
+    instead of substituting a simulator.
+    """
     if config.general.nocomm:
         return NoCommBackend()
-    # Queue/changer movement + simulated SQUID/SUSC backend by default.
     return QueueHardwareBackend(config)

@@ -129,6 +129,29 @@ def import_vb6_ini(config: AppConfig, path: str | Path) -> LegacyIniImportReport
         mapped_fields.append(f"{section}.{key} -> {destination}")
         mapped_keys.add((section, key))
 
+    # SteppingMotor section: lift positions used by the measurement block.
+    motor_section = "SteppingMotor"
+    for key, field_name in (
+        ("ZeroPos", "zero_pos"),
+        ("MeasPos", "meas_pos"),
+        ("SampleTop", "sample_top"),
+        ("SampleBottom", "sample_bottom"),
+    ):
+        raw = _value(parser, motor_section, key)
+        if raw is not None:
+            setattr(
+                config.motion,
+                field_name,
+                _parse_int(
+                    raw,
+                    default=getattr(config.motion, field_name),
+                    section_key=motor_section,
+                    field=key,
+                    warnings=warnings,
+                ),
+            )
+            mark_mapped(motor_section, key, f"motion.{field_name}")
+
     # Program section (legacy general settings)
     program_section = "Program"
     raw = _value(parser, program_section, "NoCommMode")

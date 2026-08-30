@@ -217,3 +217,137 @@ def counts_with_step(
     counts, dvm = pairs[axis]
     pairs[axis] = (counts + float(steps), dvm)
     return (pairs[0], pairs[1], pairs[2])
+
+
+class FakeRawSquidClient:
+    """Stand-in for the extended ``updown_control.app.RawSquidClient``."""
+
+    def __init__(self, observations, *, connected: bool = True) -> None:
+        self.is_connected = connected
+        self._observations = list(observations)
+        self.calls: list[tuple[str, object]] = []
+        self._index = -1
+
+    def clear_and_reset(self, axis: str = "A") -> tuple[str, ...]:
+        self.calls.append(("clear_and_reset", axis))
+        return (f"{axis}CLP", f"{axis}RC")
+
+    def set_range(self, axis: str = "A", range_label: str = "1") -> tuple[str, ...]:
+        self.calls.append(("set_range", (axis, range_label)))
+        return (f"{axis}CR{range_label}",)
+
+    def latch(self, axis: str = "A", *, settle_s: float = 0.0) -> tuple[str, ...]:
+        self.calls.append(("latch", (axis, settle_s)))
+        self._index += 1
+        return (f"{axis}LC", f"{axis}LD")
+
+    def read_axis(self, axis: str, *, range_value: float = 1.0) -> "FakeAxisSample":
+        self.calls.append(("read_axis", (axis, range_value)))
+        index = min(max(self._index, 0), len(self._observations) - 1)
+        counts, dvm = self._observations[index]["XYZ".index(axis)]
+        return FakeAxisSample(
+            axis=axis,
+            counts=float(counts),
+            dvm=float(dvm),
+            range_value=float(range_value),
+            count_command=f"{axis}SC",
+            count_reply=f"{counts:g}",
+            data_command=f"{axis}SD",
+            data_reply=f"{dvm:g}",
+        )
+
+
+class FakeAxisSample:
+    """Minimal duck-type of ``updown_control.app.SquidAxisSample``."""
+
+    def __init__(
+        self,
+        *,
+        axis: str,
+        counts: float,
+        dvm: float,
+        range_value: float,
+        count_command: str,
+        count_reply: str,
+        data_command: str,
+        data_reply: str,
+    ) -> None:
+        self.axis = axis
+        self.counts = counts
+        self.dvm = dvm
+        self.range_value = range_value
+        self.count_command = count_command
+        self.count_reply = count_reply
+        self.data_command = data_command
+        self.data_reply = data_reply
+
+    @property
+    def raw_value(self) -> float:
+        return -self.dvm - self.counts * self.range_value
+
+
+class FakeMotorSerialClient:
+    """QuickSilver client stand-in for queue-backend composition tests."""
+
+    def __init__(self, config=None) -> None:
+        from rapidpy_common.hardware import MotorControllerConfig, MoveResult
+
+        self.config = config or MotorControllerConfig()
+        self._MoveResult = MoveResult
+        self.is_connected = False
+        self.positions: dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0}
+        self.calls: list[tuple[str, object]] = []
+        self.turn_failure_angle: float | None = None
+        self.lift_failure_target: int | None = None
+
+    def connect(self, port: str, baudrate: int = 57600, timeout: float = 0.35) -> None:
+        self.calls.append(("connect", (port, baudrate)))
+        self.is_connected = True
+
+    def read_position(self, axis) -> int:
+        return int(self.positions[axis.motor_id])
+
+    def updown_move(self, axis, target: int, speed_index: int, wait_for_stop: bool = True):
+        self.calls.append(("updown_move", (int(target), int(speed_index))))
+        if self.lift_failure_target is not None and int(target) == int(self.lift_failure_target):
+            return self._MoveResult(target=int(target), final_position=int(target) + 9999, success=False)
+        self.positions[axis.motor_id] = int(target)
+        return self._MoveResult(target=int(target), final_position=int(target), success=True)
+
+    def turning_motor_rotate(self, axis, angle: float, wait_for_stop: bool = True):
+        from rapidpy_common.hardware import convert_angle_to_pos
+
+        self.calls.append(("turning_motor_rotate", float(angle)))
+        if self.turn_failure_angle is not None and float(angle) == float(self.turn_failure_angle):
+            return self._MoveResult(
+                target=int(convert_angle_to_pos(angle, self.config.turning_motor_full_rotation)),
+                final_position=int(self.positions[axis.motor_id]),
+                success=False,
+            )
+        position = int(convert_angle_to_pos(angle, self.config.turning_motor_full_rotation))
+        self.positions[axis.motor_id] = position
+        return self._MoveResult(target=position, final_position=position, success=True)
+
+    def relabel_pos(self, axis, pos: int, tolerance: int = 10, max_cycles: int = 20) -> None:
+        self.calls.append(("relabel_pos", int(pos)))
+        self.positions[axis.motor_id] = int(pos)
+
+    def changer_motor_to_hole(self, axis, hole: float, wait_for_stop: bool = True):
+        self.calls.append(("changer_motor_to_hole", float(hole)))
+        return self._MoveResult(target=int(hole), final_position=int(hole), success=True)
+
+    def sample_pickup(self, axis):
+        self.calls.append(("sample_pickup", axis.name))
+        return self._MoveResult(target=0, final_position=0, success=True)
+
+    def sample_dropoff(self, axis, use_xy_table: bool = True):
+        self.calls.append(("sample_dropoff", axis.name))
+        return self._MoveResult(target=0, final_position=0, success=True)
+
+    def home_to_top(self, axis):
+        self.calls.append(("home_to_top", axis.name))
+        return self._MoveResult(target=0, final_position=0, success=True)
+
+    def halt(self, axis) -> str:
+        self.calls.append(("halt", axis.name))
+        return "halted"

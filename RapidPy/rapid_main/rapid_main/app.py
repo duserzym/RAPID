@@ -25,6 +25,7 @@ from .hardware_contracts import (
 )
 from .diagnostic_services import (
     build_af_demag_backend,
+    build_backend_or_unavailable,
     build_dcmotor_backend,
     build_irm_arm_backend,
     build_squid_backend,
@@ -378,15 +379,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.config: AppConfig = AppConfig.load()
         self._current_sample = "UNKNOWN"
         self._measurement_backend: MeasurementAutomationBackend = build_measurement_backend(self.config)
-        self._vacuum_backend = build_vacuum_backend(self.config.vacuum, nocomm=self.config.general.nocomm)
-        self._irm_arm_backend = build_irm_arm_backend(self.config.irm_arm, nocomm=self.config.general.nocomm)
-        self._af_demag_backend = build_af_demag_backend(self.config.af_demag, nocomm=self.config.general.nocomm)
-        self._squid_backend = build_squid_backend(self.config.squid, nocomm=self.config.general.nocomm)
-        self._dc_motor_backend = build_dcmotor_backend(
-            port=(self.config.changer.port or "COM3").strip(),
-            baud=int(self.config.changer.baud or 9600),
-            nocomm=bool(self.config.general.nocomm),
-        )
+        self._rebuild_diagnostic_backends(nocomm=bool(self.config.general.nocomm))
         self._ownership = DeviceOwnershipManager()
         self._owned_dialog_leases: dict[str, object] = {}
 
@@ -1384,20 +1377,40 @@ class MainWindow(QtWidgets.QMainWindow):
             QtCore.QDateTime.currentDateTime().toString("hh:mm:ss AP")
         )
 
+    def _rebuild_diagnostic_backends(self, *, nocomm: bool) -> None:
+        """Build the diagnostic backends, failing closed in hardware mode.
+
+        A device that cannot be constructed becomes an explicit
+        ``UnavailableBackend`` that reports the real error. It is never a
+        simulator, so the diagnostics windows stay usable while queue and
+        measurement preflight still block.
+        """
+        self._vacuum_backend = build_backend_or_unavailable(
+            "Vacuum", build_vacuum_backend, self.config.vacuum, nocomm=nocomm
+        )
+        self._irm_arm_backend = build_backend_or_unavailable(
+            "IRM/ARM", build_irm_arm_backend, self.config.irm_arm, nocomm=nocomm
+        )
+        self._af_demag_backend = build_backend_or_unavailable(
+            "AF demagnetizer", build_af_demag_backend, self.config.af_demag, nocomm=nocomm
+        )
+        self._squid_backend = build_backend_or_unavailable(
+            "SQUID", build_squid_backend, self.config.squid, nocomm=nocomm
+        )
+        self._dc_motor_backend = build_backend_or_unavailable(
+            "DC motors",
+            build_dcmotor_backend,
+            port=(self.config.changer.port or "COM3").strip(),
+            baud=int(self.config.changer.baud or 9600),
+            nocomm=nocomm,
+        )
+
     # ── No-Comm toggle ────────────────────────────────────────────────────────
     def _on_nocomm_toggled(self, on: bool) -> None:
         self.config.general.nocomm = bool(on)
         self.config.save()
         self._measurement_backend = build_measurement_backend(self.config)
-        self._vacuum_backend = build_vacuum_backend(self.config.vacuum, nocomm=bool(on))
-        self._irm_arm_backend = build_irm_arm_backend(self.config.irm_arm, nocomm=bool(on))
-        self._af_demag_backend = build_af_demag_backend(self.config.af_demag, nocomm=bool(on))
-        self._squid_backend = build_squid_backend(self.config.squid, nocomm=bool(on))
-        self._dc_motor_backend = build_dcmotor_backend(
-            port=(self.config.changer.port or "COM3").strip(),
-            baud=int(self.config.changer.baud or 9600),
-            nocomm=bool(on),
-        )
+        self._rebuild_diagnostic_backends(nocomm=bool(on))
         if on:
             self._flow_lbl.setObjectName("flowNocomm")
             self._flow_lbl.setText("⊘  No-Comm")

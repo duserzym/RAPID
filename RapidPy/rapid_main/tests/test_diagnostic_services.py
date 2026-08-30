@@ -21,9 +21,12 @@ from rapid_main.diagnostic_services import (
     require_squid_ready,
     require_vacuum_ready,
     build_af_demag_backend,
+    build_backend_or_unavailable,
     build_vacuum_backend,
     build_irm_arm_backend,
     build_squid_backend,
+    HardwareUnavailableError,
+    UnavailableBackend,
 )
 
 
@@ -240,16 +243,83 @@ class TestDiagnosticServices(unittest.TestCase):
 
         self.assertEqual(backend.status(), "dummy adapter")
 
-    def test_build_irm_arm_factory_falls_back_to_no_comm_on_adapter_failure(self) -> None:
+    def test_build_irm_arm_factory_fails_closed_in_hardware_mode(self) -> None:
         class _BrokenAdapter:
             def __init__(self, cfg: IrmArmConfig) -> None:
                 del cfg
                 raise RuntimeError("adapter not available")
 
         with mock.patch("rapid_main.diagnostic_services.IrmArmBackendAdapter", _BrokenAdapter):
-            backend = build_irm_arm_backend(IrmArmConfig(), nocomm=False)
+            with self.assertRaises(HardwareUnavailableError) as ctx:
+                build_irm_arm_backend(IrmArmConfig(), nocomm=False)
+            self.assertIn("adapter not available", str(ctx.exception))
 
-        self.assertIsInstance(backend, IrmArmNoCommBackend)
+            # The simulator is still reachable, but only as an explicit opt-in.
+            fallback = build_irm_arm_backend(
+                IrmArmConfig(), nocomm=False, allow_simulation_fallback=True
+            )
+        self.assertIsInstance(fallback, IrmArmNoCommBackend)
+        self.assertTrue(fallback.simulated)
+
+    def test_missing_package_and_port_failures_block_hardware_mode(self) -> None:
+        class _MissingPackage:
+            def __init__(self, cfg) -> None:
+                del cfg
+                raise ImportError("No module named updown_control")
+
+        class _PortUnavailable:
+            def __init__(self, cfg) -> None:
+                del cfg
+                raise OSError("could not open port COM9")
+
+        with mock.patch("rapid_main.diagnostic_services.SquidBackendAdapter", _MissingPackage):
+            with self.assertRaisesRegex(HardwareUnavailableError, "updown_control"):
+                build_squid_backend(SquidConfig(), nocomm=False)
+
+        with mock.patch("rapid_main.diagnostic_services.VacuumBackendAdapter", _PortUnavailable):
+            with self.assertRaisesRegex(HardwareUnavailableError, "COM9"):
+                build_vacuum_backend(VacuumConfig(), nocomm=False)
+
+    def test_unavailable_backend_is_not_a_simulator(self) -> None:
+        class _Broken:
+            def __init__(self, cfg) -> None:
+                del cfg
+                raise RuntimeError("driver missing")
+
+        with mock.patch("rapid_main.diagnostic_services.AfDemagBackendAdapter", _Broken):
+            backend = build_backend_or_unavailable(
+                "AF demagnetizer", build_af_demag_backend, AfDemagConfig(), nocomm=False
+            )
+
+        self.assertIsInstance(backend, UnavailableBackend)
+        self.assertFalse(backend.simulated)
+        self.assertFalse(backend.is_connected())
+        self.assertIn("driver missing", backend.status())
+        with self.assertRaises(HardwareUnavailableError):
+            backend.apply_af(object())
+
+    def test_mixed_live_and_simulated_configuration_is_reported(self) -> None:
+        class _WorkingAdapter:
+            simulated = False
+
+            def __init__(self, cfg) -> None:
+                del cfg
+
+            def is_connected(self) -> bool:
+                return True
+
+            def status(self) -> str:
+                return "live"
+
+        with mock.patch("rapid_main.diagnostic_services.VacuumBackendAdapter", _WorkingAdapter):
+            live = build_vacuum_backend(VacuumConfig(), nocomm=False)
+        simulated = build_squid_backend(SquidConfig(), nocomm=True)
+
+        lines = collect_diagnostic_status({"Vacuum": live, "SQUID": simulated})
+        by_name = {line.name: line for line in lines}
+
+        self.assertFalse(by_name["Vacuum"].simulated)
+        self.assertTrue(by_name["SQUID"].simulated)
 
     def test_dc_motor_no_comm_simulator_reports_motion_and_state(self) -> None:
         backend = DCMotorNoCommBackend(port="COM1", baud=9600)
@@ -280,17 +350,23 @@ class TestDiagnosticServices(unittest.TestCase):
         self.assertTrue(pickup[2])
         self.assertTrue(dropoff[2])
 
-    def test_dc_motor_factory_returns_no_comm_for_nocomm_and_fallback(self) -> None:
+    def test_dc_motor_factory_returns_no_comm_for_nocomm_and_fails_closed(self) -> None:
         self.assertIsInstance(
             build_dcmotor_backend(port="COM1", baud=9600, nocomm=True),
             DCMotorNoCommBackend,
         )
 
-        # With a non-connectable serial port, fallback should remain deterministic and safe.
+        # A constructor failure in hardware mode must not become a simulator.
         with mock.patch("rapid_main.diagnostic_services.DCMotorBackendAdapter", side_effect=RuntimeError("boom")):
-            backend = build_dcmotor_backend(port="COM_DOES_NOT_EXIST", baud=9600, nocomm=False)
+            with self.assertRaisesRegex(HardwareUnavailableError, "boom"):
+                build_dcmotor_backend(port="COM_DOES_NOT_EXIST", baud=9600, nocomm=False)
+
+            backend = build_dcmotor_backend(
+                port="COM_DOES_NOT_EXIST", baud=9600, nocomm=False, allow_simulation_fallback=True
+            )
 
         self.assertIsInstance(backend, DCMotorNoCommBackend)
+        self.assertTrue(backend.simulated)
         self.assertFalse(backend.is_connected())
 
     def test_dc_motor_no_comm_reads_telemetry(self) -> None:

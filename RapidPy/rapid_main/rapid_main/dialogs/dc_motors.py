@@ -8,7 +8,11 @@ from collections.abc import Mapping
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from rapid_main.diagnostic_services import DCMotorBackend, build_dcmotor_backend
+from rapid_main.diagnostic_services import (
+    DCMotorBackend,
+    build_backend_or_unavailable,
+    build_dcmotor_backend,
+)
 from rapidpy_common.hardware import MotorTelemetry
 from rapidpy_common.ui import clamp_window_geometry
 
@@ -169,7 +173,11 @@ class DCMotorDialog(QtWidgets.QDialog):
         self.resize(*self._MIN_WINDOW_SIZE)
         self.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowContextHelpButtonHint)
 
-        self._backend = backend or build_dcmotor_backend(
+        # Hardware mode fails closed: a missing adapter becomes a visible
+        # "unavailable" backend, never a silent simulator.
+        self._backend = backend or build_backend_or_unavailable(
+            "DC motors",
+            build_dcmotor_backend,
             port=port,
             baud=int(baud),
             nocomm=False,
