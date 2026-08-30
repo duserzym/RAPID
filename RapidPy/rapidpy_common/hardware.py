@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+import threading
 import time
 from typing import Optional
 
@@ -50,6 +51,20 @@ class MoveResult:
     success: bool
 
 
+@dataclass(slots=True, frozen=True)
+class MotorTelemetry:
+    """One controller telemetry sample in native Quicksilver units."""
+
+    timestamp: float
+    axis_name: str
+    target_position: int
+    actual_position: int
+    position_error: int | None = None
+    velocity_1: int | None = None
+    velocity_2: int | None = None
+    actual_torque: int | None = None
+
+
 _HEX4_RE = re.compile(r"[0-9A-Fa-f]{4}")
 
 
@@ -59,8 +74,10 @@ class MotorSerialClient:
     def __init__(self, config: Optional[MotorControllerConfig] = None) -> None:
         self._serial: Optional[serial.Serial] = None
         self._port: str = ""
+        self._io_lock = threading.RLock()
         self._last_position: dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0}
         self._xy_last_pos: tuple[int, int] = (0, 0)
+        self._axis_torque_capability: dict[int, bool] = {}
         self.config = config or MotorControllerConfig()
 
     @property
@@ -68,32 +85,34 @@ class MotorSerialClient:
         return self._serial is not None and self._serial.is_open
 
     def connect(self, port: str, baudrate: int = 57600, timeout: float = 0.35) -> None:
-        self.disconnect()
-        self._serial = serial.Serial(
-            port=port,
-            baudrate=baudrate,
-            bytesize=serial.EIGHTBITS,
-            parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_TWO,
-            timeout=timeout,
-            write_timeout=timeout,
-        )
-        self._port = port
-        self._serial.dtr = True
-        self._serial.rts = True
-        self._serial.reset_input_buffer()
-        self._serial.reset_output_buffer()
-        # VB6 issues this broadcast command at connect to set ACK delay.
-        self.send_ascii("@255 173 416")
-        time.sleep(0.03)
-        self._serial.reset_input_buffer()
+        with self._io_lock:
+            self.disconnect()
+            self._serial = serial.Serial(
+                port=port,
+                baudrate=baudrate,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_TWO,
+                timeout=timeout,
+                write_timeout=timeout,
+            )
+            self._port = port
+            self._serial.dtr = True
+            self._serial.rts = True
+            self._serial.reset_input_buffer()
+            self._serial.reset_output_buffer()
+            # VB6 issues this broadcast command at connect to set ACK delay.
+            self.send_ascii("@255 173 416")
+            time.sleep(0.03)
+            self._serial.reset_input_buffer()
 
     def disconnect(self) -> None:
-        if self._serial is not None:
-            try:
-                self._serial.close()
-            finally:
-                self._serial = None
+        with self._io_lock:
+            if self._serial is not None:
+                try:
+                    self._serial.close()
+                finally:
+                    self._serial = None
 
     def send_ascii(self, command: str) -> None:
         if not self.is_connected or self._serial is None:
@@ -113,8 +132,12 @@ class MotorSerialClient:
         return response
 
     def query_ascii(self, command: str) -> str:
-        self.send_ascii(command)
-        return self.read_ascii()
+        # A Quicksilver request and its response are one transaction. Telemetry
+        # and motion workers may share a multi-drop serial connection, so they
+        # must never consume each other's replies.
+        with self._io_lock:
+            self.send_ascii(command)
+            return self.read_ascii()
 
     @staticmethod
     def _address(axis: MotorAxisConfig) -> str:
@@ -151,6 +174,79 @@ class MotorSerialClient:
                 raw -= 0x100000000
             return raw
         raise HardwareError(f"Unable to parse position from response: {response!r}")
+
+    @staticmethod
+    def _parse_register_values(response: str, count: int) -> tuple[int, ...]:
+        """Parse one or more signed 32-bit values returned by RRG (command 12)."""
+        groups = _HEX4_RE.findall(response)
+        required = int(count) * 2
+        if count < 1 or len(groups) < required:
+            raise HardwareError(
+                f"Expected {count} register value(s), got response: {response!r}"
+            )
+        payload = groups[-required:]
+        values: list[int] = []
+        for index in range(0, required, 2):
+            raw = int(payload[index] + payload[index + 1], 16)
+            if raw & 0x80000000:
+                raw -= 0x100000000
+            values.append(raw)
+        return tuple(values)
+
+    @staticmethod
+    def _signed_word(value: int, *, high: bool = False) -> int:
+        raw = ((value >> 16) if high else value) & 0xFFFF
+        return raw - 0x10000 if raw & 0x8000 else raw
+
+    def read_registers(
+        self,
+        axis: MotorAxisConfig,
+        registers: tuple[int, ...],
+    ) -> tuple[int, ...]:
+        """Read up to four Quicksilver registers in one serial transaction."""
+        if not 1 <= len(registers) <= 4:
+            raise ValueError("Quicksilver RRG accepts between one and four registers.")
+        register_text = " ".join(str(int(register)) for register in registers)
+        response = self.query_ascii(f"{self._address(axis)}12 {register_text}")
+        return self._parse_register_values(response, len(registers))
+
+    def read_telemetry(self, axis: MotorAxisConfig) -> MotorTelemetry:
+        """Read target, feedback, error, velocity, and torque efficiently.
+
+        Registers 0, 1, 6, and 7 are batched in one RRG request. Register 9 is
+        read separately because the protocol permits at most four registers per
+        request. Word-oriented fields are sign-extended according to the
+        SilverLode dedicated-register map.
+        """
+        target, actual, error_register, velocity_register = self.read_registers(
+            axis, (0, 1, 6, 7)
+        )
+        axis_id = axis.motor_id
+        supports_torque = self._axis_torque_capability.get(axis_id)
+        torque_reading: int | None
+        if supports_torque is False:
+            torque_reading = None
+        else:
+            try:
+                (torque_register,) = self.read_registers(axis, (9,))
+            except Exception:
+                if supports_torque is None:
+                    self._axis_torque_capability[axis_id] = False
+                torque_reading = None
+            else:
+                self._axis_torque_capability[axis_id] = True
+                torque_reading = self._signed_word(torque_register)
+        self._last_position[axis.motor_id] = actual
+        return MotorTelemetry(
+            timestamp=time.monotonic(),
+            axis_name=axis.name,
+            target_position=target,
+            actual_position=actual,
+            position_error=self._signed_word(error_register),
+            velocity_1=self._signed_word(velocity_register, high=True),
+            velocity_2=self._signed_word(velocity_register),
+            actual_torque=torque_reading,
+        )
 
     def poll_motor(self, axis: MotorAxisConfig) -> str:
         return self.query_ascii(f"{self._address(axis)}0")
