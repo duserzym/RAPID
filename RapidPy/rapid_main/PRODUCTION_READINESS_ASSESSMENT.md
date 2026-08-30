@@ -1,3 +1,62 @@
+# RapidPy production-readiness assessment
+
+> **August 29, 2026 update — read this first.** The July 16 material below is
+> retained for history. Where the two disagree, this section wins.
+
+## Code-complete versus hardware-validated (August 29, 2026)
+
+RapidPy is **transition/testing software**, not a VB6 replacement. The P0
+measurement-integrity path is code-complete and covered by replay and fault
+tests; none of it has been validated against the physical RAPID system.
+
+| P0 area | Code-complete | Hardware-validated | Evidence |
+|---|---|---|---|
+| Bracketed SQUID acquisition (`Measure_ReadSample` order) | Yes | **No** | `rapid_main/acquisition.py`, `tests/test_acquisition.py` |
+| Coherent latch/counter/DVM observation evidence | Yes | **No** | `rapid_main/magnetometer.py`, `rapid_main/squid_transport.py`, `tests/test_squid_transport.py` |
+| Flux-count rejection on X, Y, Z | Yes | **No** | `tests/test_acquisition.py`, `tests/test_vb6_parity.py` |
+| Safe recovery and retry exhaustion | Yes | **No** | `tests/test_acquisition.py`, `tests/test_output_integrity.py` |
+| Measured, persisted holder correction | Yes | **No** | `rapid_main/holder_state.py`, `rapid_main/holder_measurement.py`, `tests/test_holder_state.py` |
+| Holder-gated sample measurement | Yes | **No** | `tests/test_queue_hardware_backend.py` |
+| Fail-closed hardware mode | Yes | **No** | `rapid_main/diagnostic_services.py`, `tests/test_diagnostic_services.py`, `tests/test_queue_hardware_backend.py` |
+| Simulation isolation and labelling | Yes | n/a | `rapid_main/io/measurement_bundle.py`, `tests/test_output_integrity.py` |
+| Transactional output, duplicate-free resume | Yes | **No** | `tests/test_output_integrity.py`, `tests/test_vb6_parity.py` |
+| Specimen metadata resolution | Yes | **No** | `rapid_main/specimen_metadata.py`, `tests/test_output_integrity.py` |
+| Motion and interlock behavior | Verified in software only | **No** | Every motion is verified and a failure aborts the block |
+| Output parity against VB6 | Fixtures only | **No** | Side-by-side blocked by the VB6 build gates |
+
+Full suite: **376 tests passing** (`python -m unittest discover -s tests -t .`
+from `RapidPy/rapid_main`).
+
+### Behavior changes an operator will notice
+
+- Hardware mode blocks instead of falling back to a simulator. Missing
+  packages, ports, adapters, or calibration are named as preflight blockers.
+- `motion.zero_pos` / `motion.meas_pos` default to unconfigured, so hardware
+  preflight blocks until the legacy `[SteppingMotor]` values are imported or
+  real measured values are entered. RapidPy will not invent lift positions.
+- The `Holder` queue command now measures the holder. A rejected holder block
+  aborts the queue and keeps the previous correction.
+- Sample measurement is blocked when no valid holder correction exists.
+- Measurement output is published only when a run completes; an aborted run
+  leaves the production output path untouched.
+- Simulated runs publish into a `SIMULATED` subdirectory with a marker file.
+- Sig/Holder and Sig/Induced now show real values when a bracketed block is
+  available, plus holder identity, magnitude, and age.
+
+### Still open in software
+
+- 2G range-letter mapping unconfirmed against the instrument.
+- Holder direction policy defaults to `shared` (VB6 parity); `strict` is
+  available but is a deviation.
+- RapidPy issues one blocking verified motion where VB6 issues a non-blocking
+  start followed by a blocking repeat.
+
+The physical procedure and evidence schema are in
+`docs/rapid_hardware_acceptance_procedure_2026-08-29.md`. VB6 build/launch gate
+status is in `docs/rapidpy_transition_readiness_2026-08-29.md`.
+
+---
+
 # RapidPy production-readiness assessment (July 16, 2026)
 
 ## Scope
@@ -60,7 +119,7 @@ This file tracks parity and hardening evidence for the active `rapid_main` workf
 
 Focused software acceptance completed with 121 passing tests across measurement statistics, startup guidance, layout/topology, and DC motor telemetry. The complete command-to-result table is maintained in `docs/hardware_acceptance_checklists_2026-07-15.md`.
 
-- Measurement statistics: repeated SQUID-cycle mean and quality evidence are rendered live by `MeasurementPanel`; holder and induced values remain `N/A` until a backend supplies physical baselines.
+- Measurement statistics: repeated SQUID-cycle mean and quality evidence are rendered live by `MeasurementPanel`. *(Superseded 2026-08-29: holder and induced values are rendered from a bracketed block, and holder identity/magnitude/age/validity are shown.)*
 - Startup guidance: `StartupGuideDialog` replaces the unimplemented splash/tip tracker entries with a non-modal first-run guide, persisted preference, and Help > Quick Start route.
 - Physical-only remaining evidence: live SQUID holder/induced baselines, motor encoder/torque comparison, and native Windows monitor add/remove plus mixed-DPI behavior.
 
