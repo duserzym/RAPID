@@ -158,6 +158,31 @@ class QueueBackendFailClosedTests(unittest.TestCase):
             result.blockers,
         )
 
+    def test_failed_identity_check_blocks_preflight(self) -> None:
+        class _IdentityFails:
+            simulated = False
+
+            def is_connected(self) -> bool:
+                return False
+
+            def test_connection(self) -> bool:
+                raise RuntimeError("SQUID connected but identity query returned garbage")
+
+            def status(self) -> str:
+                return "identity check failed"
+
+        cfg = _config(self.tmp)
+        backend = self._backend(cfg, adapter=_IdentityFails())
+
+        result = backend.preflight()
+
+        self.assertFalse(result.ok)
+        self.assertTrue(
+            any("identity query returned garbage" in blocker for blocker in result.blockers),
+            result.blockers,
+        )
+        self.assertFalse(backend.is_available())
+
     def test_recovery_hook_is_absent_without_a_bracketed_backend(self) -> None:
         cfg = _config(self.tmp)
         backend = self._backend(cfg, adapter=_PlainSquidAdapter())

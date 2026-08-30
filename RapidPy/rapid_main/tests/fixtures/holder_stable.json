@@ -1,0 +1,126 @@
+{
+  "schema": "rapidpy.replay.bracketed_block.v1",
+  "name": "holder-stable",
+  "description": "Blank holder with two coherent bracketing zeros; small continuous drift only. Must reduce cleanly and install a holder correction.",
+  "source": "Synthesised from the VB6 reduction contract; replace with a recorded blank-holder block once one is captured on the instrument (acceptance step H1).",
+  "sample_name": "Holder",
+  "range_label": "1",
+  "range_value": 1.0,
+  "range_factor": 1e-05,
+  "axis_calibration": [
+    0.09000563,
+    0.106,
+    0.066
+  ],
+  "is_up": true,
+  "is_holder_block": true,
+  "expected": {
+    "accepted": true,
+    "discontinuous_axes": [],
+    "flux_step_axes": []
+  },
+  "observations": [
+    {
+      "role": "zero-before",
+      "axes": {
+        "X": {
+          "counts": 0.0,
+          "dvm": 11.595337980524105
+        },
+        "Y": {
+          "counts": 0.0,
+          "dvm": -3.9716981132075473
+        },
+        "Z": {
+          "counts": 0.0,
+          "dvm": 3.227272727272727
+        }
+      }
+    },
+    {
+      "role": "position-1",
+      "axes": {
+        "X": {
+          "counts": 0.0,
+          "dvm": -2.222083218571994
+        },
+        "Y": {
+          "counts": 0.0,
+          "dvm": -0.47169811320754723
+        },
+        "Z": {
+          "counts": 0.0,
+          "dvm": -4.545454545454545
+        }
+      }
+    },
+    {
+      "role": "position-2",
+      "axes": {
+        "X": {
+          "counts": 0.0,
+          "dvm": -0.6666249655715981
+        },
+        "Y": {
+          "counts": 0.0,
+          "dvm": -1.7924528301886793
+        },
+        "Z": {
+          "counts": 0.0,
+          "dvm": -4.696969696969696
+        }
+      }
+    },
+    {
+      "role": "position-3",
+      "axes": {
+        "X": {
+          "counts": 0.0,
+          "dvm": 2.3331873795005933
+        },
+        "Y": {
+          "counts": 0.0,
+          "dvm": -0.37735849056603776
+        },
+        "Z": {
+          "counts": 0.0,
+          "dvm": -4.393939393939394
+        }
+      }
+    },
+    {
+      "role": "position-4",
+      "axes": {
+        "X": {
+          "counts": 0.0,
+          "dvm": 0.5555208046429985
+        },
+        "Y": {
+          "counts": 0.0,
+          "dvm": 1.886792452830189
+        },
+        "Z": {
+          "counts": 0.0,
+          "dvm": -4.545454545454545
+        }
+      }
+    },
+    {
+      "role": "zero-after",
+      "axes": {
+        "X": {
+          "counts": 0.0,
+          "dvm": 11.550896316152667
+        },
+        "Y": {
+          "counts": 0.0,
+          "dvm": -3.9952830188679247
+        },
+        "Z": {
+          "counts": 0.0,
+          "dvm": 3.204545454545454
+        }
+      }
+    }
+  ]
+}
