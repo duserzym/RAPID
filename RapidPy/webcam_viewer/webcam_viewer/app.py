@@ -326,23 +326,18 @@ class WebcamWindow(QtWidgets.QMainWindow):
 
 def main() -> None:
     """Launch the standalone webcam viewer application."""
-    # Import theme and icon helpers if available, and keep fallback styling
-    # intact if shared resources are unavailable.
+    # Import shared theme/icon helpers and keep taskbar icon assignment explicit.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from rapidpy_common.ui import apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon
+
     app = QtWidgets.QApplication(sys.argv)
+    apply_window_bounds_guard(app)
     assets_dir = Path(__file__).resolve().parent / "assets"
-    _has_window_icon = False
-    try:
-        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-        from rapidpy_common.ui import apply_liquid_glass_theme, set_app_icon
-        apply_liquid_glass_theme(app)
-        set_app_icon(app, "webcam_viewer_icon.png", assets_dir)
-        _has_window_icon = True
-    except Exception:
-        pass
+    apply_liquid_glass_theme(app)
+    set_app_icon(app, "webcam_viewer_icon.png", assets_dir)
 
     win = WebcamWindow()
-    if _has_window_icon:
-        set_app_icon(win, "webcam_viewer_icon.png", assets_dir)
+    set_app_icon(win, "webcam_viewer_icon.png", assets_dir)
     win.show()
     sys.exit(app.exec())
 

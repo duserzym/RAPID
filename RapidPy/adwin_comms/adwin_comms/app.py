@@ -36,7 +36,13 @@ from rapidpy_common.adwin_af import (  # noqa: E402
     _find_adwin_dll,
     find_btl_files,
 )
-from rapidpy_common.ui import apply_card_shadow, apply_liquid_glass_theme, set_app_icon  # noqa: E402
+from rapidpy_common.ui import (  # noqa: E402
+    apply_card_shadow,
+    apply_liquid_glass_theme,
+    clamp_window_geometry,
+    apply_window_bounds_guard,
+    set_app_icon,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1852,12 +1858,15 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
                 self.restoreGeometry(bytes.fromhex(self._cfg.window_geometry))
             except Exception:
                 pass
-        # Cap to ~75% of available screen height so saved geometry from a
-        # maximised session doesn't reopen full-screen.
-        avail = QtWidgets.QApplication.primaryScreen().availableGeometry()
-        max_h = int(avail.height() * 0.75)
-        if self.height() > max_h:
-            self.resize(self.width(), max_h)
+        # Cap restored geometry so saved sessions don't reopen maximized on any monitor profile.
+        if self.isMaximized() or self.isFullScreen():
+            self.showNormal()
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            max_w, max_h = clamp_window_geometry(avail, (self.width(), self.height()))
+            if self.width() > max_w or self.height() > max_h:
+                self.resize(max_w, max_h)
 
     def closeEvent(self, event: QtCore.QEvent) -> None:
         if self._worker is not None:
@@ -1877,6 +1886,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
 # ---------------------------------------------------------------------------
 def main() -> int:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    apply_window_bounds_guard(app)
     apply_liquid_glass_theme(app)
     assets_dir = Path(__file__).resolve().parent.parent / "assets"
     set_app_icon(app, "adwin_icon.png", assets_dir)

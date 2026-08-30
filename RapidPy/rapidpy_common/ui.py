@@ -1,11 +1,288 @@
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
 
-from PySide6 import QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from .palette import GOLD, MAROON
+
+
+MIN_WINDOW_WIDTH = 300
+MIN_WINDOW_HEIGHT = 240
+
+
+def clamp_window_geometry(available: QtCore.QRect, requested: tuple[int, int]) -> tuple[int, int]:
+    """Return a geometry size that fits within the configured working area."""
+    requested_width, requested_height = requested
+    area_width = max(1, available.width())
+    area_height = max(1, available.height())
+
+    # Constrain wide windows to keep a compact working footprint on modern
+    # mixed-resolution desktop layouts while still keeping enough room for
+    # data-dense workflows.
+    # Cap width growth on very large monitors so full-width startup windows never
+    # occur on high-resolution rigs.
+    max_w = min(int(area_width * 0.35), area_width, 960)
+    max_h = min(int(area_height * 0.80), area_height)
+    min_max_w = min(MIN_WINDOW_WIDTH, area_width)
+    min_max_h = min(MIN_WINDOW_HEIGHT, area_height)
+    max_w = max(max_w, min_max_w)
+    max_h = max(max_h, min_max_h)
+
+    min_w = min(int(area_width * 0.26), max_w)
+    min_h = min(int(area_height * 0.24), max_h)
+    min_w = max(MIN_WINDOW_WIDTH, min_w)
+    min_h = max(MIN_WINDOW_HEIGHT, min_h)
+    # Guard tiny or oddly shaped viewports where "compact" minimums can exceed
+    # the usable area when the monitor is very narrow.
+    min_w = min(min_w, area_width)
+    min_h = min(min_h, area_height)
+
+    width = max(min_w, min(max(1, int(requested_width)), max_w))
+    height = max(min_h, min(max(1, int(requested_height)), max_h))
+    width = min(width, area_width)
+    height = min(height, area_height)
+    return width, height
+
+
+def _screen_area_for_widget(window: QtWidgets.QWidget) -> QtCore.QRect | None:
+    """Return the widget's current available screen working area."""
+    handle = window.windowHandle()
+    if handle is not None and handle.screen() is not None:
+        return handle.screen().availableGeometry()
+
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return None
+
+    widget_rect = window.frameGeometry()
+    candidate_screens = []
+    for screen in app.screens():
+        screen_geo = screen.geometry()
+        intersection = screen_geo.intersected(widget_rect)
+        overlap = intersection.width() * intersection.height()
+        if overlap > 0:
+            candidate_screens.append((overlap, screen))
+
+    if candidate_screens:
+        _, screen = max(candidate_screens, key=lambda entry: entry[0])
+        return screen.availableGeometry()
+
+    # If the widget has not been placed yet, fall back to the screen at (0, 0),
+    # then finally choose nearest screen geometry before using primary/first screen.
+    for screen in app.screens():
+        if screen.geometry().contains(widget_rect.topLeft()):
+            return screen.availableGeometry()
+
+    # Widgets can start at synthetic off-screen coordinates before the window system
+    # assigns a native handle. In that case, choose the nearest screen center to
+    # avoid snapping to an unexpectedly unrelated primary display.
+    if widget_rect.isValid():
+        candidate_center = widget_rect.center()
+        nearest: QtGui.QScreen | None = None
+        nearest_distance = None
+        for screen in app.screens():
+            screen_center = screen.geometry().center()
+            dx = screen_center.x() - candidate_center.x()
+            dy = screen_center.y() - candidate_center.y()
+            distance = (dx * dx) + (dy * dy)
+            if nearest_distance is None or distance < nearest_distance:
+                nearest_distance = distance
+                nearest = screen
+        if nearest is not None:
+            return nearest.availableGeometry()
+
+    if app.primaryScreen() is not None:
+        return app.primaryScreen().availableGeometry()
+
+    if not app.screens():
+        return None
+    return app.screens()[0].availableGeometry()
+
+
+def _fit_window_to_screen(window: QtWidgets.QWidget) -> None:
+    """Clamp and re-center a top-level window into the current work area."""
+    available = _screen_area_for_widget(window)
+    if available is None:
+        return
+
+    max_w, max_h = clamp_window_geometry(available, (window.width(), window.height()))
+
+    if window.isMaximized():
+        window.showNormal()
+
+    min_size = window.minimumSize()
+    if min_size.isValid() and not min_size.isNull():
+        window.setMinimumSize(min(min_size.width(), max_w), min(min_size.height(), max_h))
+
+    # Keep explicit runtime caps so window manager restore/maximize actions cannot
+    # temporarily bypass our intended safe-boot envelope on this screen.
+    window.setMaximumWidth(max_w)
+    window.setMaximumHeight(max_h)
+
+    frame = window.frameGeometry()
+    if frame.width() > max_w or frame.height() > max_h:
+        frame.setSize(QtCore.QSize(max_w, max_h))
+
+    if frame.width() > available.width() or frame.height() > available.height():
+        frame.moveCenter(available.center())
+    else:
+        new_x = max(available.left(), min(frame.left(), available.right() - frame.width() + 1))
+        new_y = max(available.top(), min(frame.top(), available.bottom() - frame.height() + 1))
+        frame.moveTopLeft(QtCore.QPoint(new_x, new_y))
+
+    window.setGeometry(frame)
+    window.resize(
+        min(window.width(), frame.width()),
+        min(window.height(), frame.height()),
+    )
+
+
+def _fit_window_with_widget_handler(window: QtWidgets.QWidget, screen: QtGui.QScreen | None = None) -> bool:
+    """Allow window-specific fit handlers to opt into geometry enforcement."""
+    method_names = (
+        "_fit_to_screen",
+        "_fit_window_to_current_screen",
+        "fit_to_screen",
+    )
+    for method_name in method_names:
+        method = getattr(window, method_name, None)
+        if not callable(method):
+            continue
+
+        sig = None
+        try:
+            sig = inspect.signature(method)
+        except (TypeError, ValueError):
+            sig = None
+
+        try:
+            if sig is not None:
+                params = [
+                    p
+                    for p in sig.parameters.values()
+                    if p.kind in (
+                        inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    )
+                ]
+                if len(params) == 0:
+                    method()
+                    return True
+                if len(params) == 1:
+                    method(screen)
+                    return True
+            method()
+            return True
+        except TypeError:
+            # Fall back to best-effort invocation for optional, screen-aware handlers.
+            if screen is not None:
+                method(screen)
+                return True
+            raise
+    return False
+
+
+def _refit_top_level_windows(app: QtWidgets.QApplication) -> None:
+    """Reapply bounds protection after a screen topology or DPI change."""
+
+    for window in app.topLevelWidgets():
+        try:
+            if not window.isWindow():
+                continue
+            if not _fit_window_with_widget_handler(window):
+                _fit_window_to_screen(window)
+        except RuntimeError:
+            # A window can be destroyed while Qt dispatches a topology change.
+            continue
+
+
+def _apply_window_bounds_guard(app: QtWidgets.QApplication) -> None:
+    """Install a QApplication-level guard so main windows stay within visible screens."""
+    if getattr(app, "_rapidpy_window_guard", None) is not None:
+        return
+
+    class _WindowBoundsGuard(QtCore.QObject):
+        def __init__(self, parent_app: QtWidgets.QApplication) -> None:
+            super().__init__(parent_app)
+            self._app = parent_app
+            self._watched_ids: set[int] = set()
+            self._connected_ids: set[int] = set()
+            self._connected_screen_metrics: set[tuple[int, int]] = set()
+            parent_app.installEventFilter(self)
+            parent_app.screenAdded.connect(lambda _screen: self._schedule_refit_all())
+            parent_app.screenRemoved.connect(lambda _screen: self._schedule_refit_all())
+
+        def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+            if not isinstance(obj, QtWidgets.QWidget) or not obj.isWindow():
+                return False
+            if event.type() == QtCore.QEvent.Type.Show:
+                QtCore.QTimer.singleShot(0, lambda: self._bind_window(obj))
+            return False
+
+        def _schedule_refit_all(self) -> None:
+            QtCore.QTimer.singleShot(0, lambda: _refit_top_level_windows(self._app))
+
+        def _bind_window(self, window: QtWidgets.QWidget, screen: QtGui.QScreen | None = None) -> None:
+            try:
+                if id(window) not in self._watched_ids:
+                    self._watched_ids.add(id(window))
+                if not _fit_window_with_widget_handler(window, screen=screen):
+                    _fit_window_to_screen(window)
+                self._watch_screen_changes(window)
+            except RuntimeError:
+                return
+
+        def _watch_screen_changes(self, window: QtWidgets.QWidget) -> None:
+            handle = window.windowHandle()
+            if handle is None:
+                QtCore.QTimer.singleShot(
+                    75,
+                    lambda _w=window: self._watch_screen_changes(_w),
+                )
+                return
+            if id(window) in self._connected_ids:
+                self._watch_screen_metrics(window, handle.screen())
+                return
+            self._connected_ids.add(id(window))
+            handle.screenChanged.connect(
+                lambda _s, _w=window: QtCore.QTimer.singleShot(
+                    0, lambda: self._bind_window(_w, screen=_s)
+                ),
+            )
+            self._watch_screen_metrics(window, handle.screen())
+
+        def _watch_screen_metrics(
+            self,
+            window: QtWidgets.QWidget,
+            screen: QtGui.QScreen | None,
+        ) -> None:
+            if screen is None:
+                return
+            key = (id(window), id(screen))
+            if key in self._connected_screen_metrics:
+                return
+            self._connected_screen_metrics.add(key)
+            for signal in (
+                screen.availableGeometryChanged,
+                screen.geometryChanged,
+                screen.logicalDotsPerInchChanged,
+            ):
+                signal.connect(
+                    lambda *_args, _w=window: QtCore.QTimer.singleShot(
+                        0, lambda: self._bind_window(_w)
+                    )
+                )
+
+    app._rapidpy_window_guard = _WindowBoundsGuard(app)  # type: ignore[attr-defined]
+    QtCore.QTimer.singleShot(0, lambda: _refit_top_level_windows(app))
+
+
+def apply_window_bounds_guard(app: QtWidgets.QApplication) -> None:
+    """Public shim for installing the shared window/bounds guard."""
+    _apply_window_bounds_guard(app)
 
 
 def apply_liquid_glass_theme(app: QtWidgets.QApplication) -> None:
@@ -286,6 +563,7 @@ def apply_liquid_glass_theme(app: QtWidgets.QApplication) -> None:
         }}
         """
     )
+    _apply_window_bounds_guard(app)
 
 
 def set_app_icon(
@@ -309,8 +587,24 @@ def set_app_icon(
             png_path = icon_path.with_suffix(".png")
             if png_path.exists():
                 icon_path = png_path
-    if icon_path.exists():
-        target.setWindowIcon(QtGui.QIcon(str(icon_path)))
+    if not icon_path.exists():
+        return
+
+    target.setWindowIcon(QtGui.QIcon(str(icon_path)))
+
+    if sys.platform != "win32":
+        return
+
+    # On Windows, multiple script-run windows can still appear under the Python
+    # executable's taskbar group. A stable AppUserModelID helps taskbar identity
+    # pick up each app's own branding when the shell honors the AUMID path.
+    try:
+        import ctypes
+
+        app_id = f"RapidPy.{Path(icon_name).stem}"
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(str(app_id))  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 def apply_card_shadow(widget: QtWidgets.QWidget) -> None:

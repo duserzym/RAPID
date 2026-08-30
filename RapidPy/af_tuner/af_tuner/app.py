@@ -26,7 +26,7 @@ from rapidpy_common.adwin_af import (  # noqa: E402
     AdwinError,
     AdwinRampRequest,
 )
-from rapidpy_common.ui import apply_card_shadow, apply_liquid_glass_theme, set_app_icon  # noqa: E402
+from rapidpy_common.ui import apply_card_shadow, apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon  # noqa: E402
 
 
 @dataclass(slots=True)
@@ -1735,6 +1735,7 @@ class MainWindow(QtWidgets.QMainWindow):
 def main() -> int:
     pg.setConfigOptions(antialias=False, foreground="#4d3a39")
     app = QtWidgets.QApplication(sys.argv)
+    apply_window_bounds_guard(app)
     apply_liquid_glass_theme(app)
     set_app_icon(app, "af_tuner_icon.ico", _assets_dir())
     window = MainWindow()
