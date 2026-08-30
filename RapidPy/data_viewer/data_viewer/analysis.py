@@ -9,7 +9,7 @@ import numpy as np
 from data_viewer.data_loading import MeasurementStep, PaleointensityPoint, ViewerSpecimen
 
 
-CoordinateSystem = Literal["specimen", "geographic", "core"]
+CoordinateSystem = Literal["specimen", "geographic", "tilt-corrected"]
 
 
 @dataclass
@@ -41,11 +41,11 @@ class PaleointensitySummary:
 
 def vector_for_step(step: MeasurementStep, coordinate_system: CoordinateSystem = "specimen") -> np.ndarray:
     if coordinate_system == "specimen":
-        return np.array([step.sdx, step.sdy, step.sdz], dtype=float)
+        return _dir_to_cartesian(step.crdec, step.crinc, step.moment)
     if coordinate_system == "geographic":
         return _dir_to_cartesian(step.gdec, step.ginc, step.moment)
-    if coordinate_system == "core":
-        return _dir_to_cartesian(step.crdec, step.crinc, step.moment)
+    if coordinate_system == "tilt-corrected":
+        return _dir_to_cartesian(step.sdec, step.sinc, step.moment)
     raise ValueError(f"Unsupported coordinate system: {coordinate_system}")
 
 
@@ -273,7 +273,7 @@ def _cartesian_to_dir(vector: np.ndarray) -> tuple[float, float]:
     if norm <= 0:
         return 0.0, 0.0
     dec = math.degrees(math.atan2(float(vector[1]), float(vector[0]))) % 360.0
-    inc = math.degrees(math.asin(float(vector[2]) / norm))
+    inc = math.degrees(math.asin(-float(vector[2]) / norm))
     return dec, inc
 
 
@@ -284,7 +284,7 @@ def _dir_to_cartesian(dec_deg: float, inc_deg: float, moment: float) -> np.ndarr
     return np.array([
         horiz * math.cos(dec),
         horiz * math.sin(dec),
-        moment * math.sin(inc),
+        -moment * math.sin(inc),
     ], dtype=float)
 
 

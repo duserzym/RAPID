@@ -23,6 +23,7 @@ except ImportError:
 
 from data_viewer.analysis import next_step_suggestion, principal_component_fit, summarize_paleointensity, vector_for_step
 from data_viewer.data_loading import MeasurementStep, SpecimenMeta, ViewerDataset, ViewerSpecimen, load_input, load_magic_directory, watch_paths_for_dataset
+from rapidpy_common.ui import apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon
 
 
 # ── Demo data ────────────────────────────────────────────────────────────────
@@ -1173,22 +1174,19 @@ def _format_fit_summary(fit) -> str:
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
+_ICON_NAME = "data_viewer_icon.png"
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
+    apply_window_bounds_guard(app)
+    apply_liquid_glass_theme(app)
 
-    assets_dir = None
-    try:
-        from rapidpy_common.ui import apply_liquid_glass_theme, set_app_icon
-        apply_liquid_glass_theme(app)
-        assets = Path(__file__).resolve().parent.parent / "assets"
-        set_app_icon(app, "data_viewer_icon.png", assets)
-        assets_dir = assets
-    except ImportError:
-        pass  # works standalone without rapidpy_common
+    assets_dir = Path(__file__).resolve().parent.parent / "assets"
+    set_app_icon(app, _ICON_NAME, assets_dir)
 
     win = ZijderveldWindow()
-    if assets_dir is not None:  # type: ignore[name-defined]
-        set_app_icon(win, "data_viewer_icon.png", assets_dir)
+    set_app_icon(win, _ICON_NAME, assets_dir)
     win.show()
     return app.exec()

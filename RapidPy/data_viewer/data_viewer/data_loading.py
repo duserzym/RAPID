@@ -345,7 +345,7 @@ def _dir_to_cartesian(dec_deg: float, inc_deg: float, moment: float) -> tuple[fl
     return (
         horiz * math.cos(dec),
         horiz * math.sin(dec),
-        moment * math.sin(inc),
+        -moment * math.sin(inc),
     )
 
 
@@ -354,7 +354,7 @@ def _cartesian_to_dir(x: float, y: float, z: float) -> tuple[float, float, float
     if moment <= 0:
         return 0.0, 0.0, 0.0
     dec = math.degrees(math.atan2(y, x)) % 360.0
-    inc = math.degrees(math.asin(z / moment))
+    inc = math.degrees(math.asin(-z / moment))
     return dec, inc, moment
 
 
