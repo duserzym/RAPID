@@ -1865,6 +1865,12 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._save_queue_state()
 
+    def _sync_settings(self) -> None:
+        """Flush real QSettings while supporting lightweight test bridges."""
+        sync = getattr(self._settings, "sync", None)
+        if callable(sync):
+            sync()
+
     def _save_queue_state(self) -> None:
         try:
             queue_rows = self._sample_queue.row_snapshot()
@@ -1875,7 +1881,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 _QSETTINGS_QUEUE_CURRENT_SAMPLE, self._queue_current_sample or ""
             )
             self._settings.setValue(_QSETTINGS_QUEUE_ACTIVE, bool(self._queue_active))
-            self._settings.sync()
+            self._sync_settings()
         except Exception:
             self._settings.remove(_QSETTINGS_QUEUE_ROWS)
             self._settings.remove(_QSETTINGS_QUEUE_PROGRESS)
@@ -1886,7 +1892,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _restore_queue_state(self) -> None:
         # Pull settings written by another window/process before rebuilding the
         # queue.  QSettings otherwise may retain a stale per-instance cache.
-        self._settings.sync()
+        self._sync_settings()
         raw = self._settings.value(_QSETTINGS_QUEUE_ROWS)
         if not raw:
             self._queue_current_sample = None
@@ -1955,7 +1961,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _set_show_startup_guide(self, enabled: bool) -> None:
         self._settings.setValue(_QSETTINGS_SHOW_STARTUP_GUIDE, bool(enabled))
-        self._settings.sync()
+        self._sync_settings()
 
     def _schedule_startup_guide(self) -> None:
         if self._startup_guide_scheduled:
