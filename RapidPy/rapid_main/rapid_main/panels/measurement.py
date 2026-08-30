@@ -256,6 +256,9 @@ class MeasurementPanel(QtWidgets.QWidget):
         _stat(7, 0, "Sig/Drift",  "_sig_drift")
         _stat(7, 2, "Sig/Holder", "_sig_holder")
         _stat(7, 4, "Sig/Induced","_sig_induced")
+        _stat(8, 0, "Holder",     "_holder_id")
+        _stat(8, 2, "Holder |M|", "_holder_moment")
+        _stat(8, 4, "Holder age", "_holder_age")
 
         ov.addLayout(stats_grid)
         ov.addStretch()
@@ -548,13 +551,20 @@ class MeasurementPanel(QtWidgets.QWidget):
             moment=f"{moment_Am2:.3e}",
             csd=f"{step.error_angle:.1f}°",
         )
-        self._update_measurement_stats(step, result.cycle_stats)
+        self._update_measurement_stats(
+            step,
+            result.cycle_stats,
+            block_result=getattr(result, "block_result", None),
+            holder_status=getattr(result, "holder_status", None),
+        )
         self._plot_step_complete(result, moment_Am2=moment_Am2)
 
     def _update_measurement_stats(
         self,
         step: MeasurementStep,
         cycle_stats: ReadingCycleStatistics | None,
+        block_result: object | None = None,
+        holder_status: object | None = None,
     ) -> None:
         """Render VB6-style cycle quality values from the current SQUID reads."""
 
@@ -582,14 +592,68 @@ class MeasurementPanel(QtWidgets.QWidget):
         else:
             self._sig_drift.setText(f"{stats.signal_to_drift:.2f}")
 
-        self._sig_holder.setText("N/A")
-        self._sig_holder.setToolTip("Requires a holder baseline supplied by the active hardware backend.")
-        self._sig_induced.setText("N/A")
-        self._sig_induced.setToolTip("Requires an induced-field baseline supplied by the active hardware backend.")
+        self._update_holder_stats(block_result, holder_status)
         self._avg_csd.setToolTip(f"RMS directional spread across {stats.count} SQUID sample(s).")
 
         worst_ratio = max(ratios, default=0.0)
         self.set_warning("red" if worst_ratio > 5.0 else "orange" if worst_ratio > 1.0 else "")
+
+    def _update_holder_stats(self, block_result: object | None, holder_status: object | None) -> None:
+        """Render VB6 Sig/Holder and Sig/Induced plus holder identity and age.
+
+        These stay ``N/A`` until a backend supplies a real bracketed block and
+        an installed holder correction, so an operator can never read a stale
+        or absent holder as a valid one.
+        """
+
+        if block_result is not None:
+            self._sig_holder.setText(f"{float(block_result.sig_holder):.2f}")
+            self._sig_holder.setToolTip("Average moment / holder moment for the last block.")
+            self._sig_induced.setText(f"{float(block_result.sig_induced):.2f}")
+            self._sig_induced.setToolTip("Average moment / rotational asymmetry for the last block.")
+        else:
+            self._sig_holder.setText("N/A")
+            self._sig_holder.setToolTip(
+                "Requires a bracketed measurement block from the active hardware backend."
+            )
+            self._sig_induced.setText("N/A")
+            self._sig_induced.setToolTip(
+                "Requires a bracketed measurement block from the active hardware backend."
+            )
+
+        if holder_status is None or not getattr(holder_status, "present", False):
+            self._holder_id.setText("None")
+            self._holder_id.setToolTip(
+                getattr(holder_status, "reason", "") or "No holder measurement recorded."
+            )
+            self._holder_moment.setText("N/A")
+            self._holder_age.setText("N/A")
+            return
+
+        valid = bool(getattr(holder_status, "valid", False))
+        identity = str(getattr(holder_status, "holder_id", "") or "unknown")
+        self._holder_id.setText(identity if valid else f"{identity} (invalid)")
+        tooltip = str(getattr(holder_status, "record_version", "") or identity)
+        reason = str(getattr(holder_status, "reason", "") or "")
+        if getattr(holder_status, "simulated", False):
+            tooltip = f"SIMULATED holder correction. {tooltip}"
+        if reason:
+            tooltip = f"{tooltip} - {reason}"
+        self._holder_id.setToolTip(tooltip)
+
+        magnitude = getattr(holder_status, "magnitude_emu", None)
+        self._holder_moment.setText("N/A" if magnitude is None else f"{float(magnitude):.3e} emu")
+        asymmetry = getattr(holder_status, "asymmetry_ratio", None)
+        if asymmetry is not None:
+            self._holder_moment.setToolTip(f"Induced/holder asymmetry ratio {float(asymmetry):.3f}")
+
+        age = getattr(holder_status, "age_seconds", None)
+        if age is None:
+            self._holder_age.setText("N/A")
+        elif age < 3600:
+            self._holder_age.setText(f"{float(age) / 60.0:.0f} min")
+        else:
+            self._holder_age.setText(f"{float(age) / 3600.0:.1f} h")
 
     def _plot_step_complete(self, result: StepResult, *, moment_Am2: float) -> None:
         self._plot_traces["step"].append(float(result.step_idx + 1))

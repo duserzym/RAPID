@@ -173,3 +173,93 @@ class TestMeasurementPanelHelpers(unittest.TestCase):
         self.assertEqual(panel._sig_holder.text(), "N/A")
         self.assertEqual(panel._sig_induced.text(), "N/A")
         panel.deleteLater()
+
+
+class TestMeasurementPanelHolderStats(unittest.TestCase):
+    """Holder identity, magnitude, age, and validity must be visible."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def _panel(self) -> MeasurementPanel:
+        return MeasurementPanel()
+
+    def test_absent_holder_is_shown_as_none_with_the_reason(self) -> None:
+        from rapid_main.holder_state import HolderStateStore
+
+        panel = self._panel()
+        status = HolderStateStore().status()
+
+        panel._update_holder_stats(None, status)
+
+        self.assertEqual(panel._holder_id.text(), "None")
+        self.assertIn("No holder measurement", panel._holder_id.toolTip())
+        self.assertEqual(panel._sig_holder.text(), "N/A")
+        self.assertEqual(panel._sig_induced.text(), "N/A")
+
+    def test_valid_holder_renders_identity_magnitude_and_age(self) -> None:
+        from datetime import timedelta, timezone
+
+        from rapid_main.holder_state import HolderCorrection, HolderMetrics, HolderStateStore
+
+        now = datetime(2026, 8, 29, 12, 0, 0, tzinfo=timezone.utc)
+        correction = HolderCorrection(
+            holder_id="HOLDER-A",
+            positions=((0.1, 0.0, 0.0), (0.0, 0.1, 0.0), (-0.1, 0.0, 0.0), (0.0, -0.1, 0.0)),
+            measured_at_iso=(now - timedelta(minutes=30)).isoformat(),
+            metrics=HolderMetrics(magnitude_emu=1.5e-6, asymmetry_ratio=0.02),
+        )
+        store = HolderStateStore(clock=lambda: now)
+        store.install(correction)
+
+        panel = self._panel()
+        panel._update_holder_stats(None, store.status())
+
+        self.assertEqual(panel._holder_id.text(), "HOLDER-A")
+        self.assertEqual(panel._holder_moment.text(), "1.500e-06 emu")
+        self.assertEqual(panel._holder_age.text(), "30 min")
+
+    def test_stale_holder_is_labelled_invalid(self) -> None:
+        from datetime import timedelta, timezone
+
+        from rapid_main.holder_state import HolderCorrection, HolderStateStore
+
+        now = datetime(2026, 8, 29, 12, 0, 0, tzinfo=timezone.utc)
+        correction = HolderCorrection(
+            holder_id="HOLDER-B",
+            positions=((0.1, 0.0, 0.0),) * 4,
+            measured_at_iso=(now - timedelta(days=3)).isoformat(),
+        )
+        store = HolderStateStore(clock=lambda: now)
+        store.install(correction)
+
+        panel = self._panel()
+        panel._update_holder_stats(None, store.status())
+
+        self.assertIn("invalid", panel._holder_id.text())
+        self.assertIn("stale", panel._holder_id.toolTip())
+        self.assertEqual(panel._holder_age.text(), "72.0 h")
+
+    def test_block_result_supplies_the_signal_ratios(self) -> None:
+        from rapid_main.magnetometer import BracketedMeasurementBlock, reduce_bracketed_measurement
+
+        block = BracketedMeasurementBlock(
+            zero_before=(0.0, 0.0, 0.0),
+            positions=(
+                (1.0, 0.0, 0.5),
+                (0.0, 1.0, 0.5),
+                (-1.0, 0.0, 0.5),
+                (0.0, -1.0, 0.5),
+            ),
+            zero_after=(0.001, 0.0, 0.0),
+            holder_positions=((0.01, 0.0, 0.0), (0.0, 0.01, 0.0), (-0.01, 0.0, 0.0), (0.0, -0.01, 0.0)),
+        )
+        result = reduce_bracketed_measurement(block)
+
+        panel = self._panel()
+        panel._update_holder_stats(result, None)
+
+        self.assertEqual(panel._sig_holder.text(), f"{result.sig_holder:.2f}")
+        self.assertEqual(panel._sig_induced.text(), f"{result.sig_induced:.2f}")
+        self.assertNotEqual(panel._sig_holder.text(), "N/A")

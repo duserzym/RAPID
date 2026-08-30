@@ -77,12 +77,18 @@ class StepResult:
         step_idx: int,
         total_steps: int,
         cycle_stats: ReadingCycleStatistics | None = None,
+        block_result: "BracketedMeasurementResult | None" = None,
+        holder_status: object | None = None,
     ) -> None:
         self.step = step
         self.susceptibility = susceptibility
         self.step_idx = step_idx
         self.total_steps = total_steps
         self.cycle_stats = cycle_stats
+        # Present only when the backend returns a full bracketed block, which
+        # is the only case where VB6-equivalent holder/induced ratios exist.
+        self.block_result = block_result
+        self.holder_status = holder_status
 
 
 T = TypeVar("T")
@@ -148,6 +154,7 @@ class MeasurementWorker(QtCore.QThread):
         # produces: the run is labelled and kept out of the production path.
         self._simulated = bool(getattr(self._backend, "simulated", False))
         self._last_block_audit: BlockAudit | None = None
+        self._last_block_result: BracketedMeasurementResult | None = None
         self._holder_record_id = ""
         self._holder_recorded_iso = ""
         self._skipped_labels: list[str] = []
@@ -363,6 +370,8 @@ class MeasurementWorker(QtCore.QThread):
                 step_idx=idx,
                 total_steps=total,
                 cycle_stats=cycle_stats,
+                block_result=self._last_block_result,
+                holder_status=self._backend_holder_status(),
             )
             self.step_complete.emit(result)
 
@@ -637,7 +646,7 @@ class MeasurementWorker(QtCore.QThread):
         result: BracketedMeasurementResult,
     ) -> None:
         """Keep the audit identifiers of the last accepted block."""
-        del result
+        self._last_block_result = result
         audit = block.audit
         if audit is None:
             return
@@ -653,6 +662,16 @@ class MeasurementWorker(QtCore.QThread):
                 "SIMULATED BLOCK received from the measurement backend; the run is "
                 "no longer valid hardware evidence."
             )
+
+    def _backend_holder_status(self) -> object | None:
+        """Holder identity/age/validity for the operator UI, when available."""
+        reader = getattr(self._backend, "holder_status", None)
+        if reader is None or not callable(reader):
+            return None
+        try:
+            return reader()
+        except Exception:
+            return None
 
     def _base_provenance(self) -> dict[str, object]:
         return {
