@@ -7,7 +7,11 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $projectPath = Join-Path $PSScriptRoot 'Paleomag v3.vbp'
+$repoRoot = Split-Path -Parent $PSScriptRoot
+# Build-VB6Project.ps1 writes to build\vb6, so look there first; the two paths
+# beside the project are where a hand-run IDE build lands.
 $compiledCandidates = @(
+    (Join-Path $repoRoot 'build\vb6\PALEOMAG2013.exe'),
     (Join-Path $PSScriptRoot 'PALEOMAG2013.exe'),
     (Join-Path $PSScriptRoot 'PALEOMAG.exe')
 )
