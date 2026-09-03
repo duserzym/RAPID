@@ -119,20 +119,35 @@ registered**, not that anything is wrong with the project.
 VB6 registers its edition when its setup program runs. If the `VB98` folder was
 copied onto the machine instead, every binary runs — the IDE opens, the
 toolchain (`LINK.EXE`, `C2.EXE`) is present — but VB6 falls back to its most
-restricted mode and refuses to compile.
+restricted mode and refuses to compile. That was the state of this computer
+until 2026-09-03, when the English Visual Studio 6.0 Enterprise setup was run
+and `ProductDir` appeared; the project compiled immediately afterwards.
 
-`Test-LaunchReadiness.ps1` reports the three observable symptoms:
+What actually predicts `/make`:
 
-- the setup key `HKLM\...\VisualStudio\6.0\Setup\Microsoft Visual Basic` has no
-  `ProductDir`;
-- `HKCU\SOFTWARE\Microsoft\VisualStudio\6.0` does not exist;
-- there is no "Visual Basic 6" uninstall entry.
+| Marker | Reliable? |
+|---|---|
+| `HKLM\...\VisualStudio\6.0\Setup\Microsoft Visual Basic\ProductDir` | **Yes** |
+| `LINK.EXE` and `C2.EXE` beside `VB6.EXE` | **Yes** |
+| `HKCU\SOFTWARE\Microsoft\VisualStudio\6.0` | No — absent on a working install here |
+| A "Visual Studio 6.0" uninstall entry | No — absent on a working install here |
 
-The fix is to run the setup program from your licensed VB6 media. Two cautions
-before you do:
+`Test-LaunchReadiness.ps1` checks only the two reliable markers. If they are
+missing, run the setup program from your licensed VB6 media, with two cautions:
 
 1. **Match the language of the media to the installation you want.** Installing
    from media of a different language re-introduces that language's components
    and satellite DLLs across the shared `VB98`, `Common`, and `Designer` trees.
 2. **Do not bypass the licence.** Fabricating edition or licence registry data
    is not a supported route and is not something this repository will script.
+
+## Running the EXE for the first time
+
+`Sub Main` in `modProg.bas` reads the settings-file path from
+`GetSetting(App.EXEName, "Settings", "INIFile", ...)`. On first run that value
+does not exist, so the program opens a file dialog asking for `Paleomag.ini`,
+then remembers your choice in the registry under `PALEOMAG2013`.
+
+Point it at the lab's real `Paleomag.ini`. For a no-communication smoke test,
+copy `VB6\Defaults.ini` somewhere writable, rename it `Paleomag.ini`, and select
+that — then confirm no-communication mode before anything is connected.

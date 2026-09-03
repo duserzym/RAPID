@@ -69,7 +69,11 @@ function Get-VB6EditionState {
     #>
     param([string]$IdePath)
 
-    $reasons = [System.Collections.Generic.List[string]]::new()
+    # Decisive: setup registered a ProductDir for Visual Basic, and the native
+    # toolchain is on disk. Verified on this machine - a build succeeded with
+    # exactly these two true and the softer markers below still absent.
+    $blockers = [System.Collections.Generic.List[string]]::new()
+    $notes = [System.Collections.Generic.List[string]]::new()
 
     $setupKey = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\6.0\Setup\Microsoft Visual Basic'
     $productDir = $null
@@ -77,20 +81,21 @@ function Get-VB6EditionState {
         $productDir = (Get-ItemProperty -LiteralPath $setupKey -ErrorAction SilentlyContinue).ProductDir
     }
     if (-not $productDir) {
-        $reasons.Add('Setup key "Microsoft Visual Basic" has no ProductDir: VB6 setup never ran on this machine.')
-    }
-
-    if (-not (Test-Path -LiteralPath 'HKCU:\SOFTWARE\Microsoft\VisualStudio\6.0')) {
-        $reasons.Add('HKCU\SOFTWARE\Microsoft\VisualStudio\6.0 is absent: the IDE has no per-user registration.')
+        $blockers.Add('Setup key "Microsoft Visual Basic" has no ProductDir: VB6 setup never ran, so /make will answer "No make available in the Working Model Edition".')
     }
 
     $linker = Join-Path (Split-Path -Parent $IdePath) 'LINK.EXE'
     $compiler = Join-Path (Split-Path -Parent $IdePath) 'C2.EXE'
     $toolchain = (Test-Path -LiteralPath $linker -PathType Leaf) -and (Test-Path -LiteralPath $compiler -PathType Leaf)
     if (-not $toolchain) {
-        $reasons.Add('LINK.EXE / C2.EXE are missing: the native compiler toolchain is not installed.')
+        $blockers.Add('LINK.EXE / C2.EXE are missing: the native compiler toolchain is not installed.')
     }
 
+    # Informational only. A working VS6 Enterprise install on this machine has
+    # neither of these, so they must never gate a build.
+    if (-not (Test-Path -LiteralPath 'HKCU:\SOFTWARE\Microsoft\VisualStudio\6.0')) {
+        $notes.Add('no HKCU\SOFTWARE\Microsoft\VisualStudio\6.0 (per-user IDE key)')
+    }
     $installed = $false
     foreach ($root in @(
         'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
@@ -98,16 +103,19 @@ function Get-VB6EditionState {
     )) {
         foreach ($entry in (Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
             $name = (Get-ItemProperty -LiteralPath $entry.PSPath -ErrorAction SilentlyContinue).DisplayName
-            if ($name -and ($name -match 'Visual Basic 6|Visual Studio 6')) { $installed = $true }
+            if ($name -and ($name -match 'Visual Basic 6|Visual Studio 6\.0')) { $installed = $true }
         }
     }
-    if (-not $installed) {
-        $reasons.Add('No "Visual Basic 6" / "Visual Studio 6" uninstall entry: the product was copied, not installed.')
-    }
+    if (-not $installed) { $notes.Add('no Visual Studio 6.0 uninstall entry') }
 
-    $canCompile = ($reasons.Count -eq 0)
-    $summary = 'registered, compiler available'
-    if (-not $canCompile) { $summary = 'unregistered (VB6 will report Working Model Edition)' }
+    $canCompile = ($blockers.Count -eq 0)
+    if ($canCompile) {
+        $summary = 'registered, compiler available'
+        if ($notes.Count -gt 0) { $summary += ' (' + ($notes -join '; ') + ')' }
+    }
+    else {
+        $summary = 'not registered for compiling'
+    }
 
     return [pscustomobject]@{
         CanCompile = $canCompile
@@ -115,7 +123,8 @@ function Get-VB6EditionState {
         ProductDir = $productDir
         Toolchain  = $toolchain
         Installed  = $installed
-        Reasons    = @($reasons)
+        Reasons    = @($blockers)
+        Notes      = @($notes)
     }
 }
 

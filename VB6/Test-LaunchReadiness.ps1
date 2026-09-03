@@ -112,27 +112,23 @@ function Get-CompilerRegistrationState {
     #>
     $reasons = [System.Collections.Generic.List[string]]::new()
 
+    # A ProductDir plus the native toolchain is what actually enables /make.
+    # The per-user key and the uninstall entry are not reliable: a VS6
+    # Enterprise install that compiles fine on this machine has neither.
     $setupKey = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\6.0\Setup\Microsoft Visual Basic'
     $productDir = $null
     if (Test-Path -LiteralPath $setupKey) {
         $productDir = (Get-ItemProperty -LiteralPath $setupKey -ErrorAction SilentlyContinue).ProductDir
     }
-    if (-not $productDir) { $reasons.Add('setup key has no ProductDir') }
-    if (-not (Test-Path -LiteralPath 'HKCU:\SOFTWARE\Microsoft\VisualStudio\6.0')) {
-        $reasons.Add('no per-user IDE registration')
-    }
+    if (-not $productDir) { $reasons.Add('setup key has no ProductDir (VB6 setup never ran)') }
 
-    $found = $false
-    foreach ($root in @(
-        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
-        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
-    )) {
-        foreach ($entry in (Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
-            $name = (Get-ItemProperty -LiteralPath $entry.PSPath -ErrorAction SilentlyContinue).DisplayName
-            if ($name -and ($name -match 'Visual Basic 6|Visual Studio 6')) { $found = $true }
+    $vbDir = $productDir
+    if (-not $vbDir) { $vbDir = 'C:\Program Files (x86)\Microsoft Visual Studio\VB98' }
+    foreach ($tool in @('LINK.EXE', 'C2.EXE')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $vbDir $tool) -PathType Leaf)) {
+            $reasons.Add("$tool is missing from $vbDir")
         }
     }
-    if (-not $found) { $reasons.Add('no Visual Basic 6 uninstall entry') }
 
     return [pscustomobject]@{ Registered = ($reasons.Count -eq 0); Reasons = @($reasons) }
 }
@@ -211,7 +207,7 @@ if (-not $comHiveWritable) {
     $warnings.Add('This token cannot write the machine COM hive, so opening the project in the IDE will fail with "Error accessing the system registry". Use VB6\Start-VB6.ps1, which runs the IDE elevated.')
 }
 if (-not $compilerState.Registered) {
-    $warnings.Add("VB6 was never installed by its setup program ($($compilerState.Reasons -join '; ')), so /make answers 'No make available in the Working Model Edition'. Run the setup program from your licensed VB6 media to enable the compiler.")
+    $warnings.Add("The VB6 compiler is not enabled ($($compilerState.Reasons -join '; ')), so /make answers 'No make available in the Working Model Edition'. Run the setup program from your licensed VB6 media.")
 }
 
 Write-Host ''

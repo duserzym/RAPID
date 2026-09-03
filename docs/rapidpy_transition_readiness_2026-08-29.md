@@ -16,102 +16,114 @@ Two things gate the replacement claim:
 
 1. physical acceptance on the RAPID system (see
    `docs/rapid_hardware_acceptance_procedure_2026-08-29.md`);
-2. the VB6 environment gates below, which still prevent building or running the
-   legacy application for side-by-side comparison.
+2. a no-communication runtime smoke test of the legacy application, which now
+   compiles on this computer (gates 1-3 closed 2026-09-03) but has not yet been
+   launched against a `Paleomag.ini`.
 
-## VB6 gate status on this computer (verified 2026-08-29)
+## VB6 gate status on this computer (updated 2026-09-03)
 
-The earlier version of this section was written before the English VB6 repair
-and is superseded. Each gate below was re-verified directly, read-only, without
-installing software, editing the registry, or rebooting.
+Superseded twice: first by the English VB6 repair, then on 2026-09-03 when the
+Visual Studio 6.0 Enterprise setup was finally run and the project compiled.
+Four of the six gates are now closed.
 
 ### Gate 1 — English IDE startup: **verified**
 
-- `C:\Program Files (x86)\Microsoft Visual Studio\VB98\VB6.EXE` is present,
-  file version `6.00.8176` (English RTM).
-- The IDE opens to the English New Project dialog and loads a small test
-  project without a startup error.
+- `C:\Program Files (x86)\Microsoft Visual Studio\VB98\VB6.EXE`, file version
+  `6.00.8176` (English RTM).
 - Mixed Simplified Chinese templates, T-SQL components, wizards, Common Tools
   binaries, Designer satellites, and five system components were replaced with
-  hash-matching English-media versions; the active VB6/Common/Designer trees
-  report no Chinese language metadata.
+  hash-matching English-media versions.
 - Displaced files are preserved at `C:\VB6-English-Repair-Backup-20260829-2`.
   **Do not delete that backup.**
-- The Paleomag project must currently be launched **as administrator** to avoid
-  `Error accessing the system registry` during design-time component loading.
 
-### Gate 2 — real `Paleomag v3.vbp` load: **blocked**
+### Gate 2 — real `Paleomag v3.vbp` load: **verified**
 
-`VB6/Test-LaunchReadiness.ps1` now reports only one missing dependency:
+The project compiles, which requires every form, module, class, and control to
+bind. Two things had to be resolved first.
+
+**`Error accessing the system registry` — root cause and fix.** This was never a
+project fault. While a project loads, the IDE registers the project's own type
+library and the licence keys for its licensed controls into the machine COM
+hive (`HKLM\SOFTWARE\Classes`, `...\Classes\Licenses`,
+`...\WOW6432Node\Classes`). A standard user token cannot write there — UAC hands
+even a member of Administrators a filtered token — and VB6 predates UAC, so it
+reports the registry error instead of requesting elevation.
+
+The fix is to run the IDE elevated. `VB6/Start-VB6.ps1` diagnoses the exact keys
+and self-elevates; `-Shortcut` writes a desktop shortcut with the elevation flag
+set. Granting the user account write access to `HKLM\SOFTWARE\Classes` was
+deliberately **not** done: it would let any process running as that user
+redirect COM registrations for every account on the machine, permanently.
+
+**`vbSendMail_v3.0.dll` — resolved.** Obtained from the operator's legacy archive
+at `F:\Paleomag2013\vbSendMail\vbSendMail.dll` (FreeVBCode.com, file version
+3.06.0005). Verified 32-bit and confirmed to carry type-library GUID
+`{332B82D3-3ED6-11D4-B1B5-00105AA5CCFF}` before installation, then copied to
+`C:\Windows\SysWOW64\vbSendMail_v3.0.dll` and registered. It registers type
+library **5.7**, exactly the version the project references.
+
+**`MSCOMCTL.OCX` — handled at build time, project unchanged.** The installed OCX
+(file version `6.01.9782`) registers type library **2.0**; the project asks for
+**2.2**, whose registry key is an empty stub with no `win32` payload. Rather
+than downgrade the committed reference and break machines that do have 2.2,
+`VB6/Build-VB6Project.ps1` writes `<name>.localbuild.vbp` with the substitution,
+compiles that, deletes it, and records the substitution in the build receipt.
+
+### Gate 3 — compiler edition and `/make`: **verified**
+
+Previously `/make` answered `No make available in the Working Model Edition`.
+The cause was that VB6 had never been installed: the `VB98` folder had been
+copied, so the setup key carried no `ProductDir` and VB6 fell back to its most
+restricted mode. The binaries all ran, including `LINK.EXE` and `C2.EXE`.
+
+Running the English Visual Studio 6.0 Enterprise setup (volume
+`VISUAL_BASIC_6`, `VS98ENT.STF`) registered
+`ProductDir = C:\Program Files (x86)\Microsoft Visual Studio\VB98`, and the
+compiler was enabled.
+
+First successful build, 2026-09-03:
 
 ```
-[MISSING FILE] vbSendMail_v3.0.dll
+Build of 'PALEOMAG2013.exe' succeeded.
 ```
 
-Every other referenced control resolves and is registered (`MSSTDFMT.DLL`,
-`msscript.ocx`, `MSDERUN.DLL`, `comdlg32.ocx`, `comctl32.ocx`, `mscomm32.ocx`,
-`MSFLXGRD.OCX`, `mshflxgd.ocx`, `MSCHRT20.OCX`, `TABCTL32.OCX`, `comct332.ocx`,
-`RICHTX32.OCX`, `MSCOMCTL.OCX`).
+`build\vb6\PALEOMAG2013.exe` — 1,736,704 bytes, 32-bit i386, file version
+`3.01.0009`, product "Paleomagnetic Magnetometer Control System 2013".
+Full evidence in `build\vb6\vb6-build-receipt.json`.
 
-Two separate blockers remain for an actual project load:
+Note for anyone writing preflight checks: the per-user key
+`HKCU\SOFTWARE\Microsoft\VisualStudio\6.0` and a "Visual Studio 6.0" uninstall
+entry are **not** reliable indicators. This installation compiles with neither.
+`ProductDir` plus the presence of `LINK.EXE`/`C2.EXE` is what actually predicts
+`/make`.
 
-- **`MSCOMCTL.OCX` type-library version.** The project requires
-  `Object={831FDD16-0C5C-11D2-A9FC-0000F8754DA1}#2.2#0; MSCOMCTL.OCX`. The
-  installed `C:\Windows\SysWOW64\MSCOMCTL.OCX` is file version `6.01.9782` and
-  registers type library **2.0** only. The registry does contain a `2.2` key
-  under that TypeLib GUID, but it is an **empty stub**: it has no default value
-  and no `2.2\0\win32` path, so nothing resolves. Only `2.0` has
-  `2.0\0\win32 = C:\Windows\SysWow64\MSCOMCTL.OCX`
-  (`Microsoft Windows Common Controls 6.0 (SP6)`).
-  A **disposable copy** of the project loaded completely when only that
-  reference was changed from `2.2` to `2.0`. The repository project was
-  deliberately left unchanged. Do not downgrade the committed reference and do
-  not alias the type library without explicit user approval and cross-machine
-  compatibility evidence.
-- **`vbSendMail_v3.0.dll` is missing.** The project references
-  `{332B82D3-3ED6-11D4-B1B5-00105AA5CCFF}#5.7#0 ... vbSendMail_v3.0.dll`, and
-  `VB6/README.txt` documents installing and registering it. It is not in this
-  repository and never was: `git log --all --diff-filter=A -- "*vbSendMail*"`
-  returns nothing, and only the consuming form `VB6/frmSendMail.frm` is
-  present. Obtain it from the authorized legacy RAPID archive or the original
-  licensed/source package, verify it, and register the 32-bit COM server. Do
-  not use generic DLL-download sites.
+### Gate 4 — Service Pack 6: **not applied, and not required for the build**
 
-### Gate 3 — compiler edition and `/make`: **blocked**
+The IDE remains `6.00.8176` (RTM); the runtime `MSVBVM60.DLL` is `6.00.9848`
+(SP6-era). The build above succeeded on the RTM IDE, so SP6 is no longer a
+blocker for producing an EXE. Applying the legitimate English base SP6 and the
+current signed Microsoft rollup is still worth doing for the security fixes.
+Do not extract and overwrite OCXs to evade installer prerequisites.
 
-- `VB6.EXE /make` reports `No make available in the Working Model Edition`.
-- Read-only registry evidence is consistent with an incomplete or inconsistent
-  edition/licence registration:
-  `HKLM\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\6.0\Setup\Microsoft Visual Basic`
-  exists but carries **no values** (no `ProductDir`, no edition record), and
-  `HKCU\SOFTWARE\Microsoft\VisualStudio\6.0` does not exist.
-- The English Enterprise edition must be registered from legitimate licensed
-  media. Do not bypass licensing, invent a product key, or modify
-  licence-related registry data.
+### Gate 5 — no-communication runtime smoke test: **not yet run**
 
-### Gate 4 — Service Pack 6: **blocked**
-
-- IDE `VB6.EXE` is `6.00.8176` — **RTM, not SP6** (an SP6 IDE reports
-  `6.00.9782`).
-- The runtime `C:\Windows\SysWOW64\MSVBVM60.DLL` is `6.00.9848`, i.e. an SP6-era
-  redistributable runtime. Runtime and IDE are therefore mismatched.
-- Microsoft's signed `VB60SP6-KB2708437-x86-ENU.msi` refused with exit `1603`
-  because the base SP6 is absent. Obtain the legitimate English base SP6
-  package first, then apply the current signed Microsoft common-controls /
-  security rollup with restart disabled. Do not extract and overwrite OCXs to
-  evade installer prerequisites.
-
-### Gate 5 — no-communication runtime smoke test: **blocked**
-
-Blocked behind gates 2–4. No `PALEOMAG2013.exe` / `PALEOMAG.exe` exists on this
-machine and the project cannot be compiled, so no form-loading or
-no-communication runtime test has been performed. **IDE startup is not compile
-verification and is not runtime verification.**
+The EXE exists but has not been launched. It needs a `Paleomag.ini` before it
+will start: `Sub Main` in `VB6/modProg.bas` reads the INI path from
+`GetSetting(App.EXEName, "Settings", "INIFile", ...)` and, on first run, opens a
+file dialog to choose one, then remembers it in the registry. Point it at the
+lab's real `Paleomag.ini`, or at a copy of `VB6/Defaults.ini` for a
+no-communication smoke test.
 
 ### Gate 6 — physical RAPID-system test: **not attempted**
 
-No hardware was connected or actuated. The executable procedure and evidence
-schema are in `docs/rapid_hardware_acceptance_procedure_2026-08-29.md`.
+No hardware was connected or actuated. The procedure and evidence schema are in
+`docs/rapid_hardware_acceptance_procedure_2026-08-29.md`.
+
+### Tooling
+
+`VB6/LAUNCH-AND-BUILD.md` documents the four scripts:
+`Test-LaunchReadiness.ps1`, `Find-VB6Projects.ps1`, `Start-VB6.ps1`,
+`Install-VB6Dependency.ps1`, and `Build-VB6Project.ps1`.
 
 Re-run the preflight from the repository root:
 
@@ -197,8 +209,10 @@ explicit hardware operation, never a silent accept.
    changer pickup/drop-off, vacuum interlocks, emergency halt, timeouts, and
    recovery to a known safe state. RapidPy and VB6 must never own the same COM
    port at the same time.
-2. **Side-by-side output parity against VB6.** Blocked until the legacy
-   application can be built or a known-good executable is available.
+2. **Side-by-side output parity against VB6.** The legacy application now
+   builds on this computer (`build\vb6\PALEOMAG2013.exe`, 2026-09-03), so this
+   comparison is unblocked once both applications can run against the same
+   reference specimen.
 3. **Confirmed instrument settings.** Range letters, `ReadDelay`, ARC delay,
    and the lift positions above.
 
