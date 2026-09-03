@@ -111,6 +111,66 @@ substitution in `build\vb6\vb6-build-receipt.json`. The file is gitignored.
 Use `-KeepLocalProject` to inspect what was generated, or `-NoFixups` to compile
 the project exactly as committed.
 
+## "MSCOMCTL.OCX could not be loaded"
+
+This is a **design-time** error: it happens when the IDE opens the project, not
+when the compiled EXE runs.
+
+The committed project asks for `MSComctlLib` type library **2.2**:
+
+```
+Object={831FDD16-0C5C-11D2-A9FC-0000F8754DA1}#2.2#0; MSCOMCTL.OCX
+```
+
+This computer has `MSCOMCTL.OCX` file version `6.01.9782` (dated 2004), which
+registers type library **2.0**. A `2.2` key does exist under the type-library
+GUID, but it is an empty stub with no `win32` payload, so nothing resolves and
+the IDE reports that the control could not be loaded.
+
+Type library **2.2** comes from the post-MS12-027 builds of `MSCOMCTL.OCX`
+(file version 6.1.98.x, 2012 and later).
+
+### Immediate: open a remapped copy
+
+```bash
+powershell -ExecutionPolicy Bypass -File .\VB6\Start-VB6.ps1 -UseLocalCopy
+```
+
+This generates `<name>.localbuild.vbp` with the reference remapped to the
+version registered here and opens that instead. Edits you make land in the
+temporary copy, not the repository, so treat it as read-only browsing or copy
+your changes back deliberately.
+
+`-Diagnose` lists every component whose requested version is unavailable,
+without launching anything.
+
+### Durable: install the newer control
+
+Install the current signed Microsoft `MSCOMCTL.OCX` (6.1.98.x). It registers
+type library 2.2, so the committed project opens with no workaround, and it
+also replaces a 2004-era build that predates the MS12-027 fix.
+
+```bash
+powershell -ExecutionPolicy Bypass -File .\VB6\Install-VB6Dependency.ps1 -Source "<path to the newer MSCOMCTL.OCX>" -ExpectedTypeLibGuid "{831FDD16-0C5C-11D2-A9FC-0000F8754DA1}"
+```
+
+The installer backs up the existing file first and prints the type-library
+versions that appear afterwards, so you can confirm 2.2 registered.
+
+### Why the committed project still says 2.2
+
+Changing it to 2.0 would fix this machine and break every machine that has the
+patched control. The reference stays as committed, and the version difference
+is absorbed per machine by the build copy.
+
+### The compiled EXE is not affected
+
+A compiled VB6 EXE binds controls by CLSID, not by type-library version.
+`PALEOMAG2013.exe` embeds the MSCOMCTL ListView CLSID, which is registered here
+by the installed control, so the EXE runs regardless of the 2.0/2.2 mismatch.
+If you see this error from the EXE rather than the IDE, it is a different
+problem - check that the control is registered at all.
+
 ## "No make available in the Working Model Edition"
 
 This means the VB6 compiler is disabled because the **edition was never

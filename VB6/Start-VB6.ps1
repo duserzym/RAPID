@@ -37,6 +37,12 @@
     Create a desktop shortcut that opens the project with the elevation flag
     already set, so a double-click gives one UAC prompt and a working IDE.
 
+.PARAMETER UseLocalCopy
+    Open a machine-local copy of the project with its component references
+    remapped to the versions registered here, instead of the committed project.
+    Use this when the IDE reports that a control "could not be loaded".
+    Edits made in the IDE then land in the temporary copy, not the repository.
+
 .PARAMETER NoElevate
     Do not self-elevate. Useful to demonstrate the failure, or when the IDE is
     already running elevated.
@@ -52,6 +58,7 @@ param(
     [string]$Project,
     [switch]$Diagnose,
     [switch]$Shortcut,
+    [switch]$UseLocalCopy,
     [switch]$NoElevate,
     [switch]$RunAndExit
 )
@@ -128,6 +135,62 @@ function Resolve-ProjectPath {
     throw "No VB6 project matched '$Requested'. Run Find-VB6Projects.ps1 to list what is on this computer."
 }
 
+function Get-UnresolvableComponents {
+    <#
+        Report project components whose requested type-library version is not
+        registered on this computer. VB6 reports these as
+        "<file> could not be loaded" when the project opens.
+
+        Build-VB6Project.ps1 owns the substitution logic; this only needs to
+        know whether a mismatch exists, so it does the same registry lookup
+        without rewriting anything.
+    #>
+    param([string]$ProjectPath)
+
+    $problems = [System.Collections.Generic.List[object]]::new()
+    foreach ($line in [System.IO.File]::ReadAllLines($ProjectPath)) {
+        $guid = $null; $requested = $null; $file = $null
+        if ($line -match '^Object=\{([0-9A-Fa-f\-]+)\}#([0-9]+\.[0-9]+)#[0-9]+;\s*(.+)$') {
+            $guid = '{' + $Matches[1] + '}'; $requested = $Matches[2]; $file = $Matches[3]
+        }
+        elseif ($line -match '^Reference=\*\\G\{([0-9A-Fa-f\-]+)\}#([0-9]+\.[0-9]+)#[0-9]+#([^#]*)#(.*)$') {
+            $guid = '{' + $Matches[1] + '}'; $requested = $Matches[2]
+            $file = [System.IO.Path]::GetFileName($Matches[3])
+            if (-not $file) { $file = $Matches[4] }
+        }
+        if (-not $guid) { continue }
+
+        $available = [System.Collections.Generic.List[string]]::new()
+        # Must match the roots Build-VB6Project.ps1 searches, including the
+        # per-user hive: MsraLegacy.tlb is registered there and only there.
+        foreach ($root in @(
+            'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Classes\TypeLib',
+            'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Classes\WOW6432Node\TypeLib',
+            'Registry::HKEY_CURRENT_USER\SOFTWARE\Classes\TypeLib'
+        )) {
+            $base = Join-Path $root $guid
+            if (-not (Test-Path -LiteralPath $base)) { continue }
+            foreach ($key in (Get-ChildItem -LiteralPath $base -ErrorAction SilentlyContinue)) {
+                $win32 = Join-Path $key.PSPath '0\win32'
+                if (-not (Test-Path -LiteralPath $win32)) { continue }
+                $payload = (Get-ItemProperty -LiteralPath $win32 -ErrorAction SilentlyContinue).'(default)'
+                if (-not $payload) { continue }
+                $onDisk = $payload
+                if ($onDisk -match '^(.*\.[A-Za-z0-9_]+)\\[0-9]+$') { $onDisk = $Matches[1] }
+                if (-not (Test-Path -LiteralPath $onDisk -PathType Leaf)) { continue }
+                if (-not $available.Contains($key.PSChildName)) { $available.Add($key.PSChildName) }
+            }
+        }
+        if (-not $available.Contains($requested)) {
+            $problems.Add([pscustomobject]@{
+                File = $file; Guid = $guid; Requested = $requested
+                Available = @($available)
+            })
+        }
+    }
+    return $problems
+}
+
 function Set-ShortcutRunAsAdmin {
     param([string]$LinkPath)
 
@@ -176,6 +239,37 @@ else {
     Write-Host 'Diagnosis: the machine COM hive is already writable by this token.'
 }
 
+$projectPath = $null
+try { $projectPath = Resolve-ProjectPath -Requested $Project }
+catch {
+    if (-not $Diagnose) { throw }
+    Write-Host ''
+    Write-Host ("Project:  {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+}
+
+$mismatches = @()
+if ($projectPath) {
+    Write-Host ''
+    Write-Host ("Project:  {0}" -f $projectPath)
+    $mismatches = @(Get-UnresolvableComponents -ProjectPath $projectPath)
+}
+if (@($mismatches).Count -gt 0) {
+    Write-Host ''
+    Write-Host 'Component version mismatch on this computer:' -ForegroundColor Yellow
+    foreach ($item in $mismatches) {
+        $have = '(none registered)'
+        if (@($item.Available).Count -gt 0) { $have = ($item.Available -join ', ') }
+        Write-Host ("  {0,-22} project wants {1}, registered here: {2}" -f $item.File, $item.Requested, $have)
+    }
+    Write-Host ''
+    Write-Host 'The IDE will report that these controls could not be loaded.' -ForegroundColor Yellow
+    if (-not $UseLocalCopy) {
+        Write-Host 'Re-run with -UseLocalCopy to open a remapped copy instead, or install the'
+        Write-Host 'component build that provides the requested version. Do not save the project'
+        Write-Host 'if the IDE offers to drop a control: that would rewrite the committed .vbp.'
+    }
+}
+
 if ($Diagnose) { exit 0 }
 
 if (-not $idePath) {
@@ -184,10 +278,25 @@ if (-not $idePath) {
     exit 1
 }
 
-$projectPath = Resolve-ProjectPath -Requested $Project
 $projectDir = Split-Path -Parent $projectPath
-Write-Host ''
-Write-Host ("Project:  {0}" -f $projectPath)
+
+if ($UseLocalCopy) {
+    $builder = Join-Path $PSScriptRoot 'Build-VB6Project.ps1'
+    if (-not (Test-Path -LiteralPath $builder -PathType Leaf)) {
+        throw "Build-VB6Project.ps1 is required for -UseLocalCopy but was not found."
+    }
+    # Reuse the build script's substitution logic rather than duplicating it.
+    & $builder -Project $projectPath -PlanOnly -KeepLocalProject | Out-Null
+    $localProject = Join-Path (Split-Path -Parent $projectPath) `
+        ([System.IO.Path]::GetFileNameWithoutExtension($projectPath) + '.localbuild.vbp')
+    if (-not (Test-Path -LiteralPath $localProject -PathType Leaf)) {
+        throw "Could not generate a machine-local project copy."
+    }
+    $projectPath = $localProject
+    Write-Host ''
+    Write-Host ("Opening the machine-local copy instead: {0}" -f $projectPath) -ForegroundColor Cyan
+    Write-Host 'Edits you make in the IDE land in this copy, not the committed project.' -ForegroundColor Cyan
+}
 
 # ------------------------------------------------------------------ shortcut
 if ($Shortcut) {
@@ -216,6 +325,7 @@ if ((-not $elevated) -and (-not $NoElevate)) {
         '-Project', ('"' + $projectPath + '"')
     )
     if ($RunAndExit) { $arguments += '-RunAndExit' }
+    if ($UseLocalCopy) { $arguments += '-UseLocalCopy' }
     try {
         Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -Verb RunAs | Out-Null
         exit 0
