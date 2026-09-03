@@ -7,7 +7,7 @@ Four scripts live beside this file. Run them from the repository root.
 | `Test-LaunchReadiness.ps1` | One-shot preflight: dependencies, registry access, compiler registration |
 | `Find-VB6Projects.ps1` | Finds every `.vbp` on the computer and caches the list |
 | `Start-VB6.ps1` | Opens a project in the IDE **elevated**, which is what avoids the registry error |
-| `Install-VB6Dependency.ps1` | Verifies and registers a legacy 32-bit component from an archive |
+| `Install-VB6Dependency.ps1` | Reads a component's embedded type library; verifies and registers it |
 | `Build-VB6Project.ps1` | Compiles to an EXE, with machine-local reference fix-ups |
 
 ## "Error accessing the system registry"
@@ -122,13 +122,36 @@ The committed project asks for `MSComctlLib` type library **2.2**:
 Object={831FDD16-0C5C-11D2-A9FC-0000F8754DA1}#2.2#0; MSCOMCTL.OCX
 ```
 
-This computer has `MSCOMCTL.OCX` file version `6.01.9782` (dated 2004), which
-registers type library **2.0**. A `2.2` key does exist under the type-library
-GUID, but it is an empty stub with no `win32` payload, so nothing resolves and
-the IDE reports that the control could not be loaded.
+If the control installed on the machine embeds type library **2.0**, the IDE
+cannot bind it and reports that the control could not be loaded. A `2.2` key
+may still exist under the type-library GUID as an empty stub with no `win32`
+payload; that resolves to nothing and does not help.
 
-Type library **2.2** comes from the post-MS12-027 builds of `MSCOMCTL.OCX`
-(file version 6.1.98.x, 2012 and later).
+### File version is not type-library version
+
+These are independent numbers, and only the second one matters to a `.vbp`:
+
+| Component | File version | Type library |
+|---|---|---|
+| `MSCOMCTL.OCX` (2004) | 6.01.9782 | 2.0 |
+| `MSCOMCTL.OCX` (2005) | 6.01.9786 | 2.0 |
+| `MSCOMCTL.OCX` post-MS12-027 | 6.1.98.x | **2.2** |
+| `vbSendMail_v3.0.dll` | 3.06.0005 | 5.7 |
+
+Swapping one 6.01.97xx build for another does not change anything: both embed
+2.0. Only the 2012-and-later 6.1.98.x builds embed 2.2.
+
+### Check a candidate before installing it
+
+Read the type library straight out of any component, registering nothing:
+
+```bash
+powershell -ExecutionPolicy Bypass -File .\VB6\Install-VB6Dependency.ps1 -Source "<path to MSCOMCTL.OCX>" -WhatIfOnly
+```
+
+It prints the embedded GUID, name, and version. If it does not say
+`MSComctlLib version 2.2`, that file will not satisfy the project reference,
+whatever its file version says.
 
 ### Immediate: open a remapped copy
 
@@ -144,11 +167,11 @@ your changes back deliberately.
 `-Diagnose` lists every component whose requested version is unavailable,
 without launching anything.
 
-### Durable: install the newer control
+### Durable: install a 2.2 control
 
 Install the current signed Microsoft `MSCOMCTL.OCX` (6.1.98.x). It registers
 type library 2.2, so the committed project opens with no workaround, and it
-also replaces a 2004-era build that predates the MS12-027 fix.
+also replaces a build that predates the MS12-027 fix.
 
 ```bash
 powershell -ExecutionPolicy Bypass -File .\VB6\Install-VB6Dependency.ps1 -Source "<path to the newer MSCOMCTL.OCX>" -ExpectedTypeLibGuid "{831FDD16-0C5C-11D2-A9FC-0000F8754DA1}"
@@ -167,9 +190,9 @@ is absorbed per machine by the build copy.
 
 A compiled VB6 EXE binds controls by CLSID, not by type-library version.
 `PALEOMAG2013.exe` embeds the MSCOMCTL ListView CLSID, which is registered here
-by the installed control, so the EXE runs regardless of the 2.0/2.2 mismatch.
-If you see this error from the EXE rather than the IDE, it is a different
-problem - check that the control is registered at all.
+by the installed control, so the EXE builds and runs regardless of the 2.0/2.2
+mismatch. If you see this error from the EXE rather than the IDE, it is a
+different problem - check that the control is registered at all.
 
 ## "No make available in the Working Model Edition"
 

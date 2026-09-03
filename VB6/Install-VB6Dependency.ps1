@@ -15,6 +15,12 @@
         be registered by mistake;
       * an existing target file is backed up before it is replaced.
 
+    It also reads the type-library version embedded in the component before
+    installing anything, so you can tell whether a candidate file will satisfy
+    a project reference. That is the number the .vbp has to match, and it is
+    not the same as the file version: MSCOMCTL.OCX 6.01.9782 and 6.01.9786 both
+    embed type library 2.0, while the post-MS12-027 builds (6.1.98.x) embed 2.2.
+
     Registration is machine-wide, so the script elevates. It reports the
     type-library versions that appear afterwards, which is what the VB6
     project reference has to match.
@@ -42,6 +48,11 @@
         -Source 'F:\Paleomag2013\vbSendMail\vbSendMail.dll' `
         -TargetName 'vbSendMail_v3.0.dll' `
         -ExpectedTypeLibGuid '{332B82D3-3ED6-11D4-B1B5-00105AA5CCFF}'
+
+.EXAMPLE
+    # Check what type-library version a candidate control provides, changing nothing.
+    powershell -ExecutionPolicy Bypass -File .\VB6\Install-VB6Dependency.ps1 `
+        -Source 'C:\Downloads\MSCOMCTL.OCX' -WhatIfOnly
 #>
 [CmdletBinding()]
 param(
@@ -82,6 +93,66 @@ function Get-PeMachine {
         }
     }
     finally { $stream.Dispose() }
+}
+
+function Get-EmbeddedTypeLib {
+    <#
+        Read the type-library GUID and version out of a component without
+        registering it (REGKIND_NONE). VB6 components are 32-bit, so the probe
+        runs in the 32-bit PowerShell host regardless of who called us.
+
+        This is the number a .vbp reference has to match. It is independent of
+        the file version.
+    #>
+    param([string]$FilePath)
+
+    $probeScript = Join-Path ([System.IO.Path]::GetTempPath()) ('rapid-tlbprobe-' + [Guid]::NewGuid().ToString('N') + '.ps1')
+    $body = @'
+$src = @"
+using System;
+using System.Runtime.InteropServices;
+using CT = System.Runtime.InteropServices.ComTypes;
+public static class TlbProbe {
+    [DllImport("oleaut32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    private static extern void LoadTypeLibEx(string file, int regKind, out CT.ITypeLib tlb);
+    public static string Describe(string file) {
+        CT.ITypeLib tlb;
+        LoadTypeLibEx(file, 2, out tlb);
+        IntPtr p;
+        tlb.GetLibAttr(out p);
+        try {
+            CT.TYPELIBATTR a = (CT.TYPELIBATTR)Marshal.PtrToStructure(p, typeof(CT.TYPELIBATTR));
+            string name, doc, help; int ctx;
+            tlb.GetDocumentation(-1, out name, out doc, out ctx, out help);
+            return a.guid.ToString("B").ToUpper() + "|" + a.wMajorVerNum + "." + a.wMinorVerNum + "|" + name + "|" + doc;
+        } finally { tlb.ReleaseTLibAttr(p); }
+    }
+}
+"@
+Add-Type -TypeDefinition $src -Language CSharp -IgnoreWarnings
+try { [TlbProbe]::Describe($args[0]) } catch { "ERROR|" + $_.Exception.Message }
+'@
+    Set-Content -LiteralPath $probeScript -Value $body -Encoding UTF8
+
+    $host32 = Join-Path $env:SystemRoot 'SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $host32 -PathType Leaf)) {
+        $host32 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    }
+    try {
+        $raw = & $host32 -NoProfile -ExecutionPolicy Bypass -File $probeScript $FilePath 2>&1 | Select-Object -Last 1
+    }
+    catch { $raw = 'ERROR|' + $_.Exception.Message }
+    finally { Remove-Item -LiteralPath $probeScript -Force -ErrorAction SilentlyContinue }
+
+    $text = [string]$raw
+    if ((-not $text) -or $text.StartsWith('ERROR|')) {
+        return [pscustomobject]@{ Ok = $false; Detail = $text -replace '^ERROR\|', '' }
+    }
+    $parts = $text.Split('|')
+    if ($parts.Count -lt 4) { return [pscustomobject]@{ Ok = $false; Detail = $text } }
+    return [pscustomobject]@{
+        Ok = $true; Guid = $parts[0]; Version = $parts[1]; Name = $parts[2]; Description = $parts[3]
+    }
 }
 
 function Test-GuidInBinary {
@@ -156,6 +227,17 @@ if ($machine -ne 'i386') {
     Write-Host "REFUSED: VB6 needs a 32-bit component; this image is '$machine'." -ForegroundColor Red
     exit 1
 }
+
+$embedded = Get-EmbeddedTypeLib -FilePath $Source
+if ($embedded.Ok) {
+    Write-Host ("  Type library: {0} version {1}  ({2})" -f $embedded.Name, $embedded.Version, $embedded.Description)
+    Write-Host ("                {0}" -f $embedded.Guid)
+    Write-Host '  A .vbp reference must ask for exactly this version.'
+}
+else {
+    Write-Host ("  Type library: could not be read ({0})" -f $embedded.Detail) -ForegroundColor Yellow
+}
+Write-Host ''
 
 if ($ExpectedTypeLibGuid) {
     if (Test-GuidInBinary -FilePath $Source -Guid $ExpectedTypeLibGuid) {
