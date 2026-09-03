@@ -80,6 +80,63 @@ function Find-Dependency {
     return $null
 }
 
+function Test-Elevated {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
+}
+
+function Test-MachineComHiveWritable {
+    <#
+        VB6 writes the project's own type library and the licence keys for
+        licensed controls into the machine COM hive while a project loads. A
+        standard-user token cannot, and the IDE reports
+        "Error accessing the system registry".
+    #>
+    foreach ($sub in @('SOFTWARE\Classes', 'SOFTWARE\Classes\Licenses', 'SOFTWARE\WOW6432Node\Classes\CLSID')) {
+        try {
+            $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($sub, $true)
+            if ($null -eq $key) { continue }
+            $key.Close()
+        }
+        catch { return $false }
+    }
+    return $true
+}
+
+function Get-CompilerRegistrationState {
+    <#
+        Report whether VB6 was installed by its setup program. A copied VB98
+        folder runs the IDE but leaves the edition unregistered, and /make then
+        answers "No make available in the Working Model Edition".
+    #>
+    $reasons = [System.Collections.Generic.List[string]]::new()
+
+    $setupKey = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\6.0\Setup\Microsoft Visual Basic'
+    $productDir = $null
+    if (Test-Path -LiteralPath $setupKey) {
+        $productDir = (Get-ItemProperty -LiteralPath $setupKey -ErrorAction SilentlyContinue).ProductDir
+    }
+    if (-not $productDir) { $reasons.Add('setup key has no ProductDir') }
+    if (-not (Test-Path -LiteralPath 'HKCU:\SOFTWARE\Microsoft\VisualStudio\6.0')) {
+        $reasons.Add('no per-user IDE registration')
+    }
+
+    $found = $false
+    foreach ($root in @(
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+    )) {
+        foreach ($entry in (Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+            $name = (Get-ItemProperty -LiteralPath $entry.PSPath -ErrorAction SilentlyContinue).DisplayName
+            if ($name -and ($name -match 'Visual Basic 6|Visual Studio 6')) { $found = $true }
+        }
+    }
+    if (-not $found) { $reasons.Add('no Visual Basic 6 uninstall entry') }
+
+    return [pscustomobject]@{ Registered = ($reasons.Count -eq 0); Reasons = @($reasons) }
+}
+
 function Test-TypeLibraryRegistration {
     param([string]$TypeLibraryId)
 
@@ -107,6 +164,13 @@ Write-Host "Project:  $projectPath"
 Write-Host "Runtime:  $runtimePath"
 Write-Host "Compiled: $(if ($compiledPath) { $compiledPath } else { 'not found' })"
 Write-Host "VB6 IDE:  $(if ($idePath) { $idePath } else { 'not found' })"
+
+$elevated = Test-Elevated
+$comHiveWritable = Test-MachineComHiveWritable
+$compilerState = Get-CompilerRegistrationState
+Write-Host "Elevated: $elevated"
+Write-Host "COM hive: $(if ($comHiveWritable) { 'writable (design-time registration will succeed)' } else { 'NOT writable by this token' })"
+Write-Host "Compiler: $(if ($compilerState.Registered) { 'edition registered' } else { 'edition NOT registered (' + ($compilerState.Reasons -join '; ') + ')' })"
 Write-Host ''
 
 foreach ($name in $dependencyNames) {
@@ -142,15 +206,34 @@ if ($unregisteredDependencies.Count -gt 0) {
     $blockers.Add("Unregistered 32-bit VB6/ActiveX dependencies: $($unregisteredDependencies -join ', ')")
 }
 
+$warnings = [System.Collections.Generic.List[string]]::new()
+if (-not $comHiveWritable) {
+    $warnings.Add('This token cannot write the machine COM hive, so opening the project in the IDE will fail with "Error accessing the system registry". Use VB6\Start-VB6.ps1, which runs the IDE elevated.')
+}
+if (-not $compilerState.Registered) {
+    $warnings.Add("VB6 was never installed by its setup program ($($compilerState.Reasons -join '; ')), so /make answers 'No make available in the Working Model Edition'. Run the setup program from your licensed VB6 media to enable the compiler.")
+}
+
 Write-Host ''
 if ($blockers.Count -gt 0) {
     Write-Host 'BLOCKED: Paleomag cannot launch on this computer yet.' -ForegroundColor Red
     foreach ($blocker in $blockers) {
         Write-Host " - $blocker"
     }
+    if ($warnings.Count -gt 0) {
+        Write-Host ''
+        Write-Host 'Environment warnings:' -ForegroundColor Yellow
+        foreach ($warning in $warnings) { Write-Host " - $warning" }
+    }
     Write-Host ''
     Write-Host 'Install the VB6 IDE (to run source) or copy a known-good PALEOMAG2013.exe, then install/register the missing 32-bit dependencies with the 32-bit regsvr32 at C:\Windows\SysWOW64\regsvr32.exe.'
     exit 1
+}
+
+if ($warnings.Count -gt 0) {
+    Write-Host 'Environment warnings:' -ForegroundColor Yellow
+    foreach ($warning in $warnings) { Write-Host " - $warning" }
+    Write-Host ''
 }
 
 Write-Host 'READY: Required launch files are present.' -ForegroundColor Green

@@ -32,3 +32,9 @@ copilot_head.txt
 copilot_time.txt
 
 /tools/ADwin_scripts
+
+# ── VB6 machine-local build artefacts ─────────────────────────────────────────
+# Build-VB6Project.ps1 writes a per-machine copy of the .vbp with reference
+# substitutions for whatever is registered here. The committed project stays
+# canonical; the local copy must never be committed.
+*.localbuild.vbp
