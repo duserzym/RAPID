@@ -15,6 +15,9 @@
         be registered by mistake;
       * an existing target file is backed up before it is replaced.
 
+    After replacing an OCX it also deletes the sibling .oca type-information
+    cache, which otherwise still describes the control that was there before.
+
     It also reads the type-library version embedded in the component before
     installing anything, so you can tell whether a candidate file will satisfy
     a project reference. That is the number the .vbp has to match, and it is
@@ -280,6 +283,15 @@ if (Test-Path -LiteralPath $targetPath -PathType Leaf) {
 
 Copy-Item -LiteralPath $Source -Destination $targetPath -Force
 Write-Host ("  Copied to {0}" -f $targetPath)
+
+# VB6 caches an OCX's extended type information in a sibling .oca file. After
+# the control is replaced that cache describes the old type library, and the
+# IDE will happily keep using it. Remove it so VB6 regenerates.
+$ocaPath = [System.IO.Path]::ChangeExtension($targetPath, '.oca')
+if (Test-Path -LiteralPath $ocaPath -PathType Leaf) {
+    Remove-Item -LiteralPath $ocaPath -Force -ErrorAction SilentlyContinue
+    Write-Host ("  Removed stale type-info cache {0}" -f (Split-Path -Leaf $ocaPath))
+}
 
 $regsvr = Join-Path $env:SystemRoot 'SysWOW64\regsvr32.exe'
 if (-not (Test-Path -LiteralPath $regsvr -PathType Leaf)) {
