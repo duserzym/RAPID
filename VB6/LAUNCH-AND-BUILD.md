@@ -99,9 +99,9 @@ Add `-PlanOnly` to see the reference resolution without compiling or elevating.
 
 ### The machine-local project copy
 
-Component version numbers differ between machines. This computer, for example,
-has `MSCOMCTL.OCX` registering type library **2.0**, while the committed project
-asks for **2.2**.
+Component version numbers differ between machines. A machine whose
+`MSCOMCTL.OCX` registers type library 2.0, for instance, cannot bind the 2.2
+reference the committed project carries.
 
 Rather than edit the committed `.vbp` — which would break every other machine
 that does have 2.2 — the build writes `<name>.localbuild.vbp` beside it with the
@@ -111,88 +111,110 @@ substitution in `build\vb6\vb6-build-receipt.json`. The file is gitignored.
 Use `-KeepLocalProject` to inspect what was generated, or `-NoFixups` to compile
 the project exactly as committed.
 
+On this computer no substitution is needed any more: since MSCOMCTL 6.01.9846
+was installed the plan is clean and `-NoFixups` builds succeed. The machinery
+stays for machines that still carry an older control.
+
 ## "MSCOMCTL.OCX could not be loaded"
 
-This is a **design-time** error: it happens when the IDE opens the project, not
-when the compiled EXE runs.
+**Resolved on this computer, 2026-09-03.** `MSCOMCTL.OCX` 6.01.9846 is
+installed and registers type library 2.2, so the committed project opens and
+builds with no substitution. What follows is the reasoning, for the next
+machine.
 
-The committed project asks for `MSComctlLib` type library **2.2**:
+This is a **design-time** error: it happens when the IDE opens the project, not
+when the compiled EXE runs. The committed project asks for `MSComctlLib` type
+library **2.2**:
 
 ```
 Object={831FDD16-0C5C-11D2-A9FC-0000F8754DA1}#2.2#0; MSCOMCTL.OCX
 ```
 
-If the control installed on the machine embeds type library **2.0**, the IDE
-cannot bind it and reports that the control could not be loaded. A `2.2` key
-may still exist under the type-library GUID as an empty stub with no `win32`
-payload; that resolves to nothing and does not help.
+If the installed control embeds an older type library the IDE cannot bind it. A
+`2.2` key may exist under the type-library GUID as an empty stub with no
+`win32` payload; that resolves to nothing and does not help.
 
 ### File version is not type-library version
 
-These are independent numbers, and only the second one matters to a `.vbp`:
+These are independent numbers, and only the second one matters to a `.vbp`.
+The type-library version moved three times across otherwise similar-looking
+builds:
 
-| Component | File version | Type library |
-|---|---|---|
-| `MSCOMCTL.OCX` (2004) | 6.01.9782 | 2.0 |
-| `MSCOMCTL.OCX` (2005) | 6.01.9786 | 2.0 |
-| `MSCOMCTL.OCX` post-MS12-027 | 6.1.98.x | **2.2** |
-| `vbSendMail_v3.0.dll` | 3.06.0005 | 5.7 |
+| Component | File version | Type library | Source |
+|---|---|---|---|
+| `MSCOMCTL.OCX` | 6.00.8177 | 2.0 | Original VB6 media |
+| `MSCOMCTL.OCX` | 6.01.9782 | 2.0 | 2004 |
+| `MSCOMCTL.OCX` | 6.01.9786 | 2.0 | 2005 |
+| `MSCOMCTL.OCX` | 6.01.9834 | **2.1** | KB2708437 (MS12-027) |
+| `MSCOMCTL.OCX` | **6.01.9846** | **2.2** | KB3096896 (MS16-004) |
+| `vbSendMail_v3.0.dll` | 3.06.0005 | 5.7 | legacy archive |
 
-Swapping one 6.01.97xx build for another does not change anything: both embed
-2.0. Only the 2012-and-later 6.1.98.x builds embed 2.2.
+Swapping one 6.01.97xx build for another changes nothing. Even the MS12-027
+build only reaches 2.1. **Only KB3096896 provides 2.2.**
 
-### Check a candidate before installing it
+### Check any candidate before installing it
 
-Read the type library straight out of any component, registering nothing:
+Read the type library straight out of a component, registering nothing:
 
 ```bash
 powershell -ExecutionPolicy Bypass -File .\VB6\Install-VB6Dependency.ps1 -Source "<path to MSCOMCTL.OCX>" -WhatIfOnly
 ```
 
-It prints the embedded GUID, name, and version. If it does not say
-`MSComctlLib version 2.2`, that file will not satisfy the project reference,
-whatever its file version says.
+If it does not say `MSComctlLib version 2.2`, that file will not satisfy the
+reference, whatever its file version says.
 
-### Immediate: open a remapped copy
+### Getting a 2.2 control
+
+`VB60SP6-KB3096896-x86-ENU.msi` from the Microsoft Download Center
+([details page](https://www.microsoft.com/en-us/download/details.aspx?id=50722)).
+Extract it without installing, so you can inspect and choose what to apply:
+
+```bash
+msiexec /a "VB60SP6-KB3096896-x86-ENU.msi" /qn TARGETDIR="C:\temp\kb3096896"
+```
+
+Then install **only** `SYSTEM\mscomctl.OCX`:
+
+```bash
+powershell -ExecutionPolicy Bypass -File .\VB6\Install-VB6Dependency.ps1 -Source "C:\temp\kb3096896\SYSTEM\mscomctl.OCX" -TargetName "MSCOMCTL.OCX" -ExpectedTypeLibGuid "{831FDD16-0C5C-11D2-A9FC-0000F8754DA1}"
+```
+
+**Do not install the `comctl32.ocx` from the same package.** The project asks
+for `ComctlLib` **1.3**, and the rollups ship 1.4 (KB2708437) and 1.5
+(KB3096896). Installing it trades one mismatch for another. Only apply the one
+control the project actually needs.
+
+The installer backs up the file it replaces, deletes the stale `.oca`
+type-information cache, and prints the type-library versions that appear
+afterwards.
+
+Note on verifying the download: the SHA-256 published in the 2016 KB article
+does not match the file Microsoft serves today, because the package was
+re-signed and re-released in November 2020. Check the Authenticode signature
+instead - it is timestamped, valid, and chains to Microsoft Root Certificate
+Authority 2011.
+
+### If you cannot get a 2.2 control
 
 ```bash
 powershell -ExecutionPolicy Bypass -File .\VB6\Start-VB6.ps1 -UseLocalCopy
 ```
 
-This generates `<name>.localbuild.vbp` with the reference remapped to the
-version registered here and opens that instead. Edits you make land in the
-temporary copy, not the repository, so treat it as read-only browsing or copy
-your changes back deliberately.
+That opens a copy with the reference remapped to whatever is registered.
+Builds already handle this automatically. Edits in the IDE land in the
+temporary copy, not the repository.
 
-`-Diagnose` lists every component whose requested version is unavailable,
-without launching anything.
+### Why the committed project says 2.2
 
-### Durable: install a 2.2 control
+2.2 is the version the project was authored against, and the version this
+computer now has. Downgrading it would break every machine with a patched
+control, and VB6 will not bind a lower minor version than the one requested -
+which is exactly why 2.0 and 2.1 both failed here.
 
-Install the current signed Microsoft `MSCOMCTL.OCX` (6.1.98.x). It registers
-type library 2.2, so the committed project opens with no workaround, and it
-also replaces a build that predates the MS12-027 fix.
+### The compiled EXE was never affected
 
-```bash
-powershell -ExecutionPolicy Bypass -File .\VB6\Install-VB6Dependency.ps1 -Source "<path to the newer MSCOMCTL.OCX>" -ExpectedTypeLibGuid "{831FDD16-0C5C-11D2-A9FC-0000F8754DA1}"
-```
-
-The installer backs up the existing file first and prints the type-library
-versions that appear afterwards, so you can confirm 2.2 registered.
-
-### Why the committed project still says 2.2
-
-Changing it to 2.0 would fix this machine and break every machine that has the
-patched control. The reference stays as committed, and the version difference
-is absorbed per machine by the build copy.
-
-### The compiled EXE is not affected
-
-A compiled VB6 EXE binds controls by CLSID, not by type-library version.
-`PALEOMAG2013.exe` embeds the MSCOMCTL ListView CLSID, which is registered here
-by the installed control, so the EXE builds and runs regardless of the 2.0/2.2
-mismatch. If you see this error from the EXE rather than the IDE, it is a
-different problem - check that the control is registered at all.
+A compiled VB6 EXE binds controls by CLSID, not type-library version.
+`PALEOMAG2013.exe` built and ran through all of this.
 
 ## "No make available in the Working Model Edition"
 

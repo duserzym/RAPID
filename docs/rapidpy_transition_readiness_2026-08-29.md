@@ -62,12 +62,25 @@ at `F:\Paleomag2013\vbSendMail\vbSendMail.dll` (FreeVBCode.com, file version
 `C:\Windows\SysWOW64\vbSendMail_v3.0.dll` and registered. It registers type
 library **5.7**, exactly the version the project references.
 
-**`MSCOMCTL.OCX` — handled at build time, project unchanged.** The installed OCX
-(file version `6.01.9782`) registers type library **2.0**; the project asks for
-**2.2**, whose registry key is an empty stub with no `win32` payload. Rather
-than downgrade the committed reference and break machines that do have 2.2,
-`VB6/Build-VB6Project.ps1` writes `<name>.localbuild.vbp` with the substitution,
-compiles that, deletes it, and records the substitution in the build receipt.
+**`MSCOMCTL.OCX` — resolved 2026-09-03.** The project asks for type library
+**2.2**. Neither 6.01.9782 nor 6.01.9786 provides it: both embed 2.0, and even
+the MS12-027 build (6.01.9834, KB2708437) only reaches **2.1**. Only
+**KB3096896** (MS16-004) ships `mscomctl.OCX` **6.01.9846**, which embeds 2.2.
+
+That package was downloaded from the Microsoft Download Center, verified by
+Authenticode (valid, timestamped November 2020, chaining to Microsoft Root
+Certificate Authority 2011), extracted with an administrative install, and only
+its `mscomctl.OCX` was installed. The `comctl32.ocx` in the same package embeds
+`ComctlLib` **1.5** while the project asks for **1.3**, so applying it would
+have traded one mismatch for another.
+
+Type library 2.2 is now registered against
+`C:\Windows\SysWOW64\MSCOMCTL.OCX`, the previous control is kept as
+`MSCOMCTL.OCX.bak-20260903-153324`, and the project now compiles with
+`-NoFixups`: zero substitutions, zero unresolved references.
+
+The build-time substitution machinery in `VB6/Build-VB6Project.ps1` remains for
+machines that still carry an older control.
 
 ### Gate 3 — compiler edition and `/make`: **verified**
 
@@ -89,7 +102,9 @@ Build of 'PALEOMAG2013.exe' succeeded.
 
 `build\vb6\PALEOMAG2013.exe` — 1,736,704 bytes, 32-bit i386, file version
 `3.01.0009`, product "Paleomagnetic Magnetometer Control System 2013".
-Full evidence in `build\vb6\vb6-build-receipt.json`.
+Full evidence in `build\vb6\vb6-build-receipt.json`. Since the MSCOMCTL fix
+recorded under gate 2, the project builds with `-NoFixups` — no machine-local
+substitution at all.
 
 Note for anyone writing preflight checks: the per-user key
 `HKCU\SOFTWARE\Microsoft\VisualStudio\6.0` and a "Visual Studio 6.0" uninstall
@@ -121,7 +136,7 @@ No hardware was connected or actuated. The procedure and evidence schema are in
 
 ### Tooling
 
-`VB6/LAUNCH-AND-BUILD.md` documents the four scripts:
+`VB6/LAUNCH-AND-BUILD.md` documents the five scripts:
 `Test-LaunchReadiness.ps1`, `Find-VB6Projects.ps1`, `Start-VB6.ps1`,
 `Install-VB6Dependency.ps1`, and `Build-VB6Project.ps1`.
 
