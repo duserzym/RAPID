@@ -45,6 +45,24 @@ MANAGED_PINS = (7, 8, 12, 13)
 STATUS_RE = re.compile(r"^\d+=[01](\s+\d+=[01])*$")
 
 
+class WrongDevice(Exception):
+    """The port opened, but whatever answered is not the bench board.
+
+    Worth failing on rather than warning about: two devices can be assigned the
+    same COM number, in which case this port belongs to something else on the
+    bench -- on this system, a serial card wired to lab instruments. Writing
+    pin commands into that is not acceptable.
+    """
+
+    def __init__(self, port_name: str, reply: str) -> None:
+        self.port_name = port_name
+        self.reply = reply
+        super().__init__(
+            f"{port_name} answered {reply!r} rather than RAPID-AUX-TEST"
+            if reply else f"{port_name} did not answer *IDN?"
+        )
+
+
 class Board:
     """One serial connection, guarded so concurrent requests cannot interleave."""
 
@@ -63,6 +81,9 @@ class Board:
         self._serial.reset_input_buffer()
 
         self.idn = self.command("*IDN?")
+        if not self.idn.startswith("RAPID-AUX-TEST"):
+            self._serial.close()
+            raise WrongDevice(port_name, self.idn)
         self.command("ALL 0")
 
     def _note(self, text: str) -> None:
@@ -248,8 +269,29 @@ def main() -> int:
             print(f"  {info.device:8} {info.description}", file=sys.stderr)
         return 2
 
+    claimants = [dev for dev, com in _serialcomm().items()
+                 if com.upper() == port_name.upper()]
+    if len(claimants) > 1:
+        print(f"{port_name} is claimed by more than one device:", file=sys.stderr)
+        for dev in claimants:
+            print(f"    {dev}", file=sys.stderr)
+        print(file=sys.stderr)
+        print("Whichever registered first wins, so this port may not be the", file=sys.stderr)
+        print("board at all. Give each device its own number in Device Manager", file=sys.stderr)
+        print("before going further.", file=sys.stderr)
+        return 2
+
     try:
         Handler.board = Board(port_name)
+    except WrongDevice as exc:
+        print(f"Refusing to drive {port_name}: {exc}", file=sys.stderr)
+        print(file=sys.stderr)
+        print("Either aux_test.ino is not loaded, or this COM number belongs to", file=sys.stderr)
+        print("a different device. The device map is:", file=sys.stderr)
+        print(file=sys.stderr)
+        for device, com in _serialcomm().items():
+            print(f"    {device:24} {com}", file=sys.stderr)
+        return 2
     except serial.SerialException as exc:
         print(f"Could not open {port_name}: {exc}", file=sys.stderr)
         print(file=sys.stderr)
@@ -271,9 +313,7 @@ def main() -> int:
             print("Close the Arduino IDE's serial monitor and try again.", file=sys.stderr)
         return 2
 
-    print(f"Board:  {port_name}  {Handler.board.idn or '(no *IDN? reply)'}")
-    if not Handler.board.idn.startswith("RAPID-AUX-TEST"):
-        print("  Warning: unexpected *IDN? reply. Is aux_test.ino loaded?")
+    print(f"Board:  {port_name}  {Handler.board.idn}")
 
     server = ThreadingHTTPServer((args.host, args.http_port), Handler)
     print(f"Open:   http://{args.host}:{args.http_port}/")
