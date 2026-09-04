@@ -23,7 +23,7 @@
     --warn-soft: #F7E8DB;
 
     --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    --mono: ui-monospace, "Cascadia Mono", "Consolas", "SF Mono", Menlo, monospace;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
   }
 
   @media (prefers-color-scheme: dark) {
@@ -78,9 +78,6 @@
   }
   p { margin: 0; }
 
-  code, .mono { font-family: var(--mono); }
-
-  /* ---------- top bar ---------- */
   header {
     display: flex;
     align-items: center;
@@ -93,7 +90,6 @@
 
   .head-l { display: flex; flex-direction: column; gap: 3px; }
   .sub { font-size: 13px; color: var(--ink-3); font-family: var(--mono); }
-
   .head-r { display: flex; align-items: center; gap: 12px; }
 
   .status {
@@ -110,13 +106,7 @@
     white-space: nowrap;
   }
 
-  .dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: var(--ink-3);
-    flex: none;
-  }
-
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); flex: none; }
   .status.on { background: var(--accent-soft); color: var(--accent-ink); border-color: transparent; }
   .status.on .dot { background: var(--accent); }
   .status.err { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
@@ -133,22 +123,10 @@
     padding: 8px 16px;
     cursor: pointer;
   }
-
   button:hover:not(:disabled) { border-color: var(--ink-3); }
   button:disabled { opacity: .45; cursor: not-allowed; }
-
-  button.primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #FFFFFF;
-  }
-  @media (prefers-color-scheme: dark) {
-    button.primary { color: #0F1416; }
-  }
-
   button.danger { color: var(--warn); border-color: var(--warn); }
 
-  /* ---------- unsupported banner ---------- */
   .banner {
     background: var(--warn-soft);
     border-left: 3px solid var(--warn);
@@ -166,10 +144,10 @@
     border: 1px solid var(--line);
     border-radius: 3px;
     padding: .1em .4em;
+    font-family: var(--mono);
     font-size: 13px;
   }
 
-  /* ---------- pin grid ---------- */
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(196px, 1fr));
@@ -185,19 +163,10 @@
     flex-direction: column;
     gap: 13px;
   }
-
   .pin.high { border-color: var(--hot); background: var(--hot-soft); }
 
   .pin-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-
-  .pin-name {
-    font-family: var(--mono);
-    font-size: 26px;
-    font-weight: 600;
-    letter-spacing: -.02em;
-    line-height: 1;
-  }
-
+  .pin-name { font-family: var(--mono); font-size: 26px; font-weight: 600; letter-spacing: -.02em; line-height: 1; }
   .pin-note { font-size: 11.5px; color: var(--ink-3); text-align: right; line-height: 1.3; }
 
   .readout {
@@ -211,11 +180,8 @@
     text-align: center;
     font-variant-numeric: tabular-nums;
   }
-
   .pin.high .readout { background: var(--hot); color: #FFFFFF; }
-  @media (prefers-color-scheme: dark) {
-    .pin.high .readout { color: #1A1204; }
-  }
+  @media (prefers-color-scheme: dark) { .pin.high .readout { color: #1A1204; } }
   .pin.low .readout { background: var(--surface-2); color: var(--ink-2); }
   .pin.pending .readout { background: var(--surface-2); color: var(--ink-3); font-style: italic; }
 
@@ -237,8 +203,7 @@
     color: var(--ink-3);
     overflow: hidden;
   }
-
-  .sw span { flex: 1; text-align: center; z-index: 1; }
+  .sw span.lbl { flex: 1; text-align: center; z-index: 1; }
   .sw .knob {
     position: absolute;
     top: 3px; left: 3px;
@@ -249,13 +214,11 @@
     border: 1px solid var(--line-strong);
     transition: transform .12s ease;
   }
-  .sw[aria-checked="true"] .knob { transform: translateX(100%); border-color: var(--hot); background: var(--hot); }
   .sw[aria-checked="true"] { border-color: var(--hot); }
+  .sw[aria-checked="true"] .knob { transform: translateX(100%); border-color: var(--hot); background: var(--hot); }
   .sw:disabled { opacity: .45; cursor: not-allowed; }
-
   @media (prefers-reduced-motion: reduce) { .sw .knob { transition: none; } }
 
-  /* ---------- panels ---------- */
   .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 
   .panel {
@@ -268,13 +231,7 @@
     gap: 12px;
   }
 
-  dl.meter {
-    margin: 0;
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 7px 18px;
-    font-size: 14px;
-  }
+  dl.meter { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 7px 18px; font-size: 14px; }
   dl.meter dt { color: var(--ink-3); font-family: var(--mono); font-size: 12.5px; padding-top: 1px; }
   dl.meter dd { margin: 0; color: var(--ink-2); }
   dl.meter b { color: var(--ink); font-family: var(--mono); font-variant-numeric: tabular-nums; }
@@ -292,12 +249,8 @@
     overflow-y: auto;
     white-space: pre-wrap;
     word-break: break-word;
+    color: var(--ink-2);
   }
-
-  .l-tx { color: var(--accent-ink); }
-  .l-rx { color: var(--ink); }
-  .l-sys { color: var(--ink-3); }
-  .l-err { color: var(--warn); }
 
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 </style>
@@ -308,28 +261,26 @@
   <header>
     <div class="head-l">
       <h1>Aux Output Bench Test</h1>
-      <span class="sub">D7 &middot; D8 &middot; D12 &middot; D13 &nbsp;|&nbsp; 115200 8N1</span>
+      <span class="sub" id="sub">D7 &middot; D8 &middot; D12 &middot; D13</span>
     </div>
     <div class="head-r">
-      <span class="status" id="status"><span class="dot"></span><span id="statusText">disconnected</span></span>
-      <button class="primary" id="btnConnect">Connect</button>
+      <span class="status" id="status"><span class="dot"></span><span id="statusText">checking…</span></span>
     </div>
   </header>
 
-  <div class="banner" id="unsupported" hidden>
-    <p><strong>This browser can't reach the serial port.</strong></p>
-    <p>Web Serial needs Chrome or Edge, and a secure context. Open this file from
-       <code>http://localhost</code> rather than double-clicking it:</p>
-    <p><code>python -m http.server 8000 --directory hardware/arduino-aux-test</code></p>
-    <p>then go to <code>http://localhost:8000/control.html</code>.</p>
+  <div class="banner" id="banner" hidden>
+    <p><strong id="bannerTitle">Not talking to the board.</strong></p>
+    <p id="bannerBody"></p>
+    <p>Start it with <code>python hardware/arduino-aux-test/bench_server.py</code>
+       and open <code>http://127.0.0.1:8000/</code>.</p>
   </div>
 
   <section style="display:flex;flex-direction:column;gap:14px">
     <h2>Outputs</h2>
     <div class="grid" id="grid"></div>
     <div class="row">
-      <button class="danger" id="btnAllLow" disabled>All LOW</button>
-      <button id="btnRead" disabled>Read state from board</button>
+      <button class="danger" id="btnAllLow">All LOW</button>
+      <button id="btnRead">Read state from board</button>
     </div>
   </section>
 
@@ -339,7 +290,7 @@
       <dt>probes</dt>
       <dd>Black on any <b>GND</b> pin of the POWER header, red on the pin under test. Not pin&#8209;to&#8209;pin.</dd>
       <dt>HIGH</dt>
-      <dd><b>4.8 &ndash; 5.1 V</b> on USB power. Anything under 4.5 V means the pin is loaded or the rail is sagging.</dd>
+      <dd><b>4.8 &ndash; 5.05 V</b> on USB power. Under 4.6 V is usually cable or port drop, not the board.</dd>
       <dt>LOW</dt>
       <dd><b>&lt; 0.1 V</b>. A few hundred millivolts means something is still driving the line.</dd>
       <dt>D13</dt>
@@ -367,25 +318,19 @@
     { n: 13, note: "onboard LED" }
   ];
 
-  var BAUD = 115200;
-  var BOOTLOADER_MS = 2200;   // opening the port toggles DTR and resets the board
-
-  var port = null, reader = null, writer = null, reading = false;
-  var encoder = new TextEncoder();
-  var state = {};             // pin -> "high" | "low" | "pending" | null
   var els = {};
-
-  PINS.forEach(function (p) { state[p.n] = null; });
+  var pending = {};
 
   var grid = document.getElementById("grid");
   var logEl = document.getElementById("log");
+  var subEl = document.getElementById("sub");
   var statusEl = document.getElementById("status");
   var statusText = document.getElementById("statusText");
-  var btnConnect = document.getElementById("btnConnect");
+  var banner = document.getElementById("banner");
+  var bannerTitle = document.getElementById("bannerTitle");
+  var bannerBody = document.getElementById("bannerBody");
   var btnAllLow = document.getElementById("btnAllLow");
   var btnRead = document.getElementById("btnRead");
-
-  // ---------- rendering ----------
 
   function buildCards() {
     PINS.forEach(function (p) {
@@ -413,8 +358,7 @@
       sw.setAttribute("role", "switch");
       sw.setAttribute("aria-checked", "false");
       sw.setAttribute("aria-label", "Pin D" + p.n);
-      sw.disabled = true;
-      sw.innerHTML = '<span class="knob"></span><span>LOW</span><span>HIGH</span>';
+      sw.innerHTML = '<span class="knob"></span><span class="lbl">LOW</span><span class="lbl">HIGH</span>';
       sw.addEventListener("click", function () { toggle(p.n); });
 
       card.appendChild(top);
@@ -422,34 +366,24 @@
       card.appendChild(sw);
       grid.appendChild(card);
 
-      els[p.n] = { card: card, readout: readout, sw: sw };
+      els[p.n] = { card: card, readout: readout, sw: sw, state: "unknown" };
     });
   }
 
-  function render() {
+  function paint(connected) {
     PINS.forEach(function (p) {
       var e = els[p.n];
-      var s = state[p.n];
-      e.card.className = "pin" + (s ? " " + s : "");
+      var s = pending[p.n] ? "pending" : e.state;
+      e.card.className = "pin" + (s === "unknown" ? "" : " " + s);
       e.sw.setAttribute("aria-checked", s === "high" ? "true" : "false");
-      e.sw.disabled = !writer;
+      e.sw.disabled = !connected;
       e.readout.textContent =
         s === "high"    ? "HIGH  5 V" :
         s === "low"     ? "LOW  0 V"  :
         s === "pending" ? "waiting"   : "unknown";
     });
-    btnAllLow.disabled = !writer;
-    btnRead.disabled = !writer;
-  }
-
-  function log(text, cls) {
-    var line = document.createElement("div");
-    line.className = "l-" + (cls || "sys");
-    var t = new Date().toTimeString().slice(0, 8);
-    line.textContent = t + "  " + text;
-    logEl.appendChild(line);
-    logEl.scrollTop = logEl.scrollHeight;
-    while (logEl.childNodes.length > 400) logEl.removeChild(logEl.firstChild);
+    btnAllLow.disabled = !connected;
+    btnRead.disabled = !connected;
   }
 
   function setStatus(kind, text) {
@@ -457,172 +391,75 @@
     statusText.textContent = text;
   }
 
-  // ---------- serial ----------
+  function showLog(lines) {
+    logEl.textContent = (lines || []).join("\n");
+    logEl.scrollTop = logEl.scrollHeight;
+  }
 
-  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function apply(data) {
+    banner.hidden = true;
+    PINS.forEach(function (p) {
+      var v = data.pins ? data.pins[String(p.n)] : null;
+      if (v) els[p.n].state = v;
+      delete pending[p.n];
+    });
+    setStatus("on", data.port ? "connected  " + data.port : "connected");
+    subEl.textContent = "D7 · D8 · D12 · D13" + (data.idn ? "   |   " + data.idn : "");
+    showLog(data.log);
+    paint(true);
+  }
 
-  async function send(cmd) {
-    if (!writer) return;
-    log("> " + cmd, "tx");
+  function fail(title, detail) {
+    bannerTitle.textContent = title;
+    bannerBody.textContent = detail;
+    banner.hidden = false;
+    setStatus("err", "no board");
+    PINS.forEach(function (p) { delete pending[p.n]; });
+    paint(false);
+  }
+
+  async function call(path) {
+    var res;
     try {
-      await writer.write(encoder.encode(cmd + "\n"));
+      res = await fetch(path, { cache: "no-store" });
     } catch (err) {
-      log("write failed: " + err.message, "err");
+      fail("The bench server is not answering.",
+           "Nothing is listening on this address (" + err.message + ").");
+      return null;
     }
+    var data = null;
+    try { data = await res.json(); } catch (err) { /* fall through */ }
+    if (!res.ok || !data) {
+      fail("The bench server returned an error.",
+           (data && data.error) ? data.error : "HTTP " + res.status +
+           ". If it says no board, the serial port could not be opened — close the Arduino IDE serial monitor.");
+      return null;
+    }
+    apply(data);
+    return data;
   }
-
-  function handleReply(text) {
-    log("< " + text, "rx");
-
-    var ok = text.match(/^OK\s+(\d+)\s+([01])$/);
-    if (ok) {
-      state[Number(ok[1])] = ok[2] === "1" ? "high" : "low";
-      render();
-      return;
-    }
-
-    if (/^OK ALL 0$/.test(text)) {
-      PINS.forEach(function (p) { state[p.n] = "low"; });
-      render();
-      return;
-    }
-
-    // status line, e.g.  7=0 8=1 12=0 13=0
-    if (/^\d+=[01](\s+\d+=[01])*$/.test(text)) {
-      text.split(/\s+/).forEach(function (pair) {
-        var bits = pair.split("=");
-        var n = Number(bits[0]);
-        if (state.hasOwnProperty(n)) state[n] = bits[1] === "1" ? "high" : "low";
-      });
-      render();
-      return;
-    }
-
-    if (/^ERR/.test(text)) {
-      PINS.forEach(function (p) { if (state[p.n] === "pending") state[p.n] = null; });
-      render();
-    }
-  }
-
-  async function readLoop() {
-    var decoder = new TextDecoder();
-    var buf = "";
-    try {
-      reader = port.readable.getReader();
-      while (reading) {
-        var chunk = await reader.read();
-        if (chunk.done) break;
-        buf += decoder.decode(chunk.value, { stream: true });
-        var i;
-        while ((i = buf.indexOf("\n")) >= 0) {
-          var one = buf.slice(0, i).replace(/\r$/, "");
-          buf = buf.slice(i + 1);
-          if (one.length) handleReply(one);
-        }
-      }
-    } catch (err) {
-      if (reading) log("read failed: " + err.message, "err");
-    } finally {
-      try { reader.releaseLock(); } catch (e) { /* already released */ }
-      reader = null;
-    }
-  }
-
-  async function connect() {
-    btnConnect.disabled = true;
-    try {
-      port = await navigator.serial.requestPort();
-      await port.open({ baudRate: BAUD });
-    } catch (err) {
-      // user dismissed the picker, or the port is held by something else
-      log(err.message, "err");
-      setStatus("err", "not connected");
-      port = null;
-      btnConnect.disabled = false;
-      return;
-    }
-
-    writer = port.writable.getWriter();
-    reading = true;
-    readLoop();
-
-    setStatus("", "resetting board…");
-    log("port open, waiting " + BOOTLOADER_MS + " ms for the bootloader", "sys");
-    btnConnect.textContent = "Disconnect";
-    btnConnect.classList.remove("primary");
-    btnConnect.disabled = false;
-    render();
-
-    await sleep(BOOTLOADER_MS);
-    if (!writer) return;                 // disconnected while waiting
-
-    setStatus("on", "connected");
-    await send("*IDN?");
-    await send("ALL 0");
-    await send("STAT?");
-  }
-
-  async function disconnect() {
-    btnConnect.disabled = true;
-    reading = false;
-
-    if (writer) {
-      try { await send("ALL 0"); } catch (e) { /* best effort */ }
-      try { await writer.close(); } catch (e) { try { writer.releaseLock(); } catch (e2) {} }
-      writer = null;
-    }
-    if (reader) { try { await reader.cancel(); } catch (e) {} }
-    if (port)   { try { await port.close(); }   catch (e) {} }
-    port = null;
-
-    PINS.forEach(function (p) { state[p.n] = null; });
-    setStatus("", "disconnected");
-    btnConnect.textContent = "Connect";
-    btnConnect.classList.add("primary");
-    btnConnect.disabled = false;
-    log("port closed", "sys");
-    render();
-  }
-
-  // ---------- actions ----------
 
   function toggle(n) {
-    if (!writer) return;
-    var next = state[n] === "high" ? 0 : 1;
-    state[n] = "pending";           // the board confirms before we show a level
-    render();
-    send("PIN " + n + " " + next);
+    var next = els[n].state === "high" ? 0 : 1;
+    pending[n] = true;
+    paint(true);
+    call("/api/pin?n=" + n + "&v=" + next);
   }
-
-  btnConnect.addEventListener("click", function () {
-    if (port) { disconnect(); } else { connect(); }
-  });
 
   btnAllLow.addEventListener("click", function () {
-    PINS.forEach(function (p) { state[p.n] = "pending"; });
-    render();
-    send("ALL 0");
+    PINS.forEach(function (p) { pending[p.n] = true; });
+    paint(true);
+    call("/api/all_low");
   });
 
-  btnRead.addEventListener("click", function () { send("STAT?"); });
-
-  window.addEventListener("beforeunload", function () {
-    if (writer) { try { writer.write(encoder.encode("ALL 0\n")); } catch (e) {} }
-  });
-
-  // ---------- boot ----------
+  btnRead.addEventListener("click", function () { call("/api/state"); });
 
   buildCards();
-  render();
-
-  if (!("serial" in navigator)) {
-    document.getElementById("unsupported").hidden = false;
-    btnConnect.disabled = true;
-    setStatus("err", "no serial support");
-    log("navigator.serial is unavailable in this browser context", "err");
-  } else {
-    log("ready — click Connect and pick the Arduino's port", "sys");
-  }
+  paint(false);
+  call("/api/state");
+  setInterval(function () {
+    if (Object.keys(pending).length === 0) call("/api/state");
+  }, 4000);
 })();
 </script>
 </body>
