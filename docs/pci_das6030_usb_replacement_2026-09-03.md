@@ -9,7 +9,7 @@ analog channel and leaves **two digital outputs**. The ARM analysis is kept in
 changes the design materially.
 
 Nothing here has been built or wired. Two questions are outstanding — see
-[Before anything is wired](#5-before-anything-is-wired).
+[Before anything is wired](#6-before-anything-is-wired).
 
 ## 1. What the card is actually doing
 
@@ -174,34 +174,71 @@ the transport is an established pattern rather than a new dependency.
 No heartbeat and no watchdog, per section 2. State is held in the relay, not in
 the host.
 
-## 5. Before anything is wired
+## 5. Inside the control box
 
-Two questions, both about the 11-pin circular connector that appears to carry
-the vacuum controls.
+A photograph of the chassis where the 68-pin cable lands (2026-09-04) settles
+the physical approach.
 
-1. **Which pins carry the two lines, and what does the box do when they float?**
-   Unplug the connector and check continuity and open-circuit voltage on each
-   pin. The vintage suggests an Amphenol/Bendix MS or a Cinch-Jones plug; the
-   pin count is likely two control lines plus grounds, a coil supply, and
-   possibly status returns. Photographs of the plug, the panel socket, any
-   label, and whatever chassis it lands in would settle most of this without a
-   meter.
+The cable terminates on a passive breakout, **Vertical System / Measurement
+Computing Interface, 100-0627 Rev A**, which fans the DAQ signals into three
+small headers along its lower edge. A second board, **Vertical Systems ARM,
+100-0629**, carries the `ARMSet` relay; with ARM abandoned that board and
+whatever feeds it are out of scope. The rest of the chassis is a mains inlet,
+a transformer, a 1600 VDC film capacitor and a switching supply.
 
-2. **Is the valve normally open or normally closed?** The direct test needs no
-   instrument: with the connector unplugged and building vacuum supplied, is the
-   rod under vacuum or vented? Vented means the solenoid energises to hold, and
-   the NC wiring in section 2 is mandatory. Under vacuum means the hardware
-   already fails safe.
+**If the vacuum lines come out on their own header, the replacement never
+touches the 68-pin connector.** Unplug that header and land the relay contacts
+on the same pins. The interface board, the ARM board and the power section stay
+as they are, and the change reverses by plugging the original connector back in.
 
-Also worth confirming from the photographs: whether the degausser cooling air
-line is on that same 11-pin connector or a separate one. `DegausserToggle` is
-AUXPORT bit 2 while the vacuum lines are bits 5–7, which suggests separate
-harnesses, but the bit numbering is a software convention and proves nothing
-about the wiring.
+### Safety
 
-If the new box carries the same 11-pin connector, the swap is a plug change with
-no disturbance to the existing harness. That is worth the cost of sourcing the
-mating part.
+Mains at the inlet, a transformer, and a 1600 VDC-rated capacitor. Power off is
+not the same as discharged: unplug, wait, and verify across the capacitor
+terminals before probing.
+
+### Identifying the wires
+
+A five-pin header is consistent with the `[Vacuum]` INI section, which lists
+exactly three consecutive AUXPORT bits — `MotorToggle=5`,
+`VacuumToggleA=6`, `VacuumToggleB=7` — so three signals plus ground and
+supply. Of those, only bit 6 is needed: bit 5 is the pump, replaced by building
+vacuum, and bit 7 is never driven anywhere in the code. `DegausserToggle` is
+bit 2 and will be on one of the other two headers.
+
+Do not derive the mapping from the MCC 68-pin pinout. The Vertical Systems
+board defines it, and it need not pass signals straight through.
+
+The unambiguous method uses the old computer, which still has the card:
+
+1. Confirm `EnableVacuum = True` and that the program is not in no-comm mode.
+2. Open the vacuum form and click Vacuum Connect on and off while metering each
+   candidate wire against ground. The wire that swings is bit 6.
+3. Repeat with the degausser cooler buttons to find bit 2.
+4. Record the idle voltage and identify the supply pin. Open-collector lines
+   pulled to +5 V mean the relay only has to short signal to ground; lines
+   switching 12 or 24 V constrain the contact rating.
+
+Also trace where each cable physically lands. A header whose cable terminates
+on the ARM board (100-0629) is the ARM relay drive, not vacuum.
+
+## 6. Before anything is wired
+
+Section 5 covers identifying the wires. One question remains, and it decides
+the wiring rather than the parts.
+
+**Is the valve normally open or normally closed?** The test needs no
+instrument: with the control connector unplugged and building vacuum supplied,
+is the rod under vacuum or vented? Vented means the solenoid energises to hold,
+and the NC wiring in section 2 is mandatory. Under vacuum means the hardware
+already fails safe and the relay can be wired the obvious way.
+
+A secondary question, only if the tap point turns out to be outside the
+chassis: an 11-pin circular connector was reported as carrying the vacuum
+controls. If the replacement lands there instead of on the interface board
+header, check the open-circuit voltage on each pin and source the mating part,
+so the swap stays a plug change with no disturbance to the existing harness.
+The vintage suggests an Amphenol/Bendix MS or a Cinch-Jones plug.
 
 ## Appendix A — if ARM is ever restored
 
