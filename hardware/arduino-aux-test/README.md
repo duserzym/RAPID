@@ -5,10 +5,10 @@ metered against GND. The point is to confirm a 5 V AVR board can stand in for
 the PCI-DAS6030 AUXPORT lines that carry the vacuum controls — see
 `docs/pci_das6030_usb_replacement_2026-09-03.md`.
 
-## Move the Arduino off COM3 first
+## Keep the Arduino above COM10
 
-On this computer the Arduino Uno enumerated onto **COM3**, which the RAPID
-configuration already uses:
+The Arduino Uno first enumerated onto **COM3**, which the RAPID configuration
+already uses:
 
 ```
 [COMPorts]
@@ -19,9 +19,14 @@ The PCI serial card claims COM3 through COM10, and those numbers are assigned
 to the changer, up/down, turning, susceptibility and IRM. An Arduino sitting on
 top of one of them will collide as soon as both are open.
 
-Device Manager → Ports (COM & LPT) → Arduino Uno → Properties → Port Settings →
-Advanced → COM Port Number. Pick **COM11 or higher**. Ports marked "in use" that
-belong to absent hardware can be reused, but do not take one the INI lists.
+It was moved to **COM11** on 2026-09-04 and COM3 returned to the serial card.
+If it ever re-enumerates, put it back above COM10: Device Manager → Ports
+(COM & LPT) → Arduino Uno → Properties → Port Settings → Advanced → COM Port
+Number.
+
+The card occupies COM3-COM10. Of those the INI claims 3 (changer), 4 (changerY),
+5 (up/down), 6 (turning), 7 (susceptibility) and 9 (IRM), with COM1 the squids;
+8 and 10 are spare but still belong to the card.
 
 ## Load the sketch
 
