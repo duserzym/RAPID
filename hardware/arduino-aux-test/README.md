@@ -32,6 +32,20 @@ The card occupies COM3-COM10. Of those the INI claims 3 (changer), 4 (changerY),
 
 Open `aux_test.ino` in the Arduino IDE, select the board and the port, upload.
 
+The IDE on this machine is **1.0.5-r2**, which predates CLI upload — its
+`arduino.exe` ignores `--upload` and just opens the GUI. `build_upload.sh`
+compiles against the bundled 1.0.5 core and flashes with the bundled avrdude,
+using the recipe from `boards.txt`:
+
+```bash
+bash hardware/arduino-aux-test/build_upload.sh COM13
+```
+
+Confirm it took: the board should answer `*IDN?` with `RAPID-AUX-TEST v1`. A
+board running something else will not answer at 115200 at all — the first one
+tried here was still carrying an Adafruit LSM303 demo at 9600 baud, which reads
+as framing garbage rather than as a wrong reply.
+
 It answers a line protocol at 115200 8N1:
 
 ```
@@ -90,3 +104,18 @@ USB reconnect — including the reset this page causes when it opens the port.
 Watch the meter while clicking Connect to see it. On the real system that window
 is what decides whether a reset drops the sample, and the fix is a pull-down or
 pull-up on the wiring, not in the sketch.
+
+## Re-enable the serial card when you are done
+
+Isolating a COM number collision here meant disabling the PCI serial card's
+ports. **The RAPID software needs them back**: `[COMPorts]` assigns COM1 to the
+squids and COM3-COM10 to the changer, changer Y, up/down, turning,
+susceptibility and IRM. Re-enable them in Device Manager, then confirm the
+device map is right before starting Paleomag:
+
+```bash
+python hardware/arduino-aux-test/bench_server.py --list
+```
+
+`\Device\Sbser0` must read COM3 again. If it does not, its driver has a stale
+registration and needs the device disabled and re-enabled, or a reboot.
