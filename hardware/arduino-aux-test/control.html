@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aux Output Bench Test</title>
+<style>
+  :root {
+    --bg: #F4F6F5;
+    --surface: #FFFFFF;
+    --surface-2: #EBEFEE;
+    --ink: #14181A;
+    --ink-2: #4E5A5C;
+    --ink-3: #78868A;
+    --line: #D4DBD9;
+    --line-strong: #B7C2BF;
+    --accent: #0E6B5B;
+    --accent-ink: #0A5346;
+    --accent-soft: #DFEDE9;
+    --hot: #B4551A;
+    --hot-soft: #F9EADC;
+    --warn: #9A4A12;
+    --warn-soft: #F7E8DB;
+
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", "Consolas", "SF Mono", Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0F1416;
+      --surface: #161D1F;
+      --surface-2: #1D2527;
+      --ink: #E4EAE8;
+      --ink-2: #9AA8A7;
+      --ink-3: #758382;
+      --line: #2A3436;
+      --line-strong: #3B4749;
+      --accent: #4FC2A8;
+      --accent-ink: #6FD4BC;
+      --accent-soft: #123029;
+      --hot: #F0A868;
+      --hot-soft: #33220F;
+      --warn: #E09A5C;
+      --warn-soft: #2E2011;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 28px 24px 64px;
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+  }
+
+  h1 { font-size: 22px; letter-spacing: -.01em; margin: 0; }
+  h2 {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0;
+  }
+  p { margin: 0; }
+
+  code, .mono { font-family: var(--mono); }
+
+  /* ---------- top bar ---------- */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding-bottom: 18px;
+    border-bottom: 2px solid var(--ink);
+  }
+
+  .head-l { display: flex; flex-direction: column; gap: 3px; }
+  .sub { font-size: 13px; color: var(--ink-3); font-family: var(--mono); }
+
+  .head-r { display: flex; align-items: center; gap: 12px; }
+
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--ink-2);
+    border: 1px solid var(--line);
+    white-space: nowrap;
+  }
+
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--ink-3);
+    flex: none;
+  }
+
+  .status.on { background: var(--accent-soft); color: var(--accent-ink); border-color: transparent; }
+  .status.on .dot { background: var(--accent); }
+  .status.err { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+  .status.err .dot { background: var(--warn); }
+
+  button {
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: 5px;
+    padding: 8px 16px;
+    cursor: pointer;
+  }
+
+  button:hover:not(:disabled) { border-color: var(--ink-3); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #FFFFFF;
+  }
+  @media (prefers-color-scheme: dark) {
+    button.primary { color: #0F1416; }
+  }
+
+  button.danger { color: var(--warn); border-color: var(--warn); }
+
+  /* ---------- unsupported banner ---------- */
+  .banner {
+    background: var(--warn-soft);
+    border-left: 3px solid var(--warn);
+    border-radius: 0 4px 4px 0;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 14.5px;
+    color: var(--ink-2);
+  }
+  .banner strong { color: var(--warn); }
+  .banner code {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: .1em .4em;
+    font-size: 13px;
+  }
+
+  /* ---------- pin grid ---------- */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(196px, 1fr));
+    gap: 14px;
+  }
+
+  .pin {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 16px 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 13px;
+  }
+
+  .pin.high { border-color: var(--hot); background: var(--hot-soft); }
+
+  .pin-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+
+  .pin-name {
+    font-family: var(--mono);
+    font-size: 26px;
+    font-weight: 600;
+    letter-spacing: -.02em;
+    line-height: 1;
+  }
+
+  .pin-note { font-size: 11.5px; color: var(--ink-3); text-align: right; line-height: 1.3; }
+
+  .readout {
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 500;
+    padding: 9px 12px;
+    border-radius: 4px;
+    background: var(--surface-2);
+    color: var(--ink-3);
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pin.high .readout { background: var(--hot); color: #FFFFFF; }
+  @media (prefers-color-scheme: dark) {
+    .pin.high .readout { color: #1A1204; }
+  }
+  .pin.low .readout { background: var(--surface-2); color: var(--ink-2); }
+  .pin.pending .readout { background: var(--surface-2); color: var(--ink-3); font-style: italic; }
+
+  .sw {
+    position: relative;
+    width: 100%;
+    height: 40px;
+    border-radius: 5px;
+    border: 1px solid var(--line-strong);
+    background: var(--surface-2);
+    cursor: pointer;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    color: var(--ink-3);
+    overflow: hidden;
+  }
+
+  .sw span { flex: 1; text-align: center; z-index: 1; }
+  .sw .knob {
+    position: absolute;
+    top: 3px; left: 3px;
+    width: calc(50% - 3px);
+    height: calc(100% - 6px);
+    border-radius: 3px;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    transition: transform .12s ease;
+  }
+  .sw[aria-checked="true"] .knob { transform: translateX(100%); border-color: var(--hot); background: var(--hot); }
+  .sw[aria-checked="true"] { border-color: var(--hot); }
+  .sw:disabled { opacity: .45; cursor: not-allowed; }
+
+  @media (prefers-reduced-motion: reduce) { .sw .knob { transition: none; } }
+
+  /* ---------- panels ---------- */
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  dl.meter {
+    margin: 0;
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 7px 18px;
+    font-size: 14px;
+  }
+  dl.meter dt { color: var(--ink-3); font-family: var(--mono); font-size: 12.5px; padding-top: 1px; }
+  dl.meter dd { margin: 0; color: var(--ink-2); }
+  dl.meter b { color: var(--ink); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  #log {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.65;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 12px 14px;
+    height: 190px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .l-tx { color: var(--accent-ink); }
+  .l-rx { color: var(--ink); }
+  .l-sys { color: var(--ink-3); }
+  .l-err { color: var(--warn); }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="head-l">
+      <h1>Aux Output Bench Test</h1>
+      <span class="sub">D7 &middot; D8 &middot; D12 &middot; D13 &nbsp;|&nbsp; 115200 8N1</span>
+    </div>
+    <div class="head-r">
+      <span class="status" id="status"><span class="dot"></span><span id="statusText">disconnected</span></span>
+      <button class="primary" id="btnConnect">Connect</button>
+    </div>
+  </header>
+
+  <div class="banner" id="unsupported" hidden>
+    <p><strong>This browser can't reach the serial port.</strong></p>
+    <p>Web Serial needs Chrome or Edge, and a secure context. Open this file from
+       <code>http://localhost</code> rather than double-clicking it:</p>
+    <p><code>python -m http.server 8000 --directory hardware/arduino-aux-test</code></p>
+    <p>then go to <code>http://localhost:8000/control.html</code>.</p>
+  </div>
+
+  <section style="display:flex;flex-direction:column;gap:14px">
+    <h2>Outputs</h2>
+    <div class="grid" id="grid"></div>
+    <div class="row">
+      <button class="danger" id="btnAllLow" disabled>All LOW</button>
+      <button id="btnRead" disabled>Read state from board</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Checking the 5 V</h2>
+    <dl class="meter">
+      <dt>probes</dt>
+      <dd>Black on any <b>GND</b> pin of the POWER header, red on the pin under test. Not pin&#8209;to&#8209;pin.</dd>
+      <dt>HIGH</dt>
+      <dd><b>4.8 &ndash; 5.1 V</b> on USB power. Anything under 4.5 V means the pin is loaded or the rail is sagging.</dd>
+      <dt>LOW</dt>
+      <dd><b>&lt; 0.1 V</b>. A few hundred millivolts means something is still driving the line.</dd>
+      <dt>D13</dt>
+      <dd>Also drives the onboard LED, so you get visual confirmation alongside the reading.</dd>
+      <dt>limit</dt>
+      <dd><b>20 mA</b> per pin as a design figure, 40 mA absolute. Enough for a TTL input or an opto LED, not a relay coil.</dd>
+    </dl>
+  </section>
+
+  <section style="display:flex;flex-direction:column;gap:10px">
+    <h2>Serial</h2>
+    <div id="log" role="log" aria-live="polite"></div>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var PINS = [
+    { n: 7,  note: "" },
+    { n: 8,  note: "" },
+    { n: 12, note: "" },
+    { n: 13, note: "onboard LED" }
+  ];
+
+  var BAUD = 115200;
+  var BOOTLOADER_MS = 2200;   // opening the port toggles DTR and resets the board
+
+  var port = null, reader = null, writer = null, reading = false;
+  var encoder = new TextEncoder();
+  var state = {};             // pin -> "high" | "low" | "pending" | null
+  var els = {};
+
+  PINS.forEach(function (p) { state[p.n] = null; });
+
+  var grid = document.getElementById("grid");
+  var logEl = document.getElementById("log");
+  var statusEl = document.getElementById("status");
+  var statusText = document.getElementById("statusText");
+  var btnConnect = document.getElementById("btnConnect");
+  var btnAllLow = document.getElementById("btnAllLow");
+  var btnRead = document.getElementById("btnRead");
+
+  // ---------- rendering ----------
+
+  function buildCards() {
+    PINS.forEach(function (p) {
+      var card = document.createElement("div");
+      card.className = "pin";
+
+      var top = document.createElement("div");
+      top.className = "pin-top";
+      var name = document.createElement("span");
+      name.className = "pin-name";
+      name.textContent = "D" + p.n;
+      var note = document.createElement("span");
+      note.className = "pin-note";
+      note.textContent = p.note;
+      top.appendChild(name);
+      top.appendChild(note);
+
+      var readout = document.createElement("div");
+      readout.className = "readout";
+      readout.textContent = "unknown";
+
+      var sw = document.createElement("button");
+      sw.className = "sw";
+      sw.type = "button";
+      sw.setAttribute("role", "switch");
+      sw.setAttribute("aria-checked", "false");
+      sw.setAttribute("aria-label", "Pin D" + p.n);
+      sw.disabled = true;
+      sw.innerHTML = '<span class="knob"></span><span>LOW</span><span>HIGH</span>';
+      sw.addEventListener("click", function () { toggle(p.n); });
+
+      card.appendChild(top);
+      card.appendChild(readout);
+      card.appendChild(sw);
+      grid.appendChild(card);
+
+      els[p.n] = { card: card, readout: readout, sw: sw };
+    });
+  }
+
+  function render() {
+    PINS.forEach(function (p) {
+      var e = els[p.n];
+      var s = state[p.n];
+      e.card.className = "pin" + (s ? " " + s : "");
+      e.sw.setAttribute("aria-checked", s === "high" ? "true" : "false");
+      e.sw.disabled = !writer;
+      e.readout.textContent =
+        s === "high"    ? "HIGH  5 V" :
+        s === "low"     ? "LOW  0 V"  :
+        s === "pending" ? "waiting"   : "unknown";
+    });
+    btnAllLow.disabled = !writer;
+    btnRead.disabled = !writer;
+  }
+
+  function log(text, cls) {
+    var line = document.createElement("div");
+    line.className = "l-" + (cls || "sys");
+    var t = new Date().toTimeString().slice(0, 8);
+    line.textContent = t + "  " + text;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+    while (logEl.childNodes.length > 400) logEl.removeChild(logEl.firstChild);
+  }
+
+  function setStatus(kind, text) {
+    statusEl.className = "status" + (kind ? " " + kind : "");
+    statusText.textContent = text;
+  }
+
+  // ---------- serial ----------
+
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  async function send(cmd) {
+    if (!writer) return;
+    log("> " + cmd, "tx");
+    try {
+      await writer.write(encoder.encode(cmd + "\n"));
+    } catch (err) {
+      log("write failed: " + err.message, "err");
+    }
+  }
+
+  function handleReply(text) {
+    log("< " + text, "rx");
+
+    var ok = text.match(/^OK\s+(\d+)\s+([01])$/);
+    if (ok) {
+      state[Number(ok[1])] = ok[2] === "1" ? "high" : "low";
+      render();
+      return;
+    }
+
+    if (/^OK ALL 0$/.test(text)) {
+      PINS.forEach(function (p) { state[p.n] = "low"; });
+      render();
+      return;
+    }
+
+    // status line, e.g.  7=0 8=1 12=0 13=0
+    if (/^\d+=[01](\s+\d+=[01])*$/.test(text)) {
+      text.split(/\s+/).forEach(function (pair) {
+        var bits = pair.split("=");
+        var n = Number(bits[0]);
+        if (state.hasOwnProperty(n)) state[n] = bits[1] === "1" ? "high" : "low";
+      });
+      render();
+      return;
+    }
+
+    if (/^ERR/.test(text)) {
+      PINS.forEach(function (p) { if (state[p.n] === "pending") state[p.n] = null; });
+      render();
+    }
+  }
+
+  async function readLoop() {
+    var decoder = new TextDecoder();
+    var buf = "";
+    try {
+      reader = port.readable.getReader();
+      while (reading) {
+        var chunk = await reader.read();
+        if (chunk.done) break;
+        buf += decoder.decode(chunk.value, { stream: true });
+        var i;
+        while ((i = buf.indexOf("\n")) >= 0) {
+          var one = buf.slice(0, i).replace(/\r$/, "");
+          buf = buf.slice(i + 1);
+          if (one.length) handleReply(one);
+        }
+      }
+    } catch (err) {
+      if (reading) log("read failed: " + err.message, "err");
+    } finally {
+      try { reader.releaseLock(); } catch (e) { /* already released */ }
+      reader = null;
+    }
+  }
+
+  async function connect() {
+    btnConnect.disabled = true;
+    try {
+      port = await navigator.serial.requestPort();
+      await port.open({ baudRate: BAUD });
+    } catch (err) {
+      // user dismissed the picker, or the port is held by something else
+      log(err.message, "err");
+      setStatus("err", "not connected");
+      port = null;
+      btnConnect.disabled = false;
+      return;
+    }
+
+    writer = port.writable.getWriter();
+    reading = true;
+    readLoop();
+
+    setStatus("", "resetting board…");
+    log("port open, waiting " + BOOTLOADER_MS + " ms for the bootloader", "sys");
+    btnConnect.textContent = "Disconnect";
+    btnConnect.classList.remove("primary");
+    btnConnect.disabled = false;
+    render();
+
+    await sleep(BOOTLOADER_MS);
+    if (!writer) return;                 // disconnected while waiting
+
+    setStatus("on", "connected");
+    await send("*IDN?");
+    await send("ALL 0");
+    await send("STAT?");
+  }
+
+  async function disconnect() {
+    btnConnect.disabled = true;
+    reading = false;
+
+    if (writer) {
+      try { await send("ALL 0"); } catch (e) { /* best effort */ }
+      try { await writer.close(); } catch (e) { try { writer.releaseLock(); } catch (e2) {} }
+      writer = null;
+    }
+    if (reader) { try { await reader.cancel(); } catch (e) {} }
+    if (port)   { try { await port.close(); }   catch (e) {} }
+    port = null;
+
+    PINS.forEach(function (p) { state[p.n] = null; });
+    setStatus("", "disconnected");
+    btnConnect.textContent = "Connect";
+    btnConnect.classList.add("primary");
+    btnConnect.disabled = false;
+    log("port closed", "sys");
+    render();
+  }
+
+  // ---------- actions ----------
+
+  function toggle(n) {
+    if (!writer) return;
+    var next = state[n] === "high" ? 0 : 1;
+    state[n] = "pending";           // the board confirms before we show a level
+    render();
+    send("PIN " + n + " " + next);
+  }
+
+  btnConnect.addEventListener("click", function () {
+    if (port) { disconnect(); } else { connect(); }
+  });
+
+  btnAllLow.addEventListener("click", function () {
+    PINS.forEach(function (p) { state[p.n] = "pending"; });
+    render();
+    send("ALL 0");
+  });
+
+  btnRead.addEventListener("click", function () { send("STAT?"); });
+
+  window.addEventListener("beforeunload", function () {
+    if (writer) { try { writer.write(encoder.encode("ALL 0\n")); } catch (e) {} }
+  });
+
+  // ---------- boot ----------
+
+  buildCards();
+  render();
+
+  if (!("serial" in navigator)) {
+    document.getElementById("unsupported").hidden = false;
+    btnConnect.disabled = true;
+    setStatus("err", "no serial support");
+    log("navigator.serial is unavailable in this browser context", "err");
+  } else {
+    log("ready — click Connect and pick the Arduino's port", "sys");
+  }
+})();
+</script>
+</body>
+</html>
