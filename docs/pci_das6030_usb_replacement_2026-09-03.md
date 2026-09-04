@@ -217,9 +217,15 @@ requirement is 0–2.1 V DC written about twice a second and then held. The card
 
 A Pico with an `AD5693R` — 16-bit, I²C, internal 2.5 V reference at ×2 gain —
 covers 0–5 V at 76 µV (0.37 mG) with no ±12 V rail and no gain stage, buffered
-by an `OPA192` through a 16 Hz RC. Do not use PWM into an RC, and do not use the
-Pico's own analog output: the ARM bias is a field-setting DC level and its noise
-lands directly in the measurement.
+by an `OPA192` through a 16 Hz RC.
+
+Use an external DAC, not whatever the board offers. Arduino's `analogWrite()`
+is PWM on every AVR board — an Adafruit Metro 328 and a Pico have no DAC at
+all — and the boards that do (Metro M0, one 10-bit DAC; Metro M4, two 12-bit)
+reference the 3.3 V rail rather than a precision source, so accuracy and drift
+track the regulator. A 12-bit DAC over 3.3 V is 806 µV, about 3.9 mG at this
+calibration, against the card's 0.73 mG. The ARM bias is a field-setting DC
+level and its noise lands directly in the measurement.
 
 Restoring ARM also restores the thermal hazard, and with it the case for a
 hardware watchdog on the ARM relay — which must be scoped to the ARM line only,
