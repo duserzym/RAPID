@@ -242,13 +242,12 @@ explicit hardware operation, never a silent accept.
 - susceptibility, VRM, and rock-magnetic acquisition with reproducible bundles;
 - interrupted-queue recovery and physical safe-state acceptance;
 - DC motor encoder, torque/current, stall, limit, and direction verification;
-- coherent whole-block serial retry/backoff. Numeric SQUID queries now discard
-  uncorrelated buffered input before sending and reject unterminated partial
-  responses, so stale or partial numeric data cannot be accepted. The production bracketed
-  SQUID adapter now carries exact raw TX/RX/error events into each run's
-  `communication.tsv` exactly once, with simulated evidence excluded from the
-  live adapter stream; equivalent integration for other retained adapters and
-  physical transcript acceptance remain open.
+- physical fault-injection acceptance of coherent whole-block SQUID recovery.
+  In software, numeric queries discard uncorrelated buffered input and reject
+  partial replies; transport failures return to zero, clear/reset, back off,
+  and reacquire a fresh whole block, with bounded exhaustion and structured run
+  evidence. Equivalent integration for other retained adapters and physical
+  transcript acceptance remain open.
 
 ### P2 — operator and analysis parity
 
@@ -291,7 +290,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **486 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **493 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
@@ -346,6 +345,13 @@ summary:
   discarded and an unterminated partial numeric response fails closed. No
   automatic in-place read retry was added because the 2G protocol has no reply
   correlation token; retry must restart a newly latched coherent block.
+- The bracketed backend now performs exactly that bounded whole-block recovery:
+  verified zero return, counter clear/reset, exponential backoff, and complete
+  reacquisition from zero-before. Motion failures are never retried; transport
+  exhaustion or recovery failure yields no block. Current-run recovery records
+  and operator warnings are retained in workflow/provenance evidence. The
+  worker no longer applies an uncancellable eight-second timeout to the normal
+  six-latch acquisition.
 - `python -m compileall` is clean across `rapid_main`, its tests,
   `updown_control`, and `rapidpy_common`. The repository configures no linter
   or type checker (no ruff/flake8/mypy config and no lint CI job), so none was

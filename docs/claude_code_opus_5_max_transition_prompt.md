@@ -78,8 +78,9 @@ implementation baseline:
 - `42edead` — carry exact production SQUID transport evidence into run bundles;
   and
 - `6b40b81` — reject stale buffered and unterminated partial SQUID replies.
+- `1ba9c6c` — recover SQUID transport faults by safely reacquiring whole blocks.
 
-The complete RapidPy suite now reports **486 passing tests** using
+The complete RapidPy suite now reports **493 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -94,10 +95,10 @@ shows a remaining gap.
 
 Work in this priority order:
 
-1. implement safe coherent-block timeout retry/backoff at a testable protocol
-   boundary, then extend raw communication evidence to each other retained live
-   adapter without touching hardware. Stale buffered and unterminated partial
-   SQUID replies are already rejected; do not add an unsafe per-query retry;
+1. extend raw communication evidence and deterministic fault handling to each
+   other retained live adapter without touching hardware. SQUID stale/partial
+   rejection and safe whole-block retry/backoff are already complete; do not
+   add an unsafe per-query retry or duplicate the recovery state machine;
 2. finish the remaining evidence-backed software parity rows and testable
    protocol/replay boundaries for thermal, AF, vacuum, IRM/ARM, susceptibility,
    VRM, rockmag, and transport robustness; keep physical acceptance named and
@@ -154,12 +155,15 @@ Focused tests prove:
 
 Coverage lives in `tests/test_squid_transport.py`,
 `tests/test_communication_log.py`, and `tests/test_measurement_worker.py`. The
-next transport work is deterministic whole-block timeout retry/backoff, followed
-by equivalent raw evidence for other retained live adapters. `RawSquidClient`
-already flushes uncorrelated pre-command input and requires CR-terminated
-replies. Because the 2G protocol has no reply correlation token, do not retry an
-individual `SC`/`SD` query in place; discard and reacquire a newly latched whole
-block instead. Keep physical transcript collection explicitly pending.
+Commit `1ba9c6c` adds deterministic whole-block transport recovery: return to
+verified zero, clear/reset, bounded exponential backoff, and complete
+reacquisition from zero-before. It does not retry motion failures, returns no
+block on exhaustion or recovery failure, removes the unsafe uncancellable
+eight-second outer read timeout, warns the operator, and retains current-run
+recovery records in provenance and `workflow_summary.json`. Do not duplicate
+this state machine. Next, add equivalent raw evidence and deterministic fault
+handling for other retained live adapters. Keep physical SQUID transcript and
+fault-injection acceptance explicitly pending.
 
 The truthful empty Plots/Sample Selection/Queue states, real `.sam`/`.csv`
 sample-index-to-queue workflow, No-Communication-only AF examples, atomic
