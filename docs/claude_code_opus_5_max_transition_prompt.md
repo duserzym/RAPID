@@ -68,9 +68,13 @@ implementation baseline:
 - `786c36a` — record the guidance-dialog readiness evidence; and
 - `d170a93` — finish the glass data/review-dialog slice; and
 - `1536b5b` — finish the remaining glass dialogs and runtime fixes; and
+- `87a0bb6` — record the completed reachable-dialog audit; and
 - `dfa70ae` — add transactional plot exports and complete simulation-artifact isolation; and
+- `0215d3b` — record export and simulation-isolation readiness; and
 - `c0047ac` — reconcile quicklook publication with the run artifact index; and
-- `af2eee0` — integrate principal-axis and moment-decay review into Plots.
+- `be275be` — record quicklook artifact reconciliation; and
+- `af2eee0` — integrate principal-axis and moment-decay review into Plots; and
+- `27bd276` — record integrated analysis readiness.
 
 The complete RapidPy suite now reports **479 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
@@ -87,17 +91,72 @@ shows a remaining gap.
 
 Work in this priority order:
 
-1. finish the remaining evidence-backed software parity rows and testable
+1. complete adapter-level raw communication evidence for the production SQUID
+   path as specified in the next assignment below, without touching hardware;
+2. finish the remaining evidence-backed software parity rows and testable
    protocol/replay boundaries for thermal, AF, vacuum, IRM/ARM, susceptibility,
    VRM, rockmag, and transport robustness; keep physical acceptance named and
    pending where the RAPID system is required;
-2. complete deployment acceptance in a dependency-clean environment and on the
+3. complete deployment acceptance in a dependency-clean environment and on the
    operator account. The installable wheel, packaged icons, configuration and
    dependency diagnostics, installed helper entry points, source-tree-free
    main-window construction, and helper resolution are verified on this
    computer; a fresh dependency install or signed installer is not yet tested;
-3. reconcile the parity/readiness documents only after the corresponding code
+4. reconcile the parity/readiness documents only after the corresponding code
    and tests exist.
+
+### Next assignment: carry raw SQUID transport evidence into the run bundle
+
+The next concrete software gap is the adapter-by-adapter raw transport coverage
+still listed for VB6 `modListenAndLog` parity. The generic primitives already
+exist in `rapid_main/communication_log.py`, and `MeasurementWorker` already
+writes `communication.tsv`, but the production SQUID adapter does not yet feed
+its exact command/reply traffic into that run artifact. Close this gap first.
+
+Implement the smallest cohesive path through the existing service boundaries:
+
+- add injectable communication logging to `RawSquidTransport` without changing
+  command ordering, parsing, timeouts, recovery behavior, or exception types;
+- record exact TX commands for clear/reset, range selection, latch, counter
+  reads, and DVM/data reads, plus exact RX counter and data replies. Include
+  useful axis/latch context in event details, never fabricate an RX event for a
+  command that has no reply, and log an ERROR event before re-raising an
+  adapter failure unchanged;
+- expose an immutable snapshot of those events through `RawSquidTransport`,
+  `BracketedSquidBackend`, and `QueueHardwareBackend` using a narrow public
+  contract rather than reaching through private attributes;
+- merge the backend events into the same per-run `communication.tsv` written by
+  `MeasurementWorker`. Make transcript publication idempotent so cleanup or
+  repeated finalization cannot duplicate events;
+- preserve event timestamps, channel/port identity, direction, normalized
+  payload, and context through the merge. Do not log credentials or unrelated
+  configuration values;
+- keep explicit no-communication/simulation behavior truthful and isolated. A
+  simulated transcript must not be presented as a live hardware trace; and
+- do not open ports, connect to the RAPID system, move axes, or issue instrument
+  commands as part of this assignment.
+
+Add focused tests that prove:
+
+1. the exact TX/RX order and payloads for a successful coherent X/Y/Z
+   latch/read cycle;
+2. clear/reset, range, and latch commands appear once and in their real order;
+3. adapter exceptions produce an ERROR event and propagate unchanged;
+4. backend snapshots cannot be mutated by callers;
+5. worker finalization places the adapter events in `communication.tsv` once,
+   alongside worker lifecycle events; and
+6. simulated/no-communication evidence remains explicitly labelled and cannot
+   satisfy a live-transport assertion.
+
+Use `tests/test_squid_transport.py`, `tests/test_communication_log.py`, and
+`tests/test_measurement_worker.py` for the focused coverage unless the existing
+test organization clearly calls for one additional small test module. Run those
+tests first, then the entire RapidPy suite. Only after the implementation and
+tests pass, update the readiness assessment, transition readiness, parity
+inventory, this handoff checkpoint/test count, and any affected evidence table.
+Create one focused implementation/test commit and a separate documentation
+commit. If inspection proves that this path is already complete, cite the exact
+code and tests and move to the next real parity gap instead of duplicating it.
 
 The truthful empty Plots/Sample Selection/Queue states, real `.sam`/`.csv`
 sample-index-to-queue workflow, No-Communication-only AF examples, atomic
