@@ -67,9 +67,10 @@ implementation baseline:
 - `153fb63` — finish the glass guidance and transition-dialog slice;
 - `786c36a` — record the guidance-dialog readiness evidence; and
 - `d170a93` — finish the glass data/review-dialog slice; and
-- `1536b5b` — finish the remaining glass dialogs and runtime fixes.
+- `1536b5b` — finish the remaining glass dialogs and runtime fixes; and
+- `dfa70ae` — add transactional plot exports and complete simulation-artifact isolation.
 
-The complete RapidPy suite now reports **468 passing tests** using
+The complete RapidPy suite now reports **474 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -111,6 +112,11 @@ recreate these paths; hardware/reference-standard acceptance remains pending.
 The `berkeley-rapidpy` wheel and seven console entry points are also implemented
 and tested from an isolated install target. Do not restore repository-relative
 launch assumptions.
+Plot review also has operator-facing atomic JSON/CSV export with schema checks
+and explicit real/simulated provenance. All simulated/replay core and auxiliary
+artifacts publish under `SIMULATED`, and a live-declared backend returning a
+simulated block is rejected before accepted state or output mutation. Preserve
+this boundary; do not move sidecars back beside production output.
 
 ### Completed assignment: reachable dialogs
 

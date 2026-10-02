@@ -247,7 +247,9 @@ explicit hardware operation, never a silent accept.
 
 ### P2 — operator and analysis parity
 
-- complete advanced plot/analysis parity and validated export formats;
+- complete advanced plot/analysis surfaces and validate them against real run
+  bundles. Operator JSON/CSV quicklook exports are now schema-checked, atomic,
+  and provenance-marked in software;
 - all dialogs, status displays, hardware monitor states, and operator messages
   verified at production resolution;
 - dependency-clean installation and configuration migration exercised under
@@ -283,7 +285,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **468 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **474 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
@@ -316,6 +318,11 @@ summary:
   fail-closed unavailable motor controls, safe diagnostic-text rendering,
   correct `QtGui.QScreen` fitting, and control refresh after motor disconnect.
   This is software UI evidence, not live instrument acceptance.
+- Plot review now provides operator-facing atomic JSON/CSV export with validated
+  equal-length fields and explicit real/simulated provenance. Simulation and
+  replay runs publish all core and auxiliary artifacts under `SIMULATED`; a
+  live-declared backend returning a simulated block is rejected before state or
+  output mutation.
 - `python -m compileall` is clean across `rapid_main`, its tests,
   `updown_control`, and `rapidpy_common`. The repository configures no linter
   or type checker (no ruff/flake8/mypy config and no lint CI job), so none was
