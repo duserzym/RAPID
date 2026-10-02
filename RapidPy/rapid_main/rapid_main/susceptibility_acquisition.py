@@ -76,6 +76,10 @@ class SusceptibilityAcquisitionConfig:
         factor = float(self.moment_factor_cgs)
         if coil == 0:
             raise ValueError("Susceptibility coil position is not configured.")
+        if int(self.sample_height) == 0:
+            raise ValueError(
+                "Sample height is not configured (SampleTop - SampleBottom is zero)."
+            )
         if target == 0 or (target > 0) != (coil > 0):
             raise ValueError(
                 "The specimen centre would cross the configured susceptibility coil side."

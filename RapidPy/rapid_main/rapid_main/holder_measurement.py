@@ -10,8 +10,9 @@ behavior — not just the reduction math — can be asserted.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+import math
 from typing import Callable
 
 from rapid_main.holder_state import (
@@ -80,8 +81,15 @@ class HolderMeasurementService:
         *,
         holder_id: str,
         hole: int = 0,
+        susceptibility: object | None = None,
     ) -> HolderMeasurementOutcome:
-        """Run the full holder command; never mutate state on any failure."""
+        """Run the full holder command; never mutate state on any failure.
+
+        ``susceptibility`` is an optional completed holder bridge acquisition
+        (``SusceptibilityAcquisitionRecord``). VB6 measures it before the
+        magnetic holder block; it is staged here and installed in the same
+        atomic replacement, so a later magnetic failure discards it.
+        """
 
         previous = self._store.current
         blocks: list[BracketedMeasurementBlock] = []
@@ -147,6 +155,19 @@ class HolderMeasurementService:
             averaging_cycles=len(results),
             positions_override=averaged,
         )
+        if susceptibility is not None:
+            try:
+                correction = _with_susceptibility(correction, susceptibility)
+            except HolderStateError as exc:
+                return HolderMeasurementOutcome(
+                    installed=False,
+                    correction=None,
+                    previous=previous,
+                    blocks=tuple(blocks),
+                    results=tuple(results),
+                    recovery_attempts=recovery_attempts,
+                    rejection_reason=f"Holder susceptibility was not accepted: {exc}",
+                )
         try:
             self._store.install(correction)
         except (HolderStateError, OSError) as exc:
@@ -167,6 +188,34 @@ class HolderMeasurementService:
             results=tuple(results),
             recovery_attempts=recovery_attempts,
         )
+
+
+def _with_susceptibility(correction: HolderCorrection, record: object) -> HolderCorrection:
+    """Attach a completed holder bridge acquisition to the staged correction."""
+
+    if not bool(getattr(record, "is_holder", False)):
+        raise HolderStateError("the susceptibility acquisition was not a holder measurement")
+    if str(getattr(record, "outcome", "")) != "completed":
+        raise HolderStateError("the holder susceptibility acquisition did not complete")
+    if not bool(getattr(record, "safe_state_confirmed", False)):
+        raise HolderStateError("the lift safe state was not confirmed after the bridge read")
+    value = getattr(record, "bridge_scaled_value", None)
+    if value is None or not math.isfinite(float(value)):
+        raise HolderStateError("the holder bridge value is missing or non-finite")
+    evidence_id = str(getattr(record, "acquisition_id", "")).strip()
+    measured_at = str(getattr(record, "completed_iso", "")).strip()
+    if not evidence_id or not measured_at:
+        raise HolderStateError("the holder bridge value has no evidence identity or timestamp")
+    if bool(getattr(record, "simulated", False)) != bool(correction.simulated):
+        raise HolderStateError(
+            "the holder bridge and magnetic holder blocks disagree about simulation state"
+        )
+    return replace(
+        correction,
+        susceptibility_raw=float(value),
+        susceptibility_measured_at_iso=measured_at,
+        susceptibility_evidence_id=evidence_id,
+    )
 
 
 def _average_positions(position_sets: tuple[Position4, ...]) -> Position4:

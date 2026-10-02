@@ -622,7 +622,7 @@ class TestHardwareContracts(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "requires numeric field"):
                     backend.set_demag_step(label)
             elif label == "SUSC":
-                with self.assertRaisesRegex(HardwareError, "no production susceptibility bridge"):
+                with self.assertRaisesRegex(HardwareError, "SUSC cannot run in hardware mode"):
                     backend.set_demag_step(label)
             else:
                 with self.assertRaisesRegex(HardwareError, "no production actuator route"):

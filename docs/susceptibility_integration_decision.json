@@ -1,0 +1,80 @@
+{
+  "automated_live_dispatch": "SOFTWARE_COMPLETE_PENDING_PHYSICAL_ACCEPTANCE",
+  "current_software_behavior": {
+    "holder_command_with_bridge_enabled": "BRIDGE_THEN_MAGNETIC_HOLDER_ATOMIC_INSTALL",
+    "hardware_mode_without_required_inputs": "BLOCKED_BEFORE_HARDWARE_PREFLIGHT",
+    "no_communication_execution": "SIMULATED_ONLY",
+    "sample_susc_step": "BRIDGE_BEFORE_TREATMENT_AND_SQUID"
+  },
+  "decision_id": "susceptibility/automated-acquisition-with-verified-safe-return",
+  "evidence_schema": "rapidpy.susceptibility.acquisition.v1",
+  "intentional_differences_from_vb6": [
+    {
+      "rapidpy": "Always performs a verified home-to-top before bridge zero and after the read, on success, error, timeout, and cancellation.",
+      "reason": "VB6 homes only when the lift is below half of SampleBottom and defines no safe return after the read. A verified home is the existing limit-switch contract and is labelled a RapidPy safety improvement, not legacy evidence.",
+      "vb6": "modSusceptibility.Susceptibility_Measure homes conditionally before zeroing and leaves the rod at the coil."
+    },
+    {
+      "rapidpy": "Uses the configured SampleTop - SampleBottom height, the same geometry the bracketed SQUID acquisition already uses.",
+      "reason": "Per-specimen height probing at pickup is not yet part of the RapidPy changer path; using one consistent configured height avoids mixing geometries between SQUID and bridge positions.",
+      "vb6": "modChanger measures processingSample.SampleHeight from the home position after pickup."
+    },
+    {
+      "rapidpy": "Does not issue the LagTime measurement. Each bridge reply is bounded by susceptibility.response_timeout.",
+      "reason": "LagTime sends M at whatever position the lift occupies. The handoff forbids bridge reads at arbitrary positions; the bounded typed transport replaces the timing calibration.",
+      "vb6": "frmSusceptibilityMeter.LagTime sends M during holder runs to time the bridge."
+    },
+    {
+      "rapidpy": "A failed zero, motion mismatch, malformed reply, timeout, or cancellation aborts the step with immutable evidence and never yields a value.",
+      "reason": "VB6 returns 0 or -1 on a missing reply, which can enter output as a measurement.",
+      "vb6": "frmSusceptibilityMeter.Measure returns -1 on an empty reply; Susceptibility_Measure returns 0 when the bridge is not configured."
+    },
+    {
+      "rapidpy": "Holder bridge value is staged with the magnetic holder block and installed in one atomic replacement only when both succeed and the evidence file is persisted.",
+      "reason": "Prevents a holder susceptibility from a failed holder command from being subtracted from later samples.",
+      "vb6": "SampleHolder.Susceptibility is assigned as soon as the holder bridge read returns."
+    }
+  ],
+  "legacy_source_evidence": [
+    {
+      "finding": "Target is Int(SCoilPos + SampleHeight / 2); a target on the opposite side of SCoilPos is rejected; sequence is Zero, MotorUpDn_Move at speed index 0, Measure; holder returns the scaled value, samples use Susceptibility_Standardize.",
+      "path": "VB6/modSusceptibility.bas"
+    },
+    {
+      "finding": "Susceptibility_Standardize = (uncalibrated - SampleHolder.Susceptibility) * SusceptibilityMomentFactorCGS.",
+      "path": "VB6/modSusceptibility.bas"
+    },
+    {
+      "finding": "Measure runs Susceptibility_Measure when the step requests it and doUp Or Not doBoth, before PerformStep and Measure_Read.",
+      "path": "VB6/modMeasure.bas"
+    },
+    {
+      "finding": "Zero sends Z, Measure sends M and multiplies the reply by SusceptibilityScaleFactor.",
+      "path": "VB6/frmSusceptibilityMeter.frm"
+    },
+    {
+      "finding": "RunSusceSeq is a separate Bartington-standard calibration scan and is not part of ordinary SUSC steps.",
+      "path": "VB6/frmCalRod.frm"
+    }
+  ],
+  "open_physical_acceptance_questions": [
+    "Is the configured SCoilPos centred on the Bartington coil for the production rod, confirmed with the reference standard?",
+    "Is SampleTop - SampleBottom an adequate specimen height for the production specimens, or must per-specimen height probing be added before production use?",
+    "Is the 150-step lift settle tolerance of MotorSerialClient.updown_move acceptable at the coil, and does speed index 0 avoid rod contact?",
+    "Does the configured response_timeout cover the slowest observed bridge M reply without masking a hung bridge?",
+    "Does a verified home-to-top after every read leave the rod clear of the coil and the changer in every tested fault case?",
+    "What drift between holder and sample bridge reads is acceptable, and how often must the holder be re-measured?"
+  ],
+  "recorded_at_iso": "2026-10-02T00:00:00+00:00",
+  "required_live_inputs": [
+    "susceptibility.enabled with a shared, non-simulated bridge backend",
+    "finite nonzero susceptibility.scale_factor",
+    "finite positive susceptibility.moment_factor_cgs",
+    "nonzero susceptibility.coil_position whose sample-centre target stays on the coil side",
+    "configured lift positions with nonzero SampleTop - SampleBottom",
+    "a valid, non-stale accepted holder record carrying susceptibility_raw, timestamp, and evidence identity"
+  ],
+  "schema": "rapidpy.susceptibility.integration_decision.v1",
+  "status": "PENDING_PHYSICAL_ACCEPTANCE",
+  "summary": "Live SUSC acquisition follows the VB6 zero/move/measure/standardize sequence with a verified safe return, atomic holder staging, and indexed immutable evidence. It is software-verified with fakes only; bridge, coil, standard, and mechanical acceptance remain open."
+}

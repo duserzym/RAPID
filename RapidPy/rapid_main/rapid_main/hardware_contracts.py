@@ -12,7 +12,8 @@ import json
 import math
 from pathlib import Path
 import re
-from typing import Protocol, TYPE_CHECKING
+from typing import Callable, Protocol, TYPE_CHECKING
+import uuid
 
 from rapid_main import software_version
 from rapid_main.communication_log import CommunicationLogger
@@ -22,6 +23,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from rapid_main.holder_measurement import HolderMeasurementOutcome
     from rapid_main.holder_state import HolderStateStore
     from rapid_main.squid_transport import BracketedSquidBackend
+    from rapid_main.susceptibility_acquisition import SusceptibilityAcquisitionRecord
 
 from rapidpy_common.hardware import (
     HardwareError as MotorHardwareError,
@@ -37,6 +39,14 @@ class HardwareError(RuntimeError):
 
 class QueueAutomationError(HardwareError, MotorHardwareError):
     """Raised when queue movement/automation fails."""
+
+
+class SusceptibilitySafeStateError(HardwareError):
+    """A susceptibility acquisition could not confirm the lift safe state.
+
+    This is a distinct, high-severity outcome: the message keeps the original
+    acquisition error (if any) and the safe-return failure side by side.
+    """
 
 
 def _to_bool_connected(value: object) -> bool:
@@ -290,7 +300,11 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
     # safe whole-block recovery. A worker-thread timeout cannot cancel physical
     # I/O and eight seconds is shorter than a normal six-latch acquisition.
     read_timeout: float | None = None
-    susceptibility_timeout: float | None = 2.0
+    # Susceptibility acquisition homes, moves slowly to the coil, and waits for
+    # a bridge reply bounded by ``susceptibility.response_timeout``. A worker
+    # thread timeout cannot cancel that physical I/O, so cancellation is
+    # cooperative through ``set_halt_check`` instead.
+    susceptibility_timeout: float | None = None
     return_timeout: float | None = 20.0
 
     def __init__(
@@ -349,6 +363,8 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._run_id = ""
         self._operator = str(config.general.operator or "")
         self._last_holder_outcome: "HolderMeasurementOutcome | None" = None
+        self._susceptibility_records: list["SusceptibilityAcquisitionRecord"] = []
+        self._halt_check: Callable[[], bool] | None = None
 
     def _trace_motor_communication(
         self, direction: str, payload: str, detail: str
@@ -418,6 +434,17 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
     @property
     def last_holder_outcome(self) -> "HolderMeasurementOutcome | None":
         return self._last_holder_outcome
+
+    @property
+    def susceptibility_acquisition_records(self) -> tuple["SusceptibilityAcquisitionRecord", ...]:
+        """Immutable evidence for every holder and sample bridge acquisition."""
+
+        return tuple(self._susceptibility_records)
+
+    def set_halt_check(self, check: Callable[[], bool] | None) -> None:
+        """Install the operator-halt probe used between acquisition phases."""
+
+        self._halt_check = check
 
     @property
     def acquisition_error(self) -> str:
@@ -494,13 +521,140 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         return self._bracketed.read_squid()
 
     def read_susceptibility(self) -> float:
+        """Run the VB6 ``Susceptibility_Measure`` sequence for the current sample.
+
+        The value is ``(scaled_sample - holder.susceptibility_raw) *
+        SusceptibilityMomentFactorCGS``. The holder value comes only from the
+        accepted holder record, never from a magnetic moment or SQUID read.
+        """
         if self._config.general.nocomm:
             return self._require_measurement().read_susceptibility()
-        raise HardwareError(
-            "Live susceptibility acquisition is unavailable: the SQUID magnetic-moment "
-            "transport is not a Bartington susceptibility bridge. Configure a typed bridge "
-            "adapter with zero/measure, coil motion, and holder correction before running SUSC."
+        blockers = self._susceptibility_blockers(require_holder=True)
+        if blockers:
+            raise HardwareError("; ".join(blockers))
+        holder = self._holder_store.require_valid(is_up=self._direction_up)
+        holder_value = holder.require_susceptibility()
+        self._ensure_connected()
+        record = self._acquire_susceptibility(
+            sample_id=self._sample_name or "sample",
+            is_holder=False,
+            holder_scaled_value=holder_value,
+            holder_evidence_id=holder.susceptibility_evidence_id,
         )
+        if record.susceptibility is None:
+            raise HardwareError("Susceptibility acquisition completed without a value.")
+        return float(record.susceptibility)
+
+    def _susceptibility_blockers(self, *, require_holder: bool) -> list[str]:
+        """Fail-closed readiness for a live bridge acquisition, without I/O."""
+
+        from .susceptibility_acquisition import SusceptibilityAcquisitionConfig
+
+        blockers: list[str] = []
+        cfg = self._config.susceptibility
+        if not bool(cfg.enabled):
+            blockers.append(
+                "Susceptibility bridge is disabled in Settings; SUSC cannot run in hardware mode."
+            )
+        bridge = self._susceptibility
+        if bridge is None:
+            blockers.append(
+                "No susceptibility bridge backend is shared with the measurement queue."
+            )
+        elif bool(getattr(bridge, "simulated", False)):
+            blockers.append(
+                "The susceptibility bridge backend is simulated and cannot provide "
+                "hardware-mode evidence."
+            )
+        elif not all(
+            callable(getattr(bridge, name, None))
+            for name in ("zero", "measure", "is_connected", "test_connection")
+        ):
+            reason = str(getattr(bridge, "reason", "") or "")
+            blockers.append(
+                "Susceptibility bridge is unavailable" + (f": {reason}" if reason else ".")
+            )
+        scale = _to_float(cfg.scale_factor, default=float("nan"))
+        if not math.isfinite(scale) or scale == 0.0:
+            blockers.append("Susceptibility scale factor must be finite and nonzero.")
+        positions = getattr(self._config, "motion", None)
+        sample_height = int(positions.sample_height) if positions is not None else 0
+        if positions is None or not positions.configured:
+            blockers.append(
+                positions.unconfigured_reason()
+                if positions is not None
+                else "Lift positions are not configured."
+            )
+        try:
+            SusceptibilityAcquisitionConfig(
+                coil_position=int(cfg.coil_position),
+                sample_height=sample_height,
+                moment_factor_cgs=float(cfg.moment_factor_cgs),
+            ).validate()
+        except (TypeError, ValueError) as exc:
+            blockers.append(f"Susceptibility geometry/factor invalid: {exc}")
+        if require_holder:
+            from .holder_state import HolderStateError
+
+            try:
+                holder = self._holder_store.require_valid(is_up=self._direction_up)
+                holder.require_susceptibility()
+            except HolderStateError as exc:
+                blockers.append(f"Holder susceptibility unavailable: {exc}")
+        return blockers
+
+    def _acquire_susceptibility(
+        self,
+        *,
+        sample_id: str,
+        is_holder: bool,
+        holder_scaled_value: float | None = None,
+        holder_evidence_id: str = "",
+    ) -> "SusceptibilityAcquisitionRecord":
+        """Connect the shared bridge if needed and run one audited acquisition."""
+
+        from .squid_transport import MotorVerticalController
+        from .susceptibility_acquisition import (
+            SusceptibilityAcquisitionConfig,
+            SusceptibilityAcquisitionError,
+            SusceptibilityAcquisitionService,
+        )
+
+        bridge = self._susceptibility
+        if not _to_bool_connected(getattr(bridge, "is_connected", False)):
+            # Opening the bridge happens only inside an operator-started run
+            # that already holds the "susceptibility" ownership lease.
+            bridge.test_connection()
+        cfg = self._config.susceptibility
+        service = SusceptibilityAcquisitionService(
+            bridge,
+            MotorVerticalController(self._client, self._axes["updown"]),
+            config=SusceptibilityAcquisitionConfig(
+                coil_position=int(cfg.coil_position),
+                sample_height=int(self._config.motion.sample_height),
+                moment_factor_cgs=float(cfg.moment_factor_cgs),
+            ),
+            clock=getattr(self._acquisition_clock, "now", None),
+            should_cancel=lambda: bool(self._halt_check is not None and self._halt_check()),
+            id_factory=lambda: f"susc-{uuid.uuid4().hex}",
+        )
+        try:
+            record = service.acquire(
+                sample_id=sample_id,
+                is_holder=is_holder,
+                holder_scaled_value=holder_scaled_value,
+                holder_evidence_id=holder_evidence_id,
+            )
+        except SusceptibilityAcquisitionError as exc:
+            self._susceptibility_records.append(exc.record)
+            if exc.record.safe_return_error:
+                raise SusceptibilitySafeStateError(
+                    "SAFE-STATE NOT CONFIRMED after susceptibility acquisition: "
+                    f"{exc}. Inspect the lift before continuing."
+                ) from exc
+            raise HardwareError(f"Susceptibility acquisition failed: {exc}") from exc
+        self._susceptibility_records.append(record)
+        return record
 
     def set_demag_step(self, label: str) -> None:
         """Apply a demagnetization step label to the measurement backend.
@@ -568,10 +722,15 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             )
 
         if (label or "").strip().upper() == "SUSC" and not self._config.general.nocomm:
-            raise HardwareError(
-                "SUSC has no production susceptibility bridge route. Configure and validate "
-                "bridge zero/measure, coil motion, and holder correction before running it live."
-            )
+            # SUSC applies no treatment. The bridge acquisition runs through
+            # ``read_susceptibility`` before this call, matching VB6 ordering.
+            reasons = self._susceptibility_blockers(require_holder=True)
+            if reasons:
+                raise HardwareError(
+                    "Susceptibility step SUSC cannot run in hardware mode: " + "; ".join(reasons)
+                )
+            self._treatment_label = str(label)
+            return
 
         if not self._config.general.nocomm and not _is_measurement_only_label(label):
             raise HardwareError(
@@ -594,6 +753,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         if self._config.general.nocomm:
             return PreflightResult.pass_ok()
         blockers: list[str] = []
+        susceptibility_checked = False
         apply_thermal = getattr(self._measurement, "apply_thermal", None)
         for label in labels:
             step_type, field_mT, _bias_mT = _parse_demag_label(label)
@@ -611,11 +771,14 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                     )
                 continue
             if (label or "").strip().upper() == "SUSC":
-                blockers.append(
-                    "Susceptibility step SUSC cannot run in hardware mode: no production "
-                    "Bartington bridge adapter with zero/measure, coil motion, and holder "
-                    "correction is configured."
-                )
+                if not susceptibility_checked:
+                    susceptibility_checked = True
+                    reasons = self._susceptibility_blockers(require_holder=True)
+                    if reasons:
+                        blockers.append(
+                            "Susceptibility step SUSC cannot run in hardware mode: "
+                            + "; ".join(reasons)
+                        )
                 continue
             if _is_measurement_only_label(label):
                 continue
@@ -819,6 +982,13 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         """
         self._ensure_connected()
         hole = int(hole)
+        measure_susceptibility = bool(self._config.susceptibility.enabled)
+        if measure_susceptibility:
+            blockers = self._susceptibility_blockers(require_holder=False)
+            if blockers:
+                raise QueueAutomationError(
+                    "Holder susceptibility cannot be measured: " + "; ".join(blockers)
+                )
 
         if self._sample_loaded:
             dropoff = self._client.sample_dropoff(self._axes["updown"])
@@ -835,9 +1005,9 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             self._require_motion_success(f"holder sample pickup at hole {hole}", pickup)
             self._sample_loaded = True
 
-        self._measure_holder(hole)
+        self._measure_holder(hole, measure_susceptibility=measure_susceptibility)
 
-    def _measure_holder(self, hole: int) -> None:
+    def _measure_holder(self, hole: int, *, measure_susceptibility: bool = False) -> None:
         from .holder_measurement import HolderMeasurementService
 
         self._ensure_bracketed()
@@ -849,7 +1019,18 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         previous_sample = self._sample_name
         self._sample_name = "Holder"
         self._measuring_holder = True
+        susceptibility_record = None
         try:
+            if measure_susceptibility:
+                # VB6 Measure: the holder bridge read precedes Measure_Read.
+                try:
+                    susceptibility_record = self._acquire_susceptibility(
+                        sample_id=_holder_identity(hole), is_holder=True
+                    )
+                except Exception:
+                    self._persist_holder_susceptibility_evidence(strict=False)
+                    raise
+                self._persist_holder_susceptibility_evidence(strict=True)
             service = HolderMeasurementService(
                 self._bracketed.read_squid,
                 self._holder_store,
@@ -858,13 +1039,49 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                 flux_discontinuity_retries=int(self._bracketed.flux_discontinuity_retries),
                 clock=getattr(self._acquisition_clock, "now", None),
             )
-            outcome = service.measure(holder_id=_holder_identity(hole), hole=hole)
+            outcome = service.measure(
+                holder_id=_holder_identity(hole),
+                hole=hole,
+                susceptibility=susceptibility_record,
+            )
         finally:
             self._measuring_holder = False
             self._sample_name = previous_sample
         self._last_holder_outcome = outcome
         if not outcome.installed:
             raise QueueAutomationError(outcome.rejection_reason)
+
+    def _persist_holder_susceptibility_evidence(self, *, strict: bool) -> None:
+        """Publish the latest holder bridge record beside the holder store.
+
+        The accepted holder names this file by ``susceptibility_evidence_id``.
+        A write failure blocks installation so the identity always resolves.
+        """
+        from .susceptibility_acquisition import write_susceptibility_acquisition
+
+        if not self._susceptibility_records:
+            return
+        record = self._susceptibility_records[-1]
+        if not record.is_holder:
+            return
+        store_path = self._holder_store.path
+        if store_path is None:
+            return
+        target = store_path.parent / "holder_susceptibility" / f"{record.acquisition_id}.json"
+        if target.exists():
+            return
+        try:
+            write_susceptibility_acquisition(target, record)
+        except Exception as exc:
+            if not strict:
+                # Never hide the acquisition failure behind an evidence write.
+                self._motor_communication_logger.error(
+                    f"holder susceptibility evidence write failed: {exc}"
+                )
+                return
+            raise QueueAutomationError(
+                f"Holder susceptibility evidence could not be written to {target}: {exc}"
+            ) from exc
 
     def goto_hole(self, hole: int) -> None:
         if hole <= 0:

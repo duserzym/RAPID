@@ -60,6 +60,7 @@ from rapid_main.magnetometer import (
 )
 from rapid_main.status_codes import OperatorStatus, error_status, status_for_phase, warning_status
 from rapid_main.susceptibility import write_susceptibility_summary_json
+from rapid_main.susceptibility_acquisition import write_susceptibility_acquisition
 from rapid_main.rockmag import write_rockmag_run_artifact
 from rapid_main.thermal import write_thermal_run_artifact
 from rapid_main.workflow import WorkflowPhase, WorkflowStateMachine
@@ -200,7 +201,14 @@ class MeasurementWorker(QtCore.QThread):
         self._transport_recovery_start_count = len(
             self._backend_transport_recovery_records()
         )
+        # Bridge acquisitions made before this run (e.g. the holder command)
+        # belong to their own evidence; only current-run records are published.
+        self._susceptibility_record_start_count = len(
+            self._backend_susceptibility_records()
+        )
+        self._susceptibility_artifacts: list[tuple[str, Path]] = []
         self._phase_history: list[dict[str, object]] = []
+        self._published_event_ids: set[int] = set()
 
     # Control API
     def pause(self) -> None:
@@ -341,6 +349,31 @@ class MeasurementWorker(QtCore.QThread):
 
             self.step_started.emit(idx, label)
 
+            # VB6 modMeasure.Measure runs the requested bridge acquisition
+            # before PerformStep (treatment) and Measure_Read (SQUID).
+            susc = 0.0
+            susceptibility_evidence: dict[str, object] = {}
+            if label.strip().upper() == "SUSC":
+                try:
+                    self._emit_phase(WorkflowPhase.MEASURING)
+                    susc, susceptibility_evidence = self._read_susceptibility(label)
+                except MeasurementHaltRequested:
+                    aborted = True
+                    self._emit_phase(WorkflowPhase.HALTED)
+                    break
+                except Exception as exc:
+                    if self._halt_flag:
+                        aborted = True
+                        self._emit_phase(WorkflowPhase.HALTED)
+                        break
+                    self._emit_error(
+                        f"Susceptibility read error at step {label}: {exc}",
+                        phase=WorkflowPhase.MEASURING,
+                    )
+                    self._emit_phase(WorkflowPhase.ERROR)
+                    aborted = True
+                    break
+
             # Apply treatment step
             try:
                 self._emit_phase(WorkflowPhase.TREATING)
@@ -384,32 +417,6 @@ class MeasurementWorker(QtCore.QThread):
                 aborted = True
                 break
 
-            susc = 0.0
-            if label.strip().upper() == "SUSC":
-                try:
-                    self._emit_phase(WorkflowPhase.MEASURING)
-                    raw_susc = self._call_with_timeout(
-                        self._backend.read_susceptibility,
-                        timeout=self._get_backend_timeout("susceptibility_timeout"),
-                        phase="read_susceptibility",
-                    )
-                    susc = float(raw_susc)
-                    if not math.isfinite(susc):
-                        raise ValueError(f"non-finite susceptibility reading: {raw_susc!r}")
-                    self._comm_received(susc, detail="read_susceptibility")
-                except MeasurementHaltRequested:
-                    aborted = True
-                    self._emit_phase(WorkflowPhase.HALTED)
-                    break
-                except Exception as exc:
-                    self._emit_error(
-                        f"Susceptibility read error at step {label}: {exc}",
-                        phase=WorkflowPhase.MEASURING,
-                    )
-                    self._emit_phase(WorkflowPhase.ERROR)
-                    aborted = True
-                    break
-
             step = _build_step(
                 label=label,
                 sdx=sdx,
@@ -435,6 +442,7 @@ class MeasurementWorker(QtCore.QThread):
                             "step_index": idx,
                             "label": label,
                             "susceptibility": float(susc),
+                            **susceptibility_evidence,
                         }
                     )
             except Exception as exc:
@@ -716,8 +724,79 @@ class MeasurementWorker(QtCore.QThread):
                 self._recovery_count += 1
         raise RuntimeError("unreachable SQUID retry state")
 
+    def _read_susceptibility(self, label: str) -> tuple[float, dict[str, object]]:
+        """Read one bridge value and return it with its acquisition identity."""
+
+        before = len(self._backend_susceptibility_records())
+        raw_susc = self._call_with_timeout(
+            self._backend.read_susceptibility,
+            timeout=self._get_backend_timeout("susceptibility_timeout"),
+            phase="read_susceptibility",
+        )
+        susc = float(raw_susc)
+        if not math.isfinite(susc):
+            raise ValueError(f"non-finite susceptibility reading: {raw_susc!r}")
+        evidence: dict[str, object] = {}
+        records = self._backend_susceptibility_records()[before:]
+        if records:
+            record = records[-1]
+            if bool(getattr(record, "simulated", False)) and not self._simulated:
+                raise ObservationIntegrityError(
+                    "A backend declared as live returned a simulated susceptibility "
+                    "acquisition. The value was rejected before output could change."
+                )
+            evidence = {
+                "acquisition_id": str(getattr(record, "acquisition_id", "")),
+                "bridge_scaled_value": getattr(record, "bridge_scaled_value", None),
+                "holder_scaled_value": getattr(record, "holder_scaled_value", None),
+                "holder_evidence_id": str(getattr(record, "holder_evidence_id", "")),
+                "moment_factor_cgs": getattr(record, "moment_factor_cgs", None),
+                "safe_state_confirmed": bool(getattr(record, "safe_state_confirmed", False)),
+            }
+        self._comm_received(susc, detail="read_susceptibility")
+        return susc, evidence
+
+    def _backend_susceptibility_records(self) -> tuple[object, ...]:
+        try:
+            records = getattr(self._backend, "susceptibility_acquisition_records", ())
+            if callable(records):
+                records = records()
+            return tuple(records or ())
+        except Exception:
+            return ()
+
+    def _write_susceptibility_acquisition_artifacts(self) -> None:
+        """Publish every current-run bridge acquisition, accepted or failed."""
+
+        records = self._backend_susceptibility_records()[
+            self._susceptibility_record_start_count :
+        ]
+        written = {name for name, _path in self._susceptibility_artifacts}
+        for record in records:
+            acquisition_id = str(getattr(record, "acquisition_id", "")).strip()
+            if not acquisition_id or acquisition_id in written:
+                continue
+            target = self._publish_dir / "susceptibility_acquisitions" / f"{acquisition_id}.json"
+            try:
+                write_susceptibility_acquisition(target, record)
+            except Exception as exc:
+                self._error_messages.append(
+                    f"susceptibility acquisition artifact write failed: {exc}"
+                )
+                if self._comm_logger is not None:
+                    self._comm_logger.error(self._error_messages[-1])
+                continue
+            self._susceptibility_artifacts.append((acquisition_id, target))
+            written.add(acquisition_id)
+
     def _apply_measurement_context(self) -> None:
         """Give the backend the identity that belongs in each block audit."""
+        halt_setter = getattr(self._backend, "set_halt_check", None)
+        if callable(halt_setter):
+            try:
+                halt_setter(lambda: bool(self._halt_flag))
+            except Exception as exc:
+                self._comm_warning(f"set_halt_check failed: {exc}")
         setter = getattr(self._backend, "set_measurement_context", None)
         if setter is None or not callable(setter):
             return
@@ -909,6 +988,9 @@ class MeasurementWorker(QtCore.QThread):
             "transport_recovery_records": transport_recoveries,
             "skipped_duplicate_labels": list(self._skipped_labels),
             "holder_record_id": self._holder_record_id,
+            "susceptibility_acquisition_ids": [
+                name for name, _path in self._susceptibility_artifacts
+            ],
             "calibration_record_ids": [
                 str(record.get("record_id", ""))
                 for record in self._calibration_records
@@ -943,7 +1025,16 @@ class MeasurementWorker(QtCore.QThread):
                 events = self._communication_events(source)
                 previous = self._communication_event_counts.get(id(source), 0)
                 if len(events) >= previous:
-                    self._comm_logger.transcript.extend(events[previous:])
+                    # A device can be both a direct source and merged into the
+                    # backend snapshot (e.g. the shared susceptibility bridge).
+                    # The transcript keeps each event object exactly once.
+                    fresh = [
+                        event
+                        for event in events[previous:]
+                        if id(event) not in self._published_event_ids
+                    ]
+                    self._comm_logger.transcript.extend(fresh)
+                    self._published_event_ids.update(id(event) for event in fresh)
                     self._communication_event_counts[id(source)] = len(events)
             self._comm_logger.write_text(self._publish_dir / "communication.tsv")
         except Exception as exc:
@@ -962,6 +1053,7 @@ class MeasurementWorker(QtCore.QThread):
             return ()
 
     def _finish_run(self, *, aborted: bool) -> None:
+        self._write_susceptibility_acquisition_artifacts()
         self._write_workflow_summary(aborted=aborted)
         self._write_communication_transcript()
         self._write_rockmag_run_artifact(aborted=aborted)
@@ -1163,6 +1255,19 @@ class MeasurementWorker(QtCore.QThread):
                     description=(
                         "Compiled rockmag routine identity, requested/completed labels, "
                         "outcome, failures, and simulation/hardware acceptance boundary."
+                    ),
+                )
+            )
+        for acquisition_id, path in self._susceptibility_artifacts:
+            payload["artifacts"].append(
+                entry(
+                    f"susceptibility_acquisition:{acquisition_id}",
+                    path,
+                    required=True,
+                    producer="SusceptibilityAcquisitionService",
+                    description=(
+                        "Immutable bridge acquisition: raw/scaled value, holder identity, "
+                        "factor, positions, phases, exact bridge traffic, and safe-state outcome."
                     ),
                 )
             )
