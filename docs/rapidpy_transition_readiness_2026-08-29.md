@@ -250,7 +250,9 @@ explicit hardware operation, never a silent accept.
   configuration migration, fail-closed replies, transcript evidence, and a
   dedicated glass diagnostic window are software-verified; queue SUSC remains
   blocked until the mechanical/calibration lifecycle is complete;
-- VRM and rock-magnetic acquisition with reproducible bundles;
+- rock-magnetic acquisition with reproducible bundles. VRM launch ownership,
+  context validation, and immutable finalized session evidence are
+  software-verified; physical acquisition and production run association remain;
 - interrupted-queue recovery and physical safe-state acceptance;
 - DC motor physical encoder, torque/current, stall, limit, direction, sample
   transfer, safe-abort, and transcript verification;
@@ -305,7 +307,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **531 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **540 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - Treatment-route coverage proves plan preflight occurs before hardware
@@ -318,6 +320,12 @@ summary:
   VB6 settings migration, truthful glass diagnostics, explicit-only SUSC reads,
   and abort-on-requested-read-failure. It also proves the SQUID magnetic-moment
   path cannot masquerade as susceptibility.
+- VRM coverage proves active-automation and ownership refusal, safe release of
+  retained SQUID clients, atomic validated handoffs, honest separation of a
+  main-app handoff from production run association, immutable per-session
+  manifests finalized after CSV closure, explicit stop/close/error outcomes,
+  current-session row counts, append/new/overwrite mode, device/provenance
+  labeling, and CSV size/SHA-256 evidence. No port was opened.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
   and faults (22), live transport and backend facade (21), holder state and
   holder command (19), queue-level fail-closed and holder behavior (13),

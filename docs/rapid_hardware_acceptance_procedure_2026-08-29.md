@@ -152,7 +152,26 @@ thermal, susceptibility:
 
 ---
 
-## 10. Sign-off matrix for the replacement claim
+## 10. VRM physical session acceptance
+
+Run these steps only after SQUID identity/status and port-ownership checks pass.
+Use a dedicated output directory and an operator-approved reference specimen or
+stable test source.
+
+| # | Step | Expected |
+|---|---|---|
+| V1 | From idle `rapid_main`, launch VRM and inspect port ownership | Main SQUID clients disconnect; main measurement and SQUID actions remain blocked until the VRM process exits |
+| V2 | Record a short new-file session, then stop normally | One unique `*.vrm.json` records `operator_stopped`, nonzero rows, live port, baseline/calibration, CSV size, and matching SHA-256 |
+| V3 | Append a second session to the same CSV | The first manifest remains unchanged; a second uniquely named manifest records only the second session's row count and `write_mode=append` while hashing the resulting CSV |
+| V4 | Close the VRM window during acquisition | Final manifest records `window_closed`; CSV is closed and hashable; main ownership releases after the child exits |
+| V5 | Disconnect or fault the SQUID during acquisition | Final manifest records `error` and the real message; no success/completion claim appears |
+| V6 | Run for the laboratory-approved long-duration interval | Sampling timing, baseline drift, missing rows, process memory, CSV integrity, and displayed decay remain within signed tolerances |
+| V7 | Compare CSV values and timing with the VB6 VRM workflow on the same source | Differences are quantified, explained, and approved or fixed |
+| V8 | Verify run association | A manifest with a real production `run_id` says `associated`; a launch without one remains explicitly `unassociated` and is not indexed as production evidence |
+
+---
+
+## 11. Sign-off matrix for the replacement claim
 
 All rows must be `pass` with attached evidence before RapidPy may be described
 as a replacement rather than transition/testing software.
@@ -166,11 +185,12 @@ as a replacement rather than transition/testing software.
 | Holder integrity | Section 8 |
 | Output parity | H4, H5 |
 | Restart behavior | Section 9 |
+| VRM acquisition | Section 10 |
 | VB6 side-by-side | Requires readiness gates 2–4 closed |
 
 ---
 
-## 11. First safe test to run when the system is connected
+## 12. First safe test to run when the system is connected
 
 Run **R1 for the SQUID only**, with the changer, lift, and turning axes
 unpowered:

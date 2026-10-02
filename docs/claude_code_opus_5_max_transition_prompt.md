@@ -85,9 +85,10 @@ implementation baseline:
 - `b71ffa9` — block unimplemented live treatment routes.
 - `811d64e` — record treatment-route preflight readiness.
 - `d8d984c` — make susceptibility diagnostics truthful and auditable; and
-- `8960e93` — record susceptibility diagnostic readiness.
+- `8960e93` — record susceptibility diagnostic readiness; and
+- `6e69b61` — make VRM sessions ownership-safe and auditable.
 
-The complete RapidPy suite now reports **531 passing tests** using
+The complete RapidPy suite now reports **540 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -102,15 +103,15 @@ shows a remaining gap.
 
 Work in this priority order:
 
-1. complete the VRM logger handoff, session evidence, and run association
-   described in the immediate assignment below without touching hardware.
+1. complete rockmag run-bundle execution without touching hardware, building
+   on the compiler/planning foundation and the completed VRM handoff below.
    SQUID recovery, vacuum acknowledgment behavior, AF/IRM ADwin treatment
    evidence, DC motor transport/state safety, treatment-route preflight, and
    susceptibility bridge diagnostics are already complete; do not duplicate
    those implementations;
 2. finish the remaining evidence-backed software parity rows and testable
-   protocol/replay boundaries for thermal, susceptibility, VRM, rockmag, and
-   retained auxiliaries; keep physical SQUID, vacuum, AF/IRM, ADwin/DAC/MCC,
+   protocol/replay boundaries for thermal, susceptibility, rockmag, and
+   retained auxiliaries; keep physical VRM, SQUID, vacuum, AF/IRM, ADwin/DAC/MCC,
    motor, and other RAPID-system-only gates explicitly pending;
 3. complete deployment acceptance in a dependency-clean environment and on the
    operator account. The installable wheel, packaged icons, configuration and
@@ -310,54 +311,43 @@ safe return are not implemented. Complete those as one coherent state machine
 before allowing `SUSC` through live plan preflight; do not call the diagnostic
 transport at an arbitrary lift position.
 
-### Immediate assignment: make VRM sessions reproducible and run-associated
+### Completed assignment: ownership-safe, finalized VRM session evidence
 
-Take the existing `rapid_main` -> `vrm_logger` integration as the next focused
-software slice. Do not replace its working `rapidpy.vrm.launch_context.v1`
-handoff or `.vrm.json` sidecar merely to rename them. First compare
-`VB6/frmVRM.frm`, `rapid_main/vrm.py`, the `_launch_vrm` route,
-`vrm_logger/session_manifest.py`, and the logger's real start/stop/error paths.
-Then close the evidence and ownership gaps demonstrated by that trace.
+Commit `6e69b61` closes the testable VRM handoff and evidence gaps without
+claiming a physical acquisition. `rapid_main` now refuses VRM launch during
+active automation or conflicting measurement/SQUID ownership, disconnects any
+retained main-app SQUID clients, reserves both logical resources for the life
+of the child process, and releases them only after that process exits. The
+validated atomic handoff carries available sample/operator/output context,
+software version, configuration hash, No-Communication state, and a unique
+launch ID without inventing a run ID.
 
-At minimum:
+The logger no longer writes a success-looking sidecar at session start. It
+finalizes a unique immutable `rapidpy.vrm.session_manifest.v2` after closing
+the CSV, recording start/end time, operator-stop/window-close/error outcome,
+error text, current-session row count, append/new/overwrite mode, live hardware
+provenance, port, baseline, calibration, output size and SHA-256, and the exact
+validated/invalid/standalone handoff. A validated main-app handoff and a true
+production-run association are distinct: without an explicit `run_id`, the
+manifest says `run_association_status=unassociated`.
 
-1. prevent a standalone VRM process from competing with active main-app
-   automation or an owned SQUID connection. A launch-context boolean is not an
-   interlock; refuse the launch with an actionable message unless ownership is
-   safely released by an existing, tested mechanism;
-2. carry truthful available run context into the handoff: stable session/run
-   identifier, selected specimen/sample identity, operator identity when the
-   application actually has one, software commit/version, configuration hash,
-   no-communication state, and intended output/run directory. Do not invent
-   values for context the main app does not possess;
-3. validate and atomically publish versioned handoff and session manifests.
-   Invalid or unreadable context must be visibly rejected or recorded as an
-   explicit unassociated-session condition, never silently treated as valid;
-4. finalize each VRM acquisition with start/end time, explicit live/simulated
-   provenance, device/port identity, spacing and calibration settings,
-   baseline, sample-row count, completion/error/abort outcome, CSV size and
-   digest, and the exact handoff association. Do not write a success-looking
-   manifest before the session outcome is known;
-5. make append, overwrite, acquisition failure, operator stop, and window-close
-   semantics deterministic. Preserve one immutable record per acquisition and
-   do not silently overwrite earlier session evidence when appending to a CSV;
-6. register or index a completed VRM artifact in the originating main run when
-   a valid run association exists. Otherwise label it as a standalone,
-   unassociated VRM session rather than implying it belongs to a production
-   measurement bundle; and
-7. add fake-client tests covering ownership refusal, context validation,
-   atomic writes, successful finalization, empty/partial/error sessions,
-   append behavior, hashes/counts, and simulation isolation. Tests must not
-   open a serial port or issue a SQUID command.
+Coverage proves atomic context publication, strict schema checks, active-run
+refusal, retained-port release, bracketed-client invalidation, standalone and
+invalid handoff labeling, immutable per-session filenames, outcome validation,
+row counts, size/digest evidence, and honest run-association semantics. No port
+was opened and no SQUID command was issued. Physical VRM acquisition, timing
+stability, long-duration logging, baseline drift, serial fault injection, and
+operator/run-bundle acceptance remain pending.
 
-Keep physical VRM acquisition, timing stability, long-duration logging,
-baseline drift, serial fault injection, and operator/run-bundle acceptance as
-named hardware gates. If repository evidence shows that a requested live
-behavior has no trustworthy protocol, fail closed and add an executable
-acceptance procedure instead of fabricating support. After this slice, take
-rockmag run-bundle execution as the next retained auxiliary path; automated
-susceptibility still requires its complete motion/holder/calibration lifecycle
-before live queue execution can be enabled.
+For the next implementation assignment, trace `frmRockmagRoutine` and every
+compiled rockmag family from the existing `rapid_main.rockmag` planning model
+through queue preflight, treatment dispatch, measurement output, artifact
+indexing, interruption, and failure state. Produce deterministic run bundles
+for the software-executable paths, and keep RRM, backfield, thermal,
+susceptibility, or other unsupported live families blocked with specific
+reasons. Do not weaken the treatment-plan fail-closed contract to make a mixed
+rockmag preset appear executable. Where hardware is required, add replay/fake
+coverage and an executable acceptance record instead of claiming success.
 
 The truthful empty Plots/Sample Selection/Queue states, real `.sam`/`.csv`
 sample-index-to-queue workflow, No-Communication-only AF examples, atomic
