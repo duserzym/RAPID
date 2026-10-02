@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from PySide6 import QtWidgets
 
 from rapid_main.panels.measurement import MeasurementPanel, MeasurementTraceWidget
+from rapid_main.panels.dashboard import DashboardPanel
 from rapid_main.panels.sample_queue import SampleQueuePanel
 from rapid_main.panels.settings_panel import SettingsPanel
 from rapid_main.printing import print_widget_snapshot
@@ -84,6 +86,79 @@ class TestCompletedUiActions(unittest.TestCase):
             button.click()
         self.assertEqual(panel._data_dir.text(), str(Path("C:/RAPID/data")))
         panel.deleteLater()
+
+    def test_sample_index_selection_adds_real_queue_row_and_metadata(self) -> None:
+        from rapid_main.app import MainWindow
+
+        registrations = object()
+        dialog = SimpleNamespace(
+            exec=Mock(return_value=QtWidgets.QDialog.DialogCode.Accepted),
+            selected_record={
+                "sample_name": "SPEC-42",
+                "depth_cm": "18.2",
+                "formation": "Basalt Unit",
+                "location": "Site Z",
+            },
+            registrations=registrations,
+            source_path=Path("C:/samples/site-z.sam"),
+        )
+
+        class _Table:
+            @staticmethod
+            def rowCount() -> int:
+                return 0
+
+        queue = SimpleNamespace(_table=_Table(), add_sample=Mock())
+        measurement = SimpleNamespace(set_specimen_context=Mock())
+        controller = SimpleNamespace(
+            _sample_queue=queue,
+            _measurement=measurement,
+            _sequence_labels=["NRM", "AF20"],
+            sample_registrations=None,
+            _nav_select=Mock(),
+            _save_queue_state=Mock(),
+            set_status=Mock(),
+        )
+
+        with (
+            patch("rapid_main.app.SampleSelectDialog", return_value=dialog),
+            patch(
+                "rapid_main.app.QtWidgets.QInputDialog.getText",
+                return_value=("B12", True),
+            ),
+        ):
+            loaded = MainWindow._load_sample_from_index(controller)
+
+        self.assertTrue(loaded)
+        queue.add_sample.assert_called_once_with(
+            position="B12",
+            name="SPEC-42",
+            sample_set="Basalt Unit",
+            treatment="NRM → AF20",
+        )
+        measurement.set_specimen_context.assert_called_once_with(
+            "SPEC-42",
+            depth="18.2",
+            treatment="NRM → AF20",
+        )
+        self.assertIs(controller.sample_registrations, registrations)
+        controller._nav_select.assert_called_once_with(1)
+        controller._save_queue_state.assert_called_once_with()
+
+    def test_dashboard_load_sample_action_requests_index_workflow(self) -> None:
+        dashboard = DashboardPanel()
+        emitted: list[bool] = []
+        dashboard.load_sample_requested.connect(lambda: emitted.append(True))
+        load_button = next(
+            button
+            for button in dashboard.findChildren(QtWidgets.QPushButton)
+            if "Load Sample" in button.text()
+        )
+
+        load_button.click()
+
+        self.assertEqual(emitted, [True])
+        dashboard.deleteLater()
 
 
 if __name__ == "__main__":

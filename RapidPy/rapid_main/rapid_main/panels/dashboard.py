@@ -14,6 +14,7 @@ class DashboardPanel(QtWidgets.QWidget):
     """
 
     refresh_diagnostics_requested = QtCore.Signal()
+    load_sample_requested = QtCore.Signal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -212,12 +213,14 @@ class DashboardPanel(QtWidgets.QWidget):
         cl.addWidget(hdr)
 
         actions = [
-            ("📂  Load Sample",        "queue"),
             ("🔬  Set Up Sequence",     "sequence"),
             ("▶   Start New Run",       "measure"),
             ("📊  View Sample Queue",   "queue"),
             ("⚙️  Settings",           "settings"),
         ]
+        load_sample = QtWidgets.QPushButton("📂  Load Sample")
+        load_sample.clicked.connect(self.load_sample_requested.emit)
+        cl.addWidget(load_sample)
         for label, dest in actions:
             btn = QtWidgets.QPushButton(label)
             btn.clicked.connect(lambda _c=False, d=dest: self._goto(d))

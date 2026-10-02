@@ -108,6 +108,24 @@ class TestSampleQueueHelpers(unittest.TestCase):
     def test_sequential_positions_preserve_samples_and_treatments(self) -> None:
         panel = SampleQueuePanel()
         try:
+            panel.load_rows(
+                [
+                    {
+                        "position": "A1",
+                        "sample_name": "SPEC-1",
+                        "sample_set": "SITE-A",
+                        "treatment": "NRM → AF20",
+                        "status": "Pending",
+                    },
+                    {
+                        "position": "A2",
+                        "sample_name": "SPEC-2",
+                        "sample_set": "SITE-A",
+                        "treatment": "NRM",
+                        "status": "Pending",
+                    },
+                ]
+            )
             names_before = [panel._safe_cell(row, 2) for row in range(panel._table.rowCount())]
             treatments_before = [panel._safe_cell(row, 4) for row in range(panel._table.rowCount())]
 
@@ -115,7 +133,7 @@ class TestSampleQueueHelpers(unittest.TestCase):
 
             self.assertEqual(
                 [panel._safe_cell(row, 1) for row in range(panel._table.rowCount())],
-                ["C7", "C8", "C9"],
+                ["C7", "C8"],
             )
             self.assertEqual(
                 [panel._safe_cell(row, 2) for row in range(panel._table.rowCount())],
@@ -125,6 +143,59 @@ class TestSampleQueueHelpers(unittest.TestCase):
                 [panel._safe_cell(row, 4) for row in range(panel._table.rowCount())],
                 treatments_before,
             )
+        finally:
+            panel.deleteLater()
+
+    def test_new_and_persisted_empty_queues_remain_empty(self) -> None:
+        panel = SampleQueuePanel()
+        try:
+            self.assertEqual(panel._table.rowCount(), 0)
+            self.assertEqual(panel._count_lbl.text(), "0 samples")
+
+            panel.load_rows([])
+
+            self.assertEqual(panel.row_snapshot(), [])
+            self.assertEqual(panel._count_lbl.text(), "0 samples")
+        finally:
+            panel.deleteLater()
+
+    def test_add_sample_validates_and_appends_operator_selection(self) -> None:
+        panel = SampleQueuePanel()
+        try:
+            row = panel.add_sample(
+                position=" A7 ",
+                name=" SPEC-7 ",
+                sample_set=" Unit A ",
+                treatment="NRM → AF20",
+            )
+
+            self.assertEqual(row, 0)
+            self.assertEqual(
+                panel.row_snapshot(),
+                [
+                    {
+                        "position": "A7",
+                        "sample_name": "SPEC-7",
+                        "sample_set": "Unit A",
+                        "treatment": "NRM → AF20",
+                        "status": "Pending",
+                    }
+                ],
+            )
+            with self.assertRaisesRegex(ValueError, "required"):
+                panel.add_sample(position="", name="SPEC-8")
+        finally:
+            panel.deleteLater()
+
+    def test_load_index_button_requests_real_index_workflow(self) -> None:
+        panel = SampleQueuePanel()
+        try:
+            emitted: list[bool] = []
+            panel.sample_index_requested.connect(lambda: emitted.append(True))
+
+            panel._load_index_btn.click()
+
+            self.assertEqual(emitted, [True])
         finally:
             panel.deleteLater()
 

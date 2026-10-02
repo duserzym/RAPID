@@ -395,6 +395,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Persistent configuration (load or create defaults)
         self.config: AppConfig = AppConfig.load()
         self._current_sample = "UNKNOWN"
+        self.sample_registrations = None
         self._measurement_backend: MeasurementAutomationBackend = build_measurement_backend(self.config)
         self._rebuild_diagnostic_backends(nocomm=bool(self.config.general.nocomm))
         self._ownership = DeviceOwnershipManager()
@@ -639,7 +640,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._dashboard.refresh_diagnostics_requested.connect(
             self._refresh_dashboard_diagnostics
         )
+        self._dashboard.load_sample_requested.connect(self._load_sample_from_index)
         self._sample_queue = SampleQueuePanel()
+        self._sample_queue.sample_index_requested.connect(self._load_sample_from_index)
         self._sequence    = SequencePanel()
         self._measurement = MeasurementPanel()
         self._measurement.sample_run_finished.connect(self._on_queue_sample_finished)
@@ -1350,6 +1353,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         fm = mb.addMenu("&File")
         fm.addAction("&New Session", self._new_session)
+        fm.addAction("&Load Sample Index…", self._load_sample_from_index)
         fm.addAction("&Log Out", self._launch_login)
         fm.addSeparator()
         fm.addAction("E&xit", self._request_shutdown)
@@ -2205,6 +2209,63 @@ class MainWindow(QtWidgets.QMainWindow):
         }
         if key in mapping:
             self._nav_select(mapping[key])
+
+    def _load_sample_from_index(self) -> bool:
+        """Load a real sample index and add one operator-selected row to the queue."""
+
+        dialog = SampleSelectDialog(self)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return False
+        record = dialog.selected_record
+        if record is None or not record["sample_name"].strip():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Load Sample Index",
+                "Select a specimen before adding it to the queue.",
+            )
+            return False
+
+        default_position = f"A{self._sample_queue._table.rowCount() + 1}"
+        position, accepted = QtWidgets.QInputDialog.getText(
+            self,
+            "Changer Position",
+            f"Changer position for {record['sample_name']}:",
+            QtWidgets.QLineEdit.EchoMode.Normal,
+            default_position,
+        )
+        if not accepted:
+            return False
+        position = position.strip()
+        if not position:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Changer Position",
+                "A changer position is required; the sample was not added.",
+            )
+            return False
+
+        treatment = " → ".join(self._sequence_labels) or "NRM"
+        sample_set = record["formation"].strip() or record["location"].strip()
+        self._sample_queue.add_sample(
+            position=position,
+            name=record["sample_name"],
+            sample_set=sample_set,
+            treatment=treatment,
+        )
+        if dialog.registrations is not None:
+            self.sample_registrations = dialog.registrations
+        self._measurement.set_specimen_context(
+            record["sample_name"],
+            depth=record["depth_cm"] or "—",
+            treatment=treatment,
+        )
+        self._nav_select(1)
+        self._save_queue_state()
+        source = dialog.source_path.name if dialog.source_path is not None else "sample index"
+        self.set_status(
+            f"Added {record['sample_name']} at {position} from {source}; review the queue before running."
+        )
+        return True
 
     def set_status(self, text: str) -> None:
         self._sb_status.setText(text)

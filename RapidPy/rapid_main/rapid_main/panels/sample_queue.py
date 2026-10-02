@@ -25,11 +25,7 @@ class SampleQueuePanel(QtWidgets.QWidget):
     Options sidebar mirrors the four VB6 FrameXxx option groups.
     """
 
-    _DEFAULT_ROWS: tuple[tuple[str, str, str, str, str], ...] = (
-        ("A1", "HBK-01", "Hole A", "NRM → 25mT AF → 50mT AF", "Pending"),
-        ("A2", "HBK-02", "Hole A", "NRM → 25mT AF → 50mT AF", "Pending"),
-        ("B1", "HBK-03", "Hole B", "Rockmag the Works", "Pending"),
-    )
+    sample_index_requested = QtCore.Signal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -84,11 +80,13 @@ class SampleQueuePanel(QtWidgets.QWidget):
         hl.addWidget(_vline())
 
         self._add_btn = QtWidgets.QPushButton("[+]  Add Sample")
+        self._load_index_btn = QtWidgets.QPushButton("[📂]  Load Index")
         self._seq_btn = QtWidgets.QPushButton("[→]  Sequential")
         clr_btn = QtWidgets.QPushButton("[x]  Clear")
         self._export_btn = QtWidgets.QPushButton("[↑]  Export")
         self._import_btn = QtWidgets.QPushButton("[↓]  Import")
         self._add_btn.clicked.connect(self._add_sample_dialog)
+        self._load_index_btn.clicked.connect(self.sample_index_requested.emit)
         self._seq_btn.clicked.connect(self._make_positions_sequential)
         clr_btn.clicked.connect(self._clear_table)
         self._export_btn.clicked.connect(self._export_queue)
@@ -96,6 +94,7 @@ class SampleQueuePanel(QtWidgets.QWidget):
 
         for btn in (
             self._add_btn,
+            self._load_index_btn,
             self._seq_btn,
             clr_btn,
             self._export_btn,
@@ -144,7 +143,7 @@ class SampleQueuePanel(QtWidgets.QWidget):
         self._table.model().rowsRemoved.connect(self._update_count)
         cl.addWidget(self._table)
 
-        self.load_rows(self._snapshot_rows_from_defaults())
+        self._update_count()
         return card
 
     def _add_sample_row(
@@ -224,6 +223,31 @@ class SampleQueuePanel(QtWidgets.QWidget):
             treatment=treatment.text().strip() or "NRM",
         )
         return True
+
+    def add_sample(
+        self,
+        *,
+        position: str,
+        name: str,
+        sample_set: str = "",
+        treatment: str = "NRM",
+        insert_at: int | None = None,
+    ) -> int:
+        """Add a validated operator-selected specimen and return its row."""
+
+        clean_position = position.strip()
+        clean_name = name.strip()
+        if not clean_position or not clean_name:
+            raise ValueError("Changer position and sample name are required.")
+        row = self._table.rowCount() if insert_at is None else int(insert_at)
+        self._insert_sample_row(
+            row,
+            position=clean_position,
+            name=clean_name,
+            sample_set=sample_set.strip(),
+            treatment=treatment.strip() or "NRM",
+        )
+        return max(0, min(row, self._table.rowCount() - 1))
 
     def _make_positions_sequential(self) -> bool:
         if self._table.rowCount() == 0:
@@ -515,7 +539,6 @@ class SampleQueuePanel(QtWidgets.QWidget):
         """Load queue table rows from persisted data."""
         if not rows:
             self._clear_table()
-            self.load_rows(self._snapshot_rows_from_defaults())
             return
         self._table.setRowCount(0)
         for row in rows:
@@ -532,20 +555,6 @@ class SampleQueuePanel(QtWidgets.QWidget):
                 status,
             )
         self._renumber_rows()
-
-    def _snapshot_rows_from_defaults(self) -> list[dict[str, str]]:
-        rows: list[dict[str, str]] = []
-        for pos, sample_name, sample_set, treatment, status in self._DEFAULT_ROWS:
-            rows.append(
-                {
-                    "position": pos,
-                    "sample_name": sample_name,
-                    "sample_set": sample_set,
-                    "treatment": treatment,
-                    "status": status,
-                }
-            )
-        return rows
 
     def _append_row(
         self,
