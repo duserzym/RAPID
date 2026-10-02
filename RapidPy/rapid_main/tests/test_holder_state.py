@@ -106,7 +106,11 @@ class HolderCorrectionTests(unittest.TestCase):
         self.assertIn("HOLDER-A@", correction.record_version)
 
     def test_round_trips_through_json(self) -> None:
-        correction = _correction()
+        correction = _correction(
+            susceptibility_raw=0.0125,
+            susceptibility_measured_at_iso=NOW.isoformat(),
+            susceptibility_evidence_id="susc-holder-1",
+        )
 
         restored = HolderCorrection.from_dict(json.loads(json.dumps(correction.to_dict())))
 
@@ -114,6 +118,20 @@ class HolderCorrectionTests(unittest.TestCase):
         self.assertEqual(restored.positions, correction.positions)
         self.assertEqual(restored.metrics.to_dict(), correction.metrics.to_dict())
         self.assertEqual(restored.record_version, correction.record_version)
+        self.assertEqual(restored.require_susceptibility(), 0.0125)
+        self.assertEqual(restored.susceptibility_evidence_id, "susc-holder-1")
+
+    def test_legacy_holder_loads_but_cannot_authorize_susceptibility(self) -> None:
+        correction = _correction()
+        payload = correction.to_dict()
+        payload.pop("susceptibility_raw")
+        payload.pop("susceptibility_measured_at_iso")
+        payload.pop("susceptibility_evidence_id")
+
+        restored = HolderCorrection.from_dict(payload)
+
+        with self.assertRaisesRegex(HolderStateError, "no finite susceptibility"):
+            restored.require_susceptibility()
 
 
 class HolderStateStoreTests(unittest.TestCase):

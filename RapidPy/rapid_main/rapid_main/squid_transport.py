@@ -208,6 +208,20 @@ class MotorVerticalController:
             detail="" if result.success else "lift did not settle within tolerance",
         )
 
+    def home_to_top(self) -> MotionOutcome:
+        """Home the lift and expose the same verified result contract as a move."""
+
+        try:
+            result = self._client.home_to_top(self._axis)
+        except HardwareError as exc:
+            return MotionOutcome(target=0.0, actual=float("nan"), ok=False, detail=str(exc))
+        return MotionOutcome(
+            target=float(result.target),
+            actual=float(result.final_position),
+            ok=bool(result.success),
+            detail="" if result.success else "lift did not home to the top within tolerance",
+        )
+
     def position(self) -> int:
         return int(self._client.read_position(self._axis))
 

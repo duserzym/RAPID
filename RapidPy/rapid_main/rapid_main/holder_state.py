@@ -100,6 +100,9 @@ class HolderCorrection:
     validation_deltas: Vector3 = (0.0, 0.0, 0.0)
     averaging_cycles: int = 1
     metrics: HolderMetrics = field(default_factory=HolderMetrics)
+    susceptibility_raw: float | None = None
+    susceptibility_measured_at_iso: str = ""
+    susceptibility_evidence_id: str = ""
     simulated: bool = False
     schema: str = HOLDER_SCHEMA
 
@@ -122,7 +125,23 @@ class HolderCorrection:
         values: list[float] = []
         for vector in self.positions:
             values.extend(float(axis) for axis in vector)
-        return bool(values) and all(math.isfinite(value) for value in values)
+        if not values or not all(math.isfinite(value) for value in values):
+            return False
+        return self.susceptibility_raw is None or math.isfinite(float(self.susceptibility_raw))
+
+    def require_susceptibility(self) -> float:
+        """Return the accepted scaled bridge value or fail before sample motion."""
+
+        if self.susceptibility_raw is None or not math.isfinite(float(self.susceptibility_raw)):
+            raise HolderStateError(
+                "The accepted holder has no finite susceptibility correction. "
+                "Measure holder susceptibility before running SUSC."
+            )
+        if not self.susceptibility_measured_at_iso:
+            raise HolderStateError("Holder susceptibility has no measurement timestamp.")
+        if not self.susceptibility_evidence_id:
+            raise HolderStateError("Holder susceptibility has no acquisition evidence identity.")
+        return float(self.susceptibility_raw)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -162,6 +181,15 @@ class HolderCorrection:
             metrics=HolderMetrics(
                 **{key: float(value) for key, value in metrics.items() if key in known}
             ),
+            susceptibility_raw=(
+                None
+                if payload.get("susceptibility_raw") is None
+                else float(payload.get("susceptibility_raw"))
+            ),
+            susceptibility_measured_at_iso=str(
+                payload.get("susceptibility_measured_at_iso", "")
+            ),
+            susceptibility_evidence_id=str(payload.get("susceptibility_evidence_id", "")),
             simulated=bool(payload.get("simulated", False)),
             schema=str(payload.get("schema", HOLDER_SCHEMA)),
         )
