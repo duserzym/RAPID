@@ -44,6 +44,7 @@ from .dialogs import (
     SampleSelectDialog,
     SquidCommDialog,
     StartupGuideDialog,
+    TransitionHelpDialog,
     DCMotorDialog,
     StepMonitorDialog,
     VacuumDialog,
@@ -1429,6 +1430,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         hm = mb.addMenu("&Help")
         hm.addAction("&Quick Start", self._launch_startup_guide)
+        hm.addAction("Where did this &VB6 control go?", self._launch_transition_help)
         hm.addAction("&About RAPID", self._launch_about)
 
     # ── Navigation ────────────────────────────────────────────────────────────
@@ -2237,6 +2239,45 @@ class MainWindow(QtWidgets.QMainWindow):
             self._webcam_dlg = WebcamDialog(self)
         self._webcam_dlg.show()
         self._webcam_dlg.raise_()
+
+    def _launch_transition_help(self) -> None:
+        if not hasattr(self, "_transition_help_dlg"):
+            self._transition_help_dlg = TransitionHelpDialog(self)
+            self._transition_help_dlg.destination_requested.connect(
+                self._open_transition_destination
+            )
+        self._transition_help_dlg.show()
+        self._transition_help_dlg.raise_()
+        self._transition_help_dlg.activateWindow()
+
+    def _open_transition_destination(self, destination: str) -> None:
+        panel_destinations = {
+            "dashboard",
+            "queue",
+            "sequence",
+            "measure",
+            "settings",
+            "calibration",
+        }
+        if destination in panel_destinations:
+            self.navigate_to(destination)
+            return
+        launchers = {
+            "dc_motors": self._launch_dc_motors,
+            "vacuum": self._launch_vacuum,
+            "squid": self._launch_squid,
+            "irm": self._launch_irm,
+            "af": self._launch_af,
+            "debug": self._launch_debug_console,
+            "step_monitor": self._launch_step_monitor,
+            "vrm": self._launch_vrm,
+            "webcam": self._launch_webcam,
+            "login": self._launch_login,
+            "quick_start": self._launch_startup_guide,
+        }
+        launcher = launchers.get(destination)
+        if launcher is not None:
+            launcher()
 
     # ── Public API for panels ─────────────────────────────────────────────────
     def navigate_to(self, key: str) -> None:

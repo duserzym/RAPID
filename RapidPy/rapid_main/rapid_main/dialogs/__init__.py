@@ -10,6 +10,7 @@ from .plots import PlotsDialog
 from .webcam_dialog import WebcamDialog
 from .dc_motors import DCMotorDialog
 from .startup_guide import StartupGuideDialog
+from .transition_help import TransitionHelpDialog
 
 __all__ = [
     "AboutDialog",
@@ -24,5 +25,6 @@ __all__ = [
     "WebcamDialog",
     "DCMotorDialog",
     "StartupGuideDialog",
+    "TransitionHelpDialog",
 ]
 

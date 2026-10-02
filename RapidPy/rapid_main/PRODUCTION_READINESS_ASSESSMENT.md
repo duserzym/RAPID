@@ -41,6 +41,8 @@ AF simulation isolation, and atomic settings backup/restore tests.
   real measured values are entered. RapidPy will not invent lift positions.
 - The `Holder` queue command now measures the holder. A rejected holder block
   aborts the queue and keeps the previous correction.
+- Help now includes a searchable VB6-to-RapidPy task map with readiness labels
+  and direct routing to the corresponding real panel or diagnostic launcher.
 - Sample measurement is blocked when no valid holder correction exists.
 - Measurement output is published only when a run completes; an aborted run
   leaves the production output path untouched.
