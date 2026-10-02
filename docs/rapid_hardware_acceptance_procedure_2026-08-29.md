@@ -171,7 +171,25 @@ stable test source.
 
 ---
 
-## 11. Sign-off matrix for the replacement claim
+## 11. Rockmag physical run-bundle acceptance
+
+Use a compiled routine whose treatment families have individually passed their
+device/interlock acceptance. Do not start with the mixed Works preset while any
+family still has a software preflight blocker.
+
+| # | Step | Expected |
+|---|---|---|
+| K1 | Run the compiled Hawaiian AF preset in No-Communication mode | Output stays under `SIMULATED/`; `rockmag_run.json` names the compiled routine and exact completed labels; the artifact index digest matches the file |
+| K2 | Attempt Rockmag the Works in hardware mode before backfield/SUSC routes exist | Plan blocks before ordinary hardware preflight or treatment dispatch and writes an `ABORTED` rockmag artifact naming the blocker |
+| K3 | After AF acceptance, run Hawaiian AF on a reference specimen | Every requested label is treated and measured once in order; raw treatment/SQUID traffic, safe return, holder version, and rockmag artifact share one run ID |
+| K4 | Halt between two rockmag steps | No partial accepted bundle is published; abort artifact lists only the completed prefix and the halt/final phase |
+| K5 | Resume the interrupted specimen | Previously published labels are not duplicated; skipped duplicate labels and the remaining completed suffix are explicit |
+| K6 | Exercise each additional approved family separately before adding it to a mixed routine | Field/readback, interlock, failure, and safe-return evidence passes that family's acceptance procedure |
+| K7 | Run the approved mixed routine | `provenance.json`, `workflow_summary.json`, `rockmag_run.json`, scientific outputs, and `artifact_index.json` agree on routine, run, sample, operator, labels, outcome, and hashes |
+
+---
+
+## 12. Sign-off matrix for the replacement claim
 
 All rows must be `pass` with attached evidence before RapidPy may be described
 as a replacement rather than transition/testing software.
@@ -186,11 +204,12 @@ as a replacement rather than transition/testing software.
 | Output parity | H4, H5 |
 | Restart behavior | Section 9 |
 | VRM acquisition | Section 10 |
+| Rockmag execution | Section 11 |
 | VB6 side-by-side | Requires readiness gates 2–4 closed |
 
 ---
 
-## 12. First safe test to run when the system is connected
+## 13. First safe test to run when the system is connected
 
 Run **R1 for the SQUID only**, with the changer, lift, and turning axes
 unpowered:

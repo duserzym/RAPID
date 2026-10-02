@@ -250,9 +250,13 @@ explicit hardware operation, never a silent accept.
   configuration migration, fail-closed replies, transcript evidence, and a
   dedicated glass diagnostic window are software-verified; queue SUSC remains
   blocked until the mechanical/calibration lifecycle is complete;
-- rock-magnetic acquisition with reproducible bundles. VRM launch ownership,
-  context validation, and immutable finalized session evidence are
-  software-verified; physical acquisition and production run association remain;
+- rock-magnetic physical acquisition with reproducible live bundles. Compiled
+  routine identity, exact requested/completed labels, abort/errors, simulation
+  isolation, provenance, workflow summary, and indexed SHA-256 run artifacts
+  are software-verified; unsupported mixed live families remain fail-closed.
+  VRM launch ownership, context validation, and immutable finalized session
+  evidence are also software-verified; physical acquisition and production run
+  association remain;
 - interrupted-queue recovery and physical safe-state acceptance;
 - DC motor physical encoder, torque/current, stall, limit, direction, sample
   transfer, safe-abort, and transcript verification;
@@ -307,7 +311,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **540 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **546 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - Treatment-route coverage proves plan preflight occurs before hardware
@@ -326,6 +330,12 @@ summary:
   manifests finalized after CSV closure, explicit stop/close/error outcomes,
   current-session row counts, append/new/overwrite mode, device/provenance
   labeling, and CSV size/SHA-256 evidence. No port was opened.
+- Rockmag coverage proves compiled Hawaiian AF and Works plan identity survives
+  into execution evidence, repeated routines contain only real measurement
+  labels, simulated bundles remain isolated, completed and preflight-aborted
+  runs write deterministic routine artifacts, and the artifact index carries
+  run ID, size, and SHA-256. Unsupported backfield/SUSC/mixed live plans still
+  block before hardware preflight or treatment dispatch.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
   and faults (22), live transport and backend facade (21), holder state and
   holder command (19), queue-level fail-closed and holder behavior (13),

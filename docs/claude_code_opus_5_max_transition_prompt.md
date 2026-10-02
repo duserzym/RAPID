@@ -86,9 +86,10 @@ implementation baseline:
 - `811d64e` — record treatment-route preflight readiness.
 - `d8d984c` — make susceptibility diagnostics truthful and auditable; and
 - `8960e93` — record susceptibility diagnostic readiness; and
-- `6e69b61` — make VRM sessions ownership-safe and auditable.
+- `6e69b61` — make VRM sessions ownership-safe and auditable; and
+- `92f4242` — carry rockmag routines into auditable run bundles.
 
-The complete RapidPy suite now reports **540 passing tests** using
+The complete RapidPy suite now reports **546 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -103,14 +104,14 @@ shows a remaining gap.
 
 Work in this priority order:
 
-1. complete rockmag run-bundle execution without touching hardware, building
-   on the compiler/planning foundation and the completed VRM handoff below.
+1. complete the next retained treatment boundary without touching hardware,
+   prioritizing thermal integration or an explicit retirement decision.
    SQUID recovery, vacuum acknowledgment behavior, AF/IRM ADwin treatment
    evidence, DC motor transport/state safety, treatment-route preflight, and
    susceptibility bridge diagnostics are already complete; do not duplicate
    those implementations;
 2. finish the remaining evidence-backed software parity rows and testable
-   protocol/replay boundaries for thermal, susceptibility, rockmag, and
+   protocol/replay boundaries for thermal, susceptibility, and
    retained auxiliaries; keep physical VRM, SQUID, vacuum, AF/IRM, ADwin/DAC/MCC,
    motor, and other RAPID-system-only gates explicitly pending;
 3. complete deployment acceptance in a dependency-clean environment and on the
@@ -339,15 +340,39 @@ was opened and no SQUID command was issued. Physical VRM acquisition, timing
 stability, long-duration logging, baseline drift, serial fault injection, and
 operator/run-bundle acceptance remain pending.
 
-For the next implementation assignment, trace `frmRockmagRoutine` and every
-compiled rockmag family from the existing `rapid_main.rockmag` planning model
-through queue preflight, treatment dispatch, measurement output, artifact
-indexing, interruption, and failure state. Produce deterministic run bundles
-for the software-executable paths, and keep RRM, backfield, thermal,
-susceptibility, or other unsupported live families blocked with specific
-reasons. Do not weaken the treatment-plan fail-closed contract to make a mixed
-rockmag preset appear executable. Where hardware is required, add replay/fake
-coverage and an executable acceptance record instead of claiming success.
+### Completed assignment: compiled rockmag identity in auditable run bundles
+
+Commit `92f4242` carries the existing compiler through the main Sequence panel,
+Measurement panel, worker, provenance, workflow summary, and artifact index.
+Both the Hawaiian AF preset and Rockmag the Works retain their compiled plan
+identity until a manual edit or unrelated sequence replaces it. Repeats now
+duplicate real steps instead of inserting a false `REPEAT2` measurement label.
+
+For a compiled routine, every completion or abort writes an atomic
+`rapidpy.rockmag.run.v1` artifact with run/sample/operator/software identity,
+requested and completed labels, skipped resume duplicates, errors, final phase,
+routine blocks/metadata, simulation status, and the physical-acceptance
+boundary. `artifact_index.json` includes the rockmag artifact, run ID, byte
+size, and SHA-256; the full routine also appears in `provenance.json`, and a
+compact identity appears in `workflow_summary.json`. Simulated output remains
+under `SIMULATED/`.
+
+This does not make every Rockmag the Works family executable on live hardware.
+Existing treatment-plan preflight still blocks backfield, RRM, thermal,
+automated susceptibility, malformed, and other unsupported live labels before
+ordinary hardware preflight. Tests prove a blocked mixed plan emits an aborted
+rockmag artifact with no treatment or hardware-preflight call. No port, board,
+motor, furnace, bridge, or SQUID was opened.
+
+For the next implementation assignment, trace the legacy thermal path from
+`modThermal` and its reachable forms through the existing planning service and
+queue label route. If a truthful production furnace/oven protocol is present,
+add a typed adapter with temperature readback, limits/interlocks, ownership,
+safe abort/return, exact communication evidence, and fake/replay tests. If the
+protocol or supported hardware is absent, do not invent it: retain the current
+specific live preflight blocker, create an executable integration/retirement
+decision record, and close any remaining UI/config/output gaps that can be
+proven without hardware. Keep physical thermal acceptance explicitly pending.
 
 The truthful empty Plots/Sample Selection/Queue states, real `.sam`/`.csv`
 sample-index-to-queue workflow, No-Communication-only AF examples, atomic
