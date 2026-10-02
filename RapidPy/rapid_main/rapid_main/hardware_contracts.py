@@ -684,6 +684,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                 recover=self._bracketed.recover_flux_count_discontinuity,
                 averaging_cycles=max(1, int(self._config.squid.samples_per_pos or 1)),
                 flux_discontinuity_retries=int(self._bracketed.flux_discontinuity_retries),
+                clock=getattr(self._acquisition_clock, "now", None),
             )
             outcome = service.measure(holder_id=_holder_identity(hole), hole=hole)
         finally:
