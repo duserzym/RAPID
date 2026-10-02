@@ -87,7 +87,9 @@ implementation baseline:
 - `d8d984c` — make susceptibility diagnostics truthful and auditable; and
 - `8960e93` — record susceptibility diagnostic readiness; and
 - `6e69b61` — make VRM sessions ownership-safe and auditable; and
-- `92f4242` — carry rockmag routines into auditable run bundles.
+- `044aba5` — record VRM session readiness and acceptance gates;
+- `92f4242` — carry rockmag routines into auditable run bundles; and
+- `e324937` — record rockmag run-bundle readiness.
 
 The complete RapidPy suite now reports **546 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
@@ -364,15 +366,59 @@ ordinary hardware preflight. Tests prove a blocked mixed plan emits an aborted
 rockmag artifact with no treatment or hardware-preflight call. No port, board,
 motor, furnace, bridge, or SQUID was opened.
 
-For the next implementation assignment, trace the legacy thermal path from
-`modThermal` and its reachable forms through the existing planning service and
-queue label route. If a truthful production furnace/oven protocol is present,
-add a typed adapter with temperature readback, limits/interlocks, ownership,
-safe abort/return, exact communication evidence, and fake/replay tests. If the
-protocol or supported hardware is absent, do not invent it: retain the current
-specific live preflight blocker, create an executable integration/retirement
-decision record, and close any remaining UI/config/output gaps that can be
-proven without hardware. Keep physical thermal acceptance explicitly pending.
+### Immediate assignment: make the thermal boundary explicit and auditable
+
+Start from the source evidence already established in this repository audit:
+
+- `VB6/modThermal.bas` is **not** a specimen furnace/oven controller. It only
+  validates two AF coil thermal-sensor readings, pauses execution, raises the
+  program alert level, sends notification, and offers an operator-controlled
+  resume after a low/invalid sensor condition;
+- the VB6 project contains thermal-treatment identity and plotting
+  classification (`Action_ThermalDemag`, `DemagType_Thermal`, and the TH branch
+  in measurement/plot forms), but the current source search has not found a
+  production furnace transport, temperature set-point command, temperature
+  readback protocol, or automated specimen-transfer state machine; and
+- RapidPy currently has a planning-only `rapid_main.thermal` service and
+  correctly blocks `TT`/`TH`/`TEMP` live queue labels unless the selected
+  production backend supplies a callable `apply_thermal` implementation.
+
+Verify that finding against the complete active VB6 project before editing.
+Search by project membership and call graph, not just filenames. Keep AF coil
+sensor protection distinct from specimen thermal treatment. If no additional
+authoritative furnace protocol is found, do **not** infer commands from UI
+labels, generic serial conventions, manuals for an unknown controller, or the
+planning model.
+
+Then close the software boundary without pretending to automate the furnace:
+
+1. create a versioned, machine-readable thermal integration/retirement decision
+   record that cites the searched VB6 source, records whether treatment is
+   external/manual/retired, names the missing controller/protocol/interlocks,
+   and states the exact evidence needed to reopen automated integration;
+2. keep live queue preflight fail-closed with a specific operator-facing reason
+   and prove that a blocked thermal plan issues no hardware-preflight,
+   treatment, motion, or measurement calls;
+3. make the existing thermal planner publish atomically and preserve exact
+   routine identity through the Sequence/main-shell boundary where practical;
+4. emit an immutable aborted thermal run record for a blocked compiled routine,
+   linked through provenance/workflow summary/artifact index with run, sample,
+   operator, software/config, requested labels, blocker, final phase, and
+   real/simulated status. Never describe a plan estimate as a treatment result;
+5. make the UI say clearly that thermal treatment is planning/manual-external
+   only unless a production adapter is configured. Do not expose a button or
+   status that implies furnace control; and
+6. add focused tests for schema validation, atomic publication, identity
+   invalidation after manual sequence edits, blocked-call ordering, artifact
+   linkage/digests, simulation isolation, interruption/error outcomes, and
+   truthful UI wording.
+
+If and only if additional authoritative source or operator-supplied controller
+documentation establishes a real production furnace protocol, stop and present
+the discovered controller, command set, readback, limit/interlock, ownership,
+safe-abort/return, and acceptance requirements before enabling live dispatch.
+Implement that path with a typed adapter and fake/replay tests, but leave
+physical thermal acceptance pending until signed hardware evidence exists.
 
 The truthful empty Plots/Sample Selection/Queue states, real `.sam`/`.csv`
 sample-index-to-queue workflow, No-Communication-only AF examples, atomic
@@ -466,7 +512,14 @@ Read these files first:
 - `docs/vb6_parity_inventory.md`
 - the pasted/archive diagnosis if it exists in the working context
 - `VB6/modMeasure.bas`
+- `VB6/modThermal.bas`
+- `VB6/modPaleomag.bas`
+- `VB6/frmMeasure.frm`
+- `VB6/frmPlots.frm`
 - `VB6/MeasurementBlock.cls`
+- `RapidPy/rapid_main/rapid_main/thermal.py`
+- `RapidPy/rapid_main/rapid_main/queue_hardware_backend.py`
+- `RapidPy/rapid_main/rapid_main/panels/calibration.py`
 - `RapidPy/rapid_main/rapid_main/magnetometer.py`
 - `RapidPy/rapid_main/rapid_main/measurement_worker.py`
 - `RapidPy/rapid_main/rapid_main/diagnostic_services.py`
@@ -587,9 +640,12 @@ At minimum, verify and finish:
     them and close only the remaining dependency-clean/operator deployment gate.
 
 Do not make fake implementations merely to make controls appear wired. When a
-feature requires unavailable physical hardware, complete its protocol boundary,
-preflight, state machine, replay/simulator fixture, failure behavior, evidence
-schema, and tests, then label live acceptance as pending.
+feature requires unavailable physical hardware and its protocol is known,
+complete its protocol boundary, preflight, state machine, replay/simulator
+fixture, failure behavior, evidence schema, and tests, then label live
+acceptance as pending. When the hardware identity or protocol itself is absent,
+retain a specific fail-closed blocker and produce an integration/retirement
+decision record; do not invent an adapter merely to satisfy a parity row.
 
 Use `docs/vb6_parity_inventory.md` as the controlling inventory and reconcile
 it with active items in `VB6/Paleomag v3.vbp`. Every item must end in one of
@@ -726,11 +782,12 @@ Document every intentional difference from VB6 and why it is safer or required.
 ## Remaining live acceptance work
 
 After the P0 path is complete in software, work through the P1/P2 inventory in
-`docs/rapidpy_transition_readiness_2026-08-29.md`: thermal, susceptibility,
-VRM, rockmag, remaining retained auxiliaries, installer/config migration, and
-physical acceptance. Vacuum, AF/IRM ADwin, and DC motor software behavior is
-complete as described above; remaining work for those paths is physical
-acceptance, including independent pressure integration if retained,
+`docs/rapidpy_transition_readiness_2026-08-29.md`: the explicit thermal
+integration/retirement boundary, automated susceptibility mechanics, physical
+VRM and rockmag acceptance, remaining retained auxiliaries, installer/config
+migration, and physical acceptance. Vacuum, AF/IRM ADwin, and DC motor software
+behavior is complete as described above; remaining work for those paths is
+physical acceptance, including independent pressure integration if retained,
 ADwin/DAC/MCC loopback, and physical motor/interlock tests. Plot/export,
 settings backup/restore, and rollback software paths are already implemented;
 revisit them only for a demonstrated regression or a specific acceptance gap.
