@@ -6,6 +6,7 @@ from rapid_main.analysis import (
     fit_principal_axis,
     moment_decay_summary,
     moment_statistics,
+    moment_value_statistics,
     reading_cycle_statistics,
     vector_centroid,
     vector_orientation,
@@ -103,6 +104,17 @@ class AnalysisTests(unittest.TestCase):
         self.assertTupleAlmostEqual(stats.decay.per_step_ratios, (0.5, 0.5))
         self.assertTrue(stats.decay.monotonic_nonincreasing)
         self.assertAlmostEqual(stats.decay.log_decay_slope, math.log(0.5))
+
+    def test_moment_value_statistics_matches_step_statistics(self) -> None:
+        steps = [
+            _step("NRM", 1.0, 0.0, 0.0, 10.0),
+            _step("AF10", 0.5, 0.0, 0.0, 5.0),
+        ]
+
+        self.assertEqual(
+            moment_value_statistics([10.0, 5.0]),
+            moment_statistics(steps),
+        )
 
     def test_moment_decay_handles_zero_initial_and_non_monotonic_sequences(self) -> None:
         decay = moment_decay_summary([0.0, 2.0, 1.0, 3.0])

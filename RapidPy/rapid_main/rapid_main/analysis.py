@@ -181,7 +181,13 @@ def vector_orientation(vector: Vector3) -> tuple[float, float]:
 def moment_statistics(steps: Iterable[MeasurementStep]) -> MomentStatistics:
     """Return deterministic moment statistics and decay evidence."""
 
-    moments = [float(step.moment) for step in steps]
+    return moment_value_statistics(float(step.moment) for step in steps)
+
+
+def moment_value_statistics(moments: Iterable[float]) -> MomentStatistics:
+    """Return the same statistics for already-extracted moment magnitudes."""
+
+    moments = [float(moment) for moment in moments]
     if not moments:
         return MomentStatistics(0, None, None, None, None, None, moment_decay_summary([]))
     return MomentStatistics(

@@ -38,6 +38,8 @@ class DataDialogGlassTests(unittest.TestCase):
                 self.assertFalse(dialog.styleSheet())
 
         self.assertTrue(plots._tabs.accessibleName())
+        self.assertTrue(plots._analysis_table.accessibleName())
+        self.assertTrue(plots._analysis_status.accessibleName())
         self.assertTrue(plots._demo_btn.accessibleName())
         self.assertTrue(plots._export_btn.accessibleName())
         self.assertFalse(plots._export_btn.isEnabled())

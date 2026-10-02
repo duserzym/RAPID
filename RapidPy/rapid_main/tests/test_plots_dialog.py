@@ -39,7 +39,55 @@ class PlotsDialogTests(unittest.TestCase):
         self.assertEqual(data["inclination"], [-0.0, 45.0])
         self.assertAlmostEqual(data["intensity"][0], 1.0)
         self.assertAlmostEqual(data["intensity"][1], math.sqrt(2.0))
+        self.assertIn("principal_axis", data["analysis"])
+        self.assertEqual(dialog._analysis_table.rowCount(), 11)
+        self.assertTrue(dialog._analysis_table.accessibleName())
         dialog.deleteLater()
+
+    def test_analysis_tab_reports_principal_axis_and_decay_evidence(self) -> None:
+        dialog = PlotsDialog()
+        dialog.set_data(
+            north=[4.0, 3.0, 2.0, 1.0],
+            east=[4.0, 3.0, 2.0, 1.0],
+            up=[0.0, 0.0, 0.0, 0.0],
+            labels=["NRM", "AF10", "AF20", "AF30"],
+        )
+
+        analysis = dialog.quicklook_summary()["analysis"]
+        principal = analysis["principal_axis"]
+        decay = analysis["decay"]
+        self.assertAlmostEqual(principal["declination_deg"], 45.0)
+        self.assertAlmostEqual(principal["variance_fraction"], 1.0)
+        self.assertAlmostEqual(principal["rms_perpendicular"], 0.0)
+        self.assertTrue(decay["monotonic_nonincreasing"])
+        self.assertEqual(dialog._analysis_status.property("status"), "ready")
+        self.assertTrue(dialog._analysis_status.text().startswith("READY —"))
+        dialog.deleteLater()
+
+    def test_analysis_tab_warns_for_non_monotonic_sequence(self) -> None:
+        dialog = PlotsDialog()
+        dialog.set_data(
+            north=[3.0, 1.0, 2.0],
+            east=[0.0, 0.0, 0.0],
+            up=[0.0, 0.0, 0.0],
+            labels=["NRM", "AF10", "AF20"],
+        )
+
+        self.assertEqual(dialog._analysis_status.property("status"), "warning")
+        self.assertIn("not monotonic", dialog._analysis_status.text())
+        dialog.deleteLater()
+
+    def test_principal_axis_uses_north_east_down_inclination_convention(self) -> None:
+        summary = build_quicklook_summary(
+            north=[0.0, 0.0],
+            east=[0.0, 0.0],
+            up=[-2.0, -1.0],
+            labels=["NRM", "AF10"],
+        )
+
+        principal = summary["analysis"]["principal_axis"]
+        self.assertEqual(principal["coordinate_convention"], "north_east_down")
+        self.assertAlmostEqual(principal["inclination_deg"], 90.0)
 
     def test_dialog_starts_empty_without_implicit_demo_evidence(self) -> None:
         dialog = PlotsDialog()
@@ -99,6 +147,7 @@ class PlotsDialogTests(unittest.TestCase):
         self.assertEqual(payload["vectors"]["north"], [1.0])
         self.assertEqual(payload["intensity"], [1.0])
         self.assertFalse(payload["provenance"]["simulated"])
+        self.assertIn("principal_axis", payload["analysis"])
         dialog.deleteLater()
 
     def test_simulated_json_and_csv_exports_retain_provenance(self) -> None:
@@ -114,6 +163,7 @@ class PlotsDialogTests(unittest.TestCase):
         self.assertTrue(payload["provenance"]["simulated"])
         self.assertIn("not hardware evidence", payload["provenance"]["statement"])
         self.assertIn("simulated,provenance_statement", csv_text.splitlines()[0])
+        self.assertIn("pca_declination_deg", csv_text.splitlines()[0])
         self.assertIn(",true,Example plot data; not hardware evidence", csv_text)
         dialog.deleteLater()
 

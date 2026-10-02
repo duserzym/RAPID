@@ -15,6 +15,7 @@ except ImportError:
 
 from PySide6 import QtCore, QtGui, QtWidgets
 from rapidpy_common.ui import clamp_window_geometry
+from rapid_main.analysis import fit_principal_axis, moment_value_statistics
 from rapid_main.glass_theme import set_semantic_status
 
 try:
@@ -71,6 +72,9 @@ def build_quicklook_summary(
         i, d = _cart_to_inc_dec(x, y, z)
         inc.append(i)
         dec.append(d)
+    principal = fit_principal_axis(zip(n, e, down))
+    moment_stats = moment_value_statistics(intensity)
+    decay = moment_stats.decay
     return {
         "step_count": len(step_labels),
         "labels": step_labels,
@@ -83,6 +87,38 @@ def build_quicklook_summary(
         "intensity": intensity,
         "inclination": inc,
         "declination": dec,
+        "analysis": {
+            "principal_axis": {
+                "coordinate_convention": "north_east_down",
+                "count": principal.count,
+                "centroid": list(principal.centroid),
+                "axis": list(principal.axis),
+                "declination_deg": principal.declination_deg,
+                "inclination_deg": principal.inclination_deg,
+                "primary_variance": principal.primary_variance,
+                "total_variance": principal.total_variance,
+                "variance_fraction": principal.variance_fraction,
+                "rms_perpendicular": principal.rms_perpendicular,
+                "degenerate": principal.is_degenerate,
+            },
+            "moment_statistics": {
+                "count": moment_stats.count,
+                "minimum": moment_stats.minimum,
+                "maximum": moment_stats.maximum,
+                "mean": moment_stats.mean,
+                "median": moment_stats.median,
+                "population_stdev": moment_stats.population_stdev,
+            },
+            "decay": {
+                "initial": decay.initial,
+                "final": decay.final,
+                "final_ratio": decay.final_ratio,
+                "percent_loss": decay.percent_loss,
+                "per_step_ratios": list(decay.per_step_ratios),
+                "monotonic_nonincreasing": decay.monotonic_nonincreasing,
+                "log_decay_slope": decay.log_decay_slope,
+            },
+        },
     }
 
 
@@ -120,6 +156,12 @@ def write_quicklook_csv(path: str | Path, summary: dict[str, object]) -> Path:
     provenance = provenance if isinstance(provenance, dict) else {}
     simulated = bool(provenance.get("simulated", False))
     statement = str(provenance.get("statement", ""))
+    analysis = summary.get("analysis", {})
+    analysis = analysis if isinstance(analysis, dict) else {}
+    principal = analysis.get("principal_axis", {})
+    principal = principal if isinstance(principal, dict) else {}
+    decay = analysis.get("decay", {})
+    decay = decay if isinstance(decay, dict) else {}
 
     from io import StringIO
 
@@ -137,6 +179,14 @@ def write_quicklook_csv(path: str | Path, summary: dict[str, object]) -> Path:
             "inclination_deg",
             "simulated",
             "provenance_statement",
+            "pca_declination_deg",
+            "pca_inclination_deg",
+            "pca_variance_fraction",
+            "pca_rms_perpendicular",
+            "decay_final_ratio",
+            "decay_percent_loss",
+            "decay_monotonic_nonincreasing",
+            "log_decay_slope",
         ]
     )
     for index, label in enumerate(labels):
@@ -152,6 +202,14 @@ def write_quicklook_csv(path: str | Path, summary: dict[str, object]) -> Path:
                 fields["inclination"][index],
                 "true" if simulated else "false",
                 statement,
+                principal.get("declination_deg", ""),
+                principal.get("inclination_deg", ""),
+                principal.get("variance_fraction", ""),
+                principal.get("rms_perpendicular", ""),
+                decay.get("final_ratio", ""),
+                decay.get("percent_loss", ""),
+                decay.get("monotonic_nonincreasing", ""),
+                decay.get("log_decay_slope", ""),
             ]
         )
     return _atomic_write_text(Path(path), output.getvalue())
@@ -179,6 +237,30 @@ def _atomic_write_text(target: Path, text: str) -> Path:
         if temporary is not None and temporary.exists():
             temporary.unlink()
     return target
+
+
+def _format_analysis_value(value: object, suffix: str = "") -> str:
+    if value is None:
+        return "N/A"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not math.isfinite(number):
+        return "N/A"
+    return f"{number:.6g}{suffix}"
+
+
+def _format_analysis_percent(value: object) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not math.isfinite(number):
+        return "N/A"
+    return f"{number * 100.0:.2f}%"
 
 
 # ── Stereonet widget (custom QPainter, no pyqtgraph dependency) ───────────────
@@ -450,7 +532,9 @@ class PlotsDialog(QtWidgets.QDialog):
             "intensity": summary["intensity"],
             "inclination": summary["inclination"],
             "declination": summary["declination"],
+            "analysis": summary["analysis"],
         }
+        self._update_analysis_view(summary["analysis"])
         if simulated:
             statement = provenance_statement.strip() or (
                 "Example plot data; not hardware evidence"
@@ -499,6 +583,7 @@ class PlotsDialog(QtWidgets.QDialog):
             "intensity": list(data.get("intensity", [])),
             "inclination": list(data.get("inclination", [])),
             "declination": list(data.get("declination", [])),
+            "analysis": dict(data.get("analysis", {})),
             "provenance": dict(self._provenance),
         }
 
@@ -561,6 +646,28 @@ class PlotsDialog(QtWidgets.QDialog):
         QtWidgets.QVBoxLayout(int_wrap).addWidget(self._int_plot)
         self._tabs.addTab(int_wrap, "Intensity Decay")
 
+        # Reproducible analysis summary
+        analysis_wrap = QtWidgets.QWidget()
+        analysis_layout = QtWidgets.QVBoxLayout(analysis_wrap)
+        self._analysis_status = QtWidgets.QLabel()
+        self._analysis_status.setWordWrap(True)
+        set_semantic_status(
+            self._analysis_status,
+            "Load at least two measurement steps for principal-axis evidence",
+            "neutral",
+            accessible_name="Plot analysis status",
+        )
+        analysis_layout.addWidget(self._analysis_status)
+        self._analysis_table = QtWidgets.QTableWidget(0, 2)
+        self._analysis_table.setHorizontalHeaderLabels(["Metric", "Value"])
+        self._analysis_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self._analysis_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        self._analysis_table.verticalHeader().setVisible(False)
+        self._analysis_table.horizontalHeader().setStretchLastSection(True)
+        self._analysis_table.setAccessibleName("Principal-axis and decay analysis")
+        analysis_layout.addWidget(self._analysis_table, 1)
+        self._tabs.addTab(analysis_wrap, "Analysis")
+
         vl.addWidget(self._tabs, 1)
 
         # Buttons
@@ -589,6 +696,57 @@ class PlotsDialog(QtWidgets.QDialog):
         btn_row.addWidget(self._export_btn)
         btn_row.addWidget(self._close_btn)
         vl.addLayout(btn_row)
+
+    def _update_analysis_view(self, analysis: object) -> None:
+        payload = analysis if isinstance(analysis, dict) else {}
+        principal = payload.get("principal_axis", {})
+        principal = principal if isinstance(principal, dict) else {}
+        stats = payload.get("moment_statistics", {})
+        stats = stats if isinstance(stats, dict) else {}
+        decay = payload.get("decay", {})
+        decay = decay if isinstance(decay, dict) else {}
+
+        rows = [
+            ("Step count", stats.get("count")),
+            ("Principal declination", _format_analysis_value(principal.get("declination_deg"), "°")),
+            ("Principal inclination", _format_analysis_value(principal.get("inclination_deg"), "°")),
+            ("PCA variance explained", _format_analysis_percent(principal.get("variance_fraction"))),
+            ("PCA RMS perpendicular", _format_analysis_value(principal.get("rms_perpendicular"))),
+            ("Initial intensity", _format_analysis_value(decay.get("initial"))),
+            ("Final intensity", _format_analysis_value(decay.get("final"))),
+            ("Final / initial", _format_analysis_value(decay.get("final_ratio"))),
+            ("Moment loss", _format_analysis_value(decay.get("percent_loss"), "%")),
+            ("Monotonic non-increasing", "Yes" if decay.get("monotonic_nonincreasing") else "No"),
+            ("Log-decay slope", _format_analysis_value(decay.get("log_decay_slope"))),
+        ]
+        self._analysis_table.setRowCount(len(rows))
+        for row, (metric, value) in enumerate(rows):
+            self._analysis_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(metric)))
+            self._analysis_table.setItem(row, 1, QtWidgets.QTableWidgetItem(str(value)))
+        self._analysis_table.resizeRowsToContents()
+
+        count = int(principal.get("count", 0) or 0)
+        if count < 2 or bool(principal.get("degenerate", True)):
+            set_semantic_status(
+                self._analysis_status,
+                "Principal-axis fit is degenerate; review the available vectors",
+                "warning" if count else "neutral",
+                accessible_name="Plot analysis status",
+            )
+        elif not bool(decay.get("monotonic_nonincreasing", False)):
+            set_semantic_status(
+                self._analysis_status,
+                "Principal-axis fit available; moment sequence is not monotonic",
+                "warning",
+                accessible_name="Plot analysis status",
+            )
+        else:
+            set_semantic_status(
+                self._analysis_status,
+                "Principal-axis and monotonic decay evidence available",
+                "ready",
+                accessible_name="Plot analysis status",
+            )
 
     def _load_demo(self) -> None:
         """Load an explicit, unmistakably simulated UI example."""
