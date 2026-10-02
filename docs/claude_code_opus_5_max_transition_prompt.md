@@ -80,8 +80,9 @@ implementation baseline:
 - `6b40b81` — reject stale buffered and unterminated partial SQUID replies.
 - `1ba9c6c` — recover SQUID transport faults by safely reacquiring whole blocks.
 - `254fa71` — make live vacuum control fail closed and auditable.
+- `319d467` — make ADwin treatments fail closed and auditable.
 
-The complete RapidPy suite now reports **499 passing tests** using
+The complete RapidPy suite now reports **505 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -97,15 +98,14 @@ shows a remaining gap.
 Work in this priority order:
 
 1. extend raw communication evidence and deterministic fault handling to the
-   remaining retained AF, IRM/ARM, and DC/ADWIN live adapters without touching
-   hardware. SQUID stale/partial rejection and safe whole-block retry/backoff,
-   plus vacuum connection/acknowledgment fail-closed behavior, are already
+   remaining DC motor and retained auxiliary live adapters without touching
+   hardware. SQUID recovery, vacuum connection/acknowledgment behavior, and
+   AF/IRM ADwin readiness plus structured treatment evidence are already
    complete; do not duplicate those implementations;
 2. finish the remaining evidence-backed software parity rows and testable
-   protocol/replay boundaries for thermal, AF, IRM/ARM, DC/ADWIN,
-   susceptibility, VRM, rockmag, and transport robustness; keep vacuum physical
-   pump/valve and independent pressure-instrument acceptance, and every other
-   RAPID-system-only gate, explicitly pending;
+   protocol/replay boundaries for thermal, DC motors, susceptibility, VRM,
+   rockmag, and transport robustness; keep physical SQUID, vacuum, AF/IRM,
+   ADwin/DAC/MCC, motor, and other RAPID-system-only gates explicitly pending;
 3. complete deployment acceptance in a dependency-clean environment and on the
    operator account. The installable wheel, packaged icons, configuration and
    dependency diagnostics, installed helper entry points, source-tree-free
@@ -202,14 +202,41 @@ redo this software path. Physical pump/valve command-and-acknowledgment
 round-trip, an independent pressure adapter/interlock if pressure gating is
 retained, and controlled physical fault injection remain explicitly pending.
 
-The next implementation assignment is the remaining AF/IRM/DC evidence and
-fault boundary. Inspect the VB6 commands and existing RapidPy adapters first,
-then add exact, immutable, current-run TX/RX/ERROR evidence and fail-closed
-connection/acknowledgment behavior where it is genuinely missing. Use injected
-fake transports and deterministic replay tests; do not open ports or actuate
-hardware. Do not copy SQUID's whole-block recovery state machine into treatment
-devices unless the legacy protocol and safety contract specifically require
-that behavior.
+### Completed assignment: fail-closed and auditable AF/IRM ADwin treatments
+
+Commit `319d467` closes the software evidence boundary for the live AF and
+IRM/ARM treatment adapters without claiming a board, coil, DAC, or specimen was
+physically exercised. Both adapters now require a nonzero read-only ADwin
+version probe during live construction; missing drivers, controller creation
+failures, a missing probe, or a zero/unreachable response fail construction and
+become a hardware-mode preflight blocker instead of a disconnected live object.
+
+Each AF or incremental IRM/ARM ramp records the complete structured API request
+and returned result, or an ERROR event before propagating the original failure.
+An incomplete result is rejected rather than padded with invented zero fields.
+Safe relay reset records its request and requires a returned relay word before
+reporting confirmation; the former live-disconnected “simulated reset” message
+is gone. Event snapshots are immutable. `QueueHardwareBackend` merges live
+SQUID and AF/IRM events chronologically, and simulated treatment sources are
+excluded, so `MeasurementWorker` publishes only current-run evidence into
+`communication.tsv`.
+
+Coverage lives in `tests/test_diagnostic_services.py` and
+`tests/test_queue_hardware_backend.py`. Injectable fake controllers prove
+success, errors, malformed results, readiness refusal, reset confirmation,
+event ordering, and simulation exclusion without loading a board or actuating
+hardware. Do not recreate this path. Physical AF/IRM ramp, coil/interlock,
+decay, safe-abort, DAC/MCC loopback, and transcript acceptance remain pending.
+
+The next implementation assignment is the DC motor evidence boundary. Inspect
+the VB6 motor command/reply behavior and `MotorSerialClient` first, then add
+immutable current-run command/reply/error evidence at the lowest truthful
+shared transport boundary without changing command ordering or issuing any
+hardware calls during development. Preserve motion-result verification and
+fail closed on partial, malformed, timed-out, or unsuccessful results. Use
+injected fake transports and deterministic tests. Do not treat a high-level
+method return as raw serial evidence unless the underlying client actually
+retains the command and reply bytes.
 
 The truthful empty Plots/Sample Selection/Queue states, real `.sam`/`.csv`
 sample-index-to-queue workflow, No-Communication-only AF examples, atomic
@@ -563,14 +590,14 @@ Document every intentional difference from VB6 and why it is safer or required.
 ## Remaining live acceptance work
 
 After the P0 path is complete in software, work through the P1/P2 inventory in
-`docs/rapidpy_transition_readiness_2026-08-29.md`: AF, IRM/ARM,
-ADWIN/DAC/MCC, thermal, susceptibility, VRM, rockmag, motors, serial
-robustness, installer/config migration, and physical acceptance. Vacuum
-software behavior is complete as described above; its remaining work is
-physical pump/valve acknowledgment and, if pressure gating is retained,
-integration and acceptance of an independent pressure source. Plot/export,
-settings backup/restore, and rollback software paths are already implemented;
-revisit them only for a demonstrated regression or a specific acceptance gap.
+`docs/rapidpy_transition_readiness_2026-08-29.md`: DC motors, thermal,
+susceptibility, VRM, rockmag, remaining serial robustness, installer/config
+migration, and physical acceptance. Vacuum and AF/IRM ADwin software behavior
+is complete as described above; remaining work for those paths is physical
+acceptance, including independent pressure integration if retained and
+ADwin/DAC/MCC loopback. Plot/export, settings backup/restore, and rollback
+software paths are already implemented; revisit them only for a demonstrated
+regression or a specific acceptance gap.
 
 For work that requires the physical RAPID system, provide an executable acceptance procedure and evidence schema instead of claiming success. Every hardware test record should include date/time, operator, machine/software commit, configuration hash, device/port identity, commands and raw replies, expected result, observed result, pass/fail, and artifact paths.
 

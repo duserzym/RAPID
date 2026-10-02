@@ -235,9 +235,13 @@ explicit hardware operation, never a silent accept.
 
 ### P1 — live capability parity
 
-- AF demagnetizer execution, telemetry, decay, and interlock acceptance;
-- vacuum live readback plus high-pressure and pump fault-to-halt tests;
-- IRM/ARM, ADWIN, DAC, and MCC calibration/loopback evidence;
+- AF demagnetizer physical execution, decay, interlock, safe-abort, and recorded
+  ADwin request/result acceptance;
+- vacuum pump/valve command-and-acknowledgment acceptance plus an independent
+  pressure adapter/interlock and controlled fault-to-halt tests if pressure
+  gating is retained (the legacy controller itself has no pressure telemetry);
+- IRM/ARM physical execution, safe-abort, ADwin, DAC, and MCC
+  calibration/loopback evidence;
 - furnace/oven control and thermal safety acceptance;
 - susceptibility, VRM, and rock-magnetic acquisition with reproducible bundles;
 - interrupted-queue recovery and physical safe-state acceptance;
@@ -246,7 +250,8 @@ explicit hardware operation, never a silent accept.
   In software, numeric queries discard uncorrelated buffered input and reject
   partial replies; transport failures return to zero, clear/reset, back off,
   and reacquire a fresh whole block, with bounded exhaustion and structured run
-  evidence. Equivalent integration for other retained adapters and physical
+  evidence. Vacuum and AF/IRM ADwin software evidence are also integrated;
+  equivalent DC motor and other retained-adapter integration plus physical
   transcript acceptance remain open.
 
 ### P2 — operator and analysis parity
@@ -290,7 +295,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **493 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **505 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
@@ -352,6 +357,19 @@ summary:
   and operator warnings are retained in workflow/provenance evidence. The
   worker no longer applies an uncancellable eight-second timeout to the normal
   six-latch acquisition.
+- Hardware-mode vacuum construction and acknowledgments now fail closed without
+  falling back to simulation. Exact command/CR-terminated acknowledgment/error
+  events are retained, and live pressure is never modeled: a positive pressure
+  threshold blocks the command-only legacy controller, while threshold zero and
+  confirmed pump-on is the explicit opt-out. Current-run vacuum events are
+  eligible for the same idempotent `communication.tsv` merge.
+- AF and IRM/ARM live adapters now require a nonzero ADwin readiness probe.
+  Every ramp records its complete structured request and result or a propagated
+  error; incomplete result evidence fails closed, and relay reset requires a
+  confirmed result. Queue communication evidence merges live SQUID and AF/IRM
+  events chronologically and excludes simulated sources. Focused fake-controller
+  tests cover success, failure, malformed evidence, readiness refusal, reset,
+  and multi-source merging without accessing the board.
 - `python -m compileall` is clean across `rapid_main`, its tests,
   `updown_control`, and `rapidpy_common`. The repository configures no linter
   or type checker (no ruff/flake8/mypy config and no lint CI job), so none was
