@@ -949,15 +949,21 @@ class RawSquidClient:
         port = self._require_serial()
         deadline = time.monotonic() + timeout_s
         chunks = bytearray()
+        terminated = False
         while time.monotonic() < deadline:
             byte = port.read(1)
             if not byte:
                 continue
             if byte == b"\r":
+                terminated = True
                 break
             chunks.extend(byte)
-        if not chunks:
-            raise SquidCommunicationError("Timed out waiting for SQUID response.")
+        if not terminated:
+            partial = chunks.decode("ascii", errors="ignore").strip()
+            detail = f" Partial reply: {partial!r}." if partial else ""
+            raise SquidCommunicationError(
+                f"Timed out waiting for a terminated SQUID response.{detail}"
+            )
         return chunks.decode("ascii", errors="ignore").strip()
 
     def _query_float(self, command: str) -> float:
@@ -965,6 +971,10 @@ class RawSquidClient:
 
     def _query_value(self, command: str) -> tuple[float, str]:
         """Return the parsed value and the verbatim reply for ``command``."""
+        # A late or unsolicited response cannot be correlated to a new 2G
+        # command. Discard it before sending so a stale numeric line can never
+        # be accepted as the current counter/DVM observation.
+        self._require_serial().reset_input_buffer()
         self._send(command)
         response = self._read_response()
         match = FLOAT_RE.search(response)

@@ -387,14 +387,19 @@ class _FakeSerialPort:
     def __init__(self, replies: list[str]) -> None:
         self.is_open = True
         self.writes: list[str] = []
+        self.input_resets = 0
         self._replies = list(replies)
+        self._buffer = b""
+
+    def reset_input_buffer(self) -> None:
+        self.input_resets += 1
         self._buffer = b""
 
     def write(self, payload: bytes) -> int:
         text = payload.decode("ascii").strip("\r")
         if text:
             self.writes.append(text)
-            if self._replies:
+            if text.endswith(("SC", "SD")) and self._replies:
                 self._buffer += (self._replies.pop(0) + "\r").encode("ascii")
         return len(payload)
 
@@ -432,6 +437,24 @@ class RawSquidClientAtomicCommandTests(unittest.TestCase):
         self.assertEqual(sample.data_reply, "-0.5")
         # VB6 getVal: -data - count * range
         self.assertAlmostEqual(sample.raw_value, 0.5 - 1.0)
+        self.assertEqual(client._serial.input_resets, 2)  # type: ignore[attr-defined]
+
+    def test_read_axis_discards_stale_input_before_each_query(self) -> None:
+        client = self._client(["1", "-0.5"])
+        client._serial._buffer = b"999\r"  # type: ignore[attr-defined]
+
+        sample = client.read_axis("X")
+
+        self.assertEqual(sample.count_reply, "1")
+        self.assertEqual(sample.data_reply, "-0.5")
+        self.assertEqual(client._serial.input_resets, 2)  # type: ignore[attr-defined]
+
+    def test_unterminated_partial_response_is_rejected(self) -> None:
+        client = self._client([])
+        client._serial._buffer = b"12.5"  # type: ignore[attr-defined]
+
+        with self.assertRaisesRegex(Exception, "terminated SQUID response"):
+            client._read_response(timeout_s=0.01)
 
     def test_latch_issues_latch_count_then_latch_data(self) -> None:
         client = self._client([])
