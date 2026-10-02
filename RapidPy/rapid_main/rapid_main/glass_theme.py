@@ -23,6 +23,51 @@ class GlassTokens:
 TOKENS = GlassTokens()
 
 
+_STATUS_PREFIXES = {
+    "neutral": "STATUS",
+    "ready": "READY",
+    "active": "ACTIVE",
+    "warning": "WARNING",
+    "error": "ERROR",
+    "unavailable": "UNAVAILABLE",
+    "simulated": "SIMULATED",
+}
+
+
+def set_semantic_status(
+    widget: QtWidgets.QLabel,
+    text: str,
+    level: str = "neutral",
+    *,
+    accessible_name: str = "Status",
+    show_prefix: bool = True,
+) -> None:
+    """Set a visible, accessible, stylesheet-driven semantic state.
+
+    The textual prefix keeps state understandable without color.  Callers may
+    suppress it for a numeric readout only when a nearby status label carries
+    the same state in words.
+    """
+
+    normalized = str(level).strip().lower()
+    if normalized not in _STATUS_PREFIXES:
+        raise ValueError(f"Unknown semantic status level: {level!r}")
+
+    message = str(text).strip() or "No status available"
+    prefix = _STATUS_PREFIXES[normalized]
+    visible = f"{prefix} — {message}" if show_prefix else message
+    widget.setObjectName("statusText" if show_prefix else widget.objectName())
+    widget.setProperty("status", normalized)
+    widget.setText(visible)
+    widget.setAccessibleName(accessible_name)
+    widget.setAccessibleDescription(f"{prefix.title()} state. {message}")
+
+    style = widget.style()
+    style.unpolish(widget)
+    style.polish(widget)
+    widget.update()
+
+
 class GlassBackdrop(QtWidgets.QWidget):
     """Paint the non-animated layered background behind the main workspace."""
 
@@ -76,6 +121,86 @@ class GlassBackdrop(QtWidgets.QWidget):
 MAIN_GLASS_QSS = f"""
 QMainWindow#rapidMainWindow {{
     background: #eee6df;
+}}
+QDialog#glassDialog {{
+    color: {TOKENS.ink};
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 #f8f4ec, stop:0.55 #eee6df, stop:1 #e8dcd8
+    );
+}}
+QDialog#glassDialog QFrame#dialogCard {{
+    background: {TOKENS.surface};
+    border: 1px solid {TOKENS.border};
+    border-bottom-color: rgba(122, 2, 25, 42);
+    border-radius: 16px;
+}}
+QDialog#glassDialog QScrollArea,
+QDialog#glassDialog QScrollArea > QWidget > QWidget {{
+    background: transparent;
+    border: none;
+}}
+QDialog#glassDialog QLabel#dialogTitle {{
+    color: {TOKENS.maroon};
+    font-size: 16px;
+    font-weight: 750;
+}}
+QDialog#glassDialog QLabel#dialogSubtitle,
+QDialog#glassDialog QLabel#unitLabel {{
+    color: {TOKENS.muted};
+}}
+QDialog#glassDialog QLabel#readingDisplay {{
+    color: {TOKENS.ink};
+    background: rgba(255, 255, 255, 155);
+    border: 1px solid rgba(122, 2, 25, 35);
+    border-radius: 12px;
+    padding: 8px 12px;
+    font-size: 32px;
+    font-weight: 800;
+}}
+QDialog#glassDialog QLabel#readingDisplay[status="ready"] {{
+    color: #17653a;
+    border-color: rgba(23, 101, 58, 90);
+}}
+QDialog#glassDialog QLabel#readingDisplay[status="warning"],
+QDialog#glassDialog QLabel#readingDisplay[status="error"] {{
+    color: #9c241f;
+    border-color: rgba(156, 36, 31, 105);
+}}
+QDialog#glassDialog QLabel#statusText {{
+    color: #493b3e;
+    background: rgba(255, 255, 255, 145);
+    border: 1px solid rgba(73, 59, 62, 48);
+    border-radius: 9px;
+    padding: 6px 9px;
+    font-size: 11px;
+    font-weight: 650;
+}}
+QDialog#glassDialog QLabel#statusText[status="ready"] {{
+    color: #14532d;
+    background: rgba(220, 252, 231, 185);
+    border-color: rgba(21, 128, 61, 80);
+}}
+QDialog#glassDialog QLabel#statusText[status="active"] {{
+    color: #713f12;
+    background: rgba(254, 249, 195, 190);
+    border-color: rgba(202, 138, 4, 85);
+}}
+QDialog#glassDialog QLabel#statusText[status="warning"] {{
+    color: #7c2d12;
+    background: rgba(255, 237, 213, 190);
+    border-color: rgba(180, 83, 9, 90);
+}}
+QDialog#glassDialog QLabel#statusText[status="error"],
+QDialog#glassDialog QLabel#statusText[status="unavailable"] {{
+    color: #7f1d1d;
+    background: rgba(254, 226, 226, 195);
+    border-color: rgba(185, 28, 28, 95);
+}}
+QDialog#glassDialog QLabel#statusText[status="simulated"] {{
+    color: #4c1d95;
+    background: rgba(237, 233, 254, 195);
+    border-color: rgba(109, 40, 217, 85);
 }}
 QWidget#appBackdrop {{
     background: transparent;

@@ -28,6 +28,9 @@ class TestMainGlassTheme(unittest.TestCase):
             self.assertIn("QPushButton:focus", applied)
             self.assertIn("QPushButton:disabled", applied)
             self.assertIn("QPushButton#navBtn:checked", applied)
+            self.assertIn("QDialog#glassDialog", applied)
+            self.assertIn('QLabel#statusText[status="error"]', applied)
+            self.assertIn('QLabel#statusText[status="simulated"]', applied)
             self.assertIn(MAIN_GLASS_QSS, applied)
         finally:
             self._app.setStyleSheet(original)

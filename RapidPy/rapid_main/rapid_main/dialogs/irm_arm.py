@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6 import QtCore, QtWidgets
 
 from rapid_main.diagnostic_services import IrmArmBackend, IrmArmNoCommBackend
+from rapid_main.glass_theme import set_semantic_status
 
 
 class IrmArmDialog(QtWidgets.QDialog):
@@ -14,8 +15,10 @@ class IrmArmDialog(QtWidgets.QDialog):
         backend: IrmArmBackend | None = None,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("glassDialog")
         self.setWindowTitle("IRM / ARM Control")
-        self.setMinimumWidth(440)
+        self.setAccessibleName("IRM and ARM field control")
+        self.setMinimumWidth(340)
         self.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowContextHelpButtonHint)
         self._backend = backend or IrmArmNoCommBackend()
         self._build_ui()
@@ -27,15 +30,17 @@ class IrmArmDialog(QtWidgets.QDialog):
         vl.setSpacing(12)
 
         hdr = QtWidgets.QLabel("IRM / ARM Control")
-        hdr.setStyleSheet("font-size: 14px; font-weight: 700; color: #7A0219;")
+        hdr.setObjectName("dialogTitle")
+        hdr.setAccessibleName("IRM and ARM control title")
         vl.addWidget(hdr)
 
         # ── Mode selector ────────────────────────────────────────────────
         mode_row = QtWidgets.QHBoxLayout()
         mode_lbl = QtWidgets.QLabel("Mode:")
-        mode_lbl.setStyleSheet("color: #9a8885;")
+        mode_lbl.setObjectName("dialogSubtitle")
         self._mode = QtWidgets.QComboBox()
         self._mode.addItems(["IRM (Isothermal Remanence)", "ARM (Anhysteretic Remanence)"])
+        self._mode.setAccessibleName("Field treatment mode")
         self._mode.currentIndexChanged.connect(self._on_mode_changed)
         mode_row.addWidget(mode_lbl)
         mode_row.addWidget(self._mode, 1)
@@ -46,20 +51,24 @@ class IrmArmDialog(QtWidgets.QDialog):
         fl = QtWidgets.QFormLayout(self._irm_grp)
         fl.setSpacing(8)
         fl.setLabelAlignment(QtCore.Qt.AlignRight)
+        fl.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._irm_field = QtWidgets.QDoubleSpinBox()
         self._irm_field.setRange(0, 2000)
         self._irm_field.setValue(100)
         self._irm_field.setSuffix(" mT")
         self._irm_field.setSingleStep(10)
+        self._irm_field.setAccessibleName("IRM peak direct-current field in millitesla")
         fl.addRow("Peak DC field:", self._irm_field)
 
         self._irm_axis = QtWidgets.QComboBox()
         self._irm_axis.addItems(["Z (up-axis)", "X", "Y"])
+        self._irm_axis.setAccessibleName("IRM magnetization axis")
         fl.addRow("Magnetise axis:", self._irm_axis)
 
         self._irm_ramp = QtWidgets.QComboBox()
         self._irm_ramp.addItems(["Slow (60 s)", "Medium (30 s)", "Fast (10 s)"])
+        self._irm_ramp.setAccessibleName("IRM ramp speed")
         fl.addRow("Ramp speed:", self._irm_ramp)
 
         vl.addWidget(self._irm_grp)
@@ -69,12 +78,14 @@ class IrmArmDialog(QtWidgets.QDialog):
         fl2 = QtWidgets.QFormLayout(self._arm_grp)
         fl2.setSpacing(8)
         fl2.setLabelAlignment(QtCore.Qt.AlignRight)
+        fl2.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._arm_peak_af = QtWidgets.QDoubleSpinBox()
         self._arm_peak_af_spin = self._arm_peak_af
         self._arm_peak_af.setRange(0, 200)
         self._arm_peak_af.setValue(80)
         self._arm_peak_af.setSuffix(" mT")
+        self._arm_peak_af.setAccessibleName("ARM peak alternating field in millitesla")
         fl2.addRow("Peak AF field:", self._arm_peak_af)
 
         self._arm_bias = QtWidgets.QDoubleSpinBox()
@@ -83,34 +94,70 @@ class IrmArmDialog(QtWidgets.QDialog):
         self._arm_bias.setDecimals(3)
         self._arm_bias.setSingleStep(0.005)
         self._arm_bias.setSuffix(" mT")
+        self._arm_bias.setAccessibleName("ARM bias field in millitesla")
         fl2.addRow("Bias field:", self._arm_bias)
 
         vl.addWidget(self._arm_grp)
         self._arm_grp.setVisible(False)
 
         # ── Status ───────────────────────────────────────────────────────
-        status_suffix = " (simulated)" if self._backend.simulated else ""
-        self._status_lbl = QtWidgets.QLabel(f"Ready{status_suffix}")
-        self._status_lbl.setStyleSheet("color: #9a8885; font-size: 11px;")
+        self._status_lbl = QtWidgets.QLabel()
+        self._status_lbl.setWordWrap(True)
+        try:
+            connected = bool(self._backend.is_connected())
+        except Exception:
+            connected = False
+        try:
+            backend_status = self._backend.status()
+        except Exception as exc:
+            backend_status = f"IRM/ARM status read failed: {exc}"
+        self._set_status(
+            backend_status,
+            "ready"
+            if connected
+            else ("error" if "failed" in backend_status else "unavailable"),
+        )
         vl.addWidget(self._status_lbl)
 
         # ── Control buttons ──────────────────────────────────────────────
         ctrl_row = QtWidgets.QHBoxLayout()
         self._apply_btn = QtWidgets.QPushButton("Apply Field")
         self._apply_btn.setObjectName("accent")
+        self._apply_btn.setAccessibleName("Apply configured IRM or ARM field")
+        self._apply_btn.setAccessibleDescription(
+            "Runs the selected field treatment through the configured backend."
+        )
         self._apply_btn.clicked.connect(self._apply)
 
-        self._reset_btn = QtWidgets.QPushButton("Reset to Zero")
+        self._reset_btn = QtWidgets.QPushButton("Zero Field")
+        self._reset_btn.setAccessibleName("Reset IRM and ARM field to zero")
         self._reset_btn.clicked.connect(self._reset)
 
-        close_btn = QtWidgets.QPushButton("Close")
-        close_btn.clicked.connect(self.close)
+        self._close_btn = QtWidgets.QPushButton("Close")
+        self._close_btn.setAccessibleName("Close IRM and ARM control")
+        self._close_btn.clicked.connect(self.close)
+
+        self._apply_btn.setEnabled(connected)
+        self._reset_btn.setEnabled(connected)
 
         ctrl_row.addWidget(self._apply_btn)
         ctrl_row.addWidget(self._reset_btn)
         ctrl_row.addStretch()
-        ctrl_row.addWidget(close_btn)
+        ctrl_row.addWidget(self._close_btn)
         vl.addLayout(ctrl_row)
+
+    def _set_status(self, text: str, level: str) -> None:
+        message = str(text).strip() or "No backend status available"
+        if self._backend.simulated and level in {"neutral", "ready", "active"}:
+            level = "simulated"
+            if "simulat" not in message.lower():
+                message = f"{message} (no-communication simulation; not hardware evidence)"
+        set_semantic_status(
+            self._status_lbl,
+            message,
+            level,
+            accessible_name="IRM and ARM backend status",
+        )
 
     def _on_mode_changed(self, idx: int) -> None:
         self._irm_grp.setVisible(idx == 0)
@@ -132,17 +179,17 @@ class IrmArmDialog(QtWidgets.QDialog):
                 )
         except Exception as exc:
             msg = str(exc)
-            self._status_lbl.setStyleSheet("color: #b45309; font-size: 11px;")
+            level = "error"
         else:
-            self._status_lbl.setStyleSheet("color: #15803d; font-size: 11px;")
-        self._status_lbl.setText(msg)
+            level = "ready"
+        self._set_status(msg, level)
 
     def _reset(self) -> None:
         try:
             msg = self._backend.reset_field()
         except Exception as exc:
             msg = str(exc)
-            self._status_lbl.setStyleSheet("color: #b45309; font-size: 11px;")
+            level = "error"
         else:
-            self._status_lbl.setStyleSheet("color: #15803d; font-size: 11px;")
-        self._status_lbl.setText(msg)
+            level = "ready"
+        self._set_status(msg, level)
