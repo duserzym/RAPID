@@ -60,6 +60,7 @@ class SettingsPanel(QtWidgets.QWidget):
         self._tabs.addTab(self._build_irm_arm_tab(),    "IRM / ARM")
         self._tabs.addTab(self._build_af_demag_tab(),   "AF Demag")
         self._tabs.addTab(self._build_vacuum_tab(),     "Vacuum")
+        self._tabs.addTab(self._build_susceptibility_tab(), "Susceptibility")
         self._tabs.addTab(self._build_data_files_tab(), "Data Files")
         self._tabs.addTab(self._build_changer_tab(),    "Changer")
         self._tabs.addTab(self._build_calibration_tab(), "Calibration")
@@ -353,6 +354,68 @@ class SettingsPanel(QtWidgets.QWidget):
         self._vac_poll.setSuffix(" s")
         fl.addRow("Poll interval:", self._vac_poll)
 
+        return w
+
+    def _build_susceptibility_tab(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        fl = QtWidgets.QFormLayout(w)
+        fl.setContentsMargins(18, 16, 18, 16)
+        fl.setSpacing(10)
+        fl.setLabelAlignment(QtCore.Qt.AlignRight)
+
+        self._susc_enabled = QtWidgets.QCheckBox(
+            "Enable configured Bartington bridge diagnostics"
+        )
+        fl.addRow("", self._susc_enabled)
+
+        self._susc_port = QtWidgets.QComboBox()
+        self._susc_port.setEditable(True)
+        self._susc_port.addItems(["", *[f"COM{i}" for i in range(1, 17)]])
+        fl.addRow("Serial port:", self._susc_port)
+
+        self._susc_baud = QtWidgets.QComboBox()
+        self._susc_baud.setEditable(True)
+        self._susc_baud.addItems(["1200", "2400", "4800", "9600", "19200"])
+        fl.addRow("Baud rate:", self._susc_baud)
+
+        self._susc_parity = QtWidgets.QComboBox()
+        self._susc_parity.addItems(["N", "E", "O", "M", "S"])
+        fl.addRow("Parity:", self._susc_parity)
+
+        self._susc_bytesize = QtWidgets.QSpinBox()
+        self._susc_bytesize.setRange(5, 8)
+        fl.addRow("Data bits:", self._susc_bytesize)
+
+        self._susc_stopbits = QtWidgets.QComboBox()
+        self._susc_stopbits.addItems(["1", "1.5", "2"])
+        fl.addRow("Stop bits:", self._susc_stopbits)
+
+        self._susc_timeout = QtWidgets.QDoubleSpinBox()
+        self._susc_timeout.setRange(0.1, 120.0)
+        self._susc_timeout.setSuffix(" s")
+        fl.addRow("Response timeout:", self._susc_timeout)
+
+        self._susc_scale = QtWidgets.QDoubleSpinBox()
+        self._susc_scale.setDecimals(9)
+        self._susc_scale.setRange(1.0e-9, 1.0e9)
+        fl.addRow("Bridge scale factor:", self._susc_scale)
+
+        self._susc_moment_factor = QtWidgets.QDoubleSpinBox()
+        self._susc_moment_factor.setDecimals(12)
+        self._susc_moment_factor.setRange(1.0e-12, 1.0e3)
+        fl.addRow("Moment factor (CGS):", self._susc_moment_factor)
+
+        self._susc_coil_position = QtWidgets.QSpinBox()
+        self._susc_coil_position.setRange(-2_000_000_000, 2_000_000_000)
+        fl.addRow("Coil center position:", self._susc_coil_position)
+
+        note = QtWidgets.QLabel(
+            "These settings enable bridge diagnostics only. Automated SUSC queue steps "
+            "remain blocked until coil motion and holder correction are validated."
+        )
+        note.setWordWrap(True)
+        note.setObjectName("readLbl")
+        fl.addRow("", note)
         return w
 
     # ── Data Files tab ─────────────────────────────────────────────────────────
@@ -656,6 +719,18 @@ class SettingsPanel(QtWidgets.QWidget):
         self._vac_auto_pump.setChecked(v.auto_pump)
         self._vac_poll.setValue(v.poll_interval)
 
+        susc = cfg.susceptibility
+        self._susc_enabled.setChecked(susc.enabled)
+        self._susc_port.setCurrentText(susc.port)
+        self._susc_baud.setCurrentText(str(susc.baud))
+        self._susc_parity.setCurrentText(susc.parity)
+        self._susc_bytesize.setValue(susc.bytesize)
+        self._susc_stopbits.setCurrentText(f"{susc.stopbits:g}")
+        self._susc_timeout.setValue(susc.response_timeout)
+        self._susc_scale.setValue(susc.scale_factor)
+        self._susc_moment_factor.setValue(susc.moment_factor_cgs)
+        self._susc_coil_position.setValue(susc.coil_position)
+
         df = cfg.data_files
         self._df_format.setCurrentText(df.format)
         self._df_naming.setCurrentText(df.naming)
@@ -749,6 +824,18 @@ class SettingsPanel(QtWidgets.QWidget):
         v.warn_threshold  = self._vac_warn.value()
         v.auto_pump       = self._vac_auto_pump.isChecked()
         v.poll_interval   = self._vac_poll.value()
+
+        susc = cfg.susceptibility
+        susc.enabled = self._susc_enabled.isChecked()
+        susc.port = self._susc_port.currentText().strip()
+        susc.baud = int(self._susc_baud.currentText())
+        susc.parity = self._susc_parity.currentText()
+        susc.bytesize = self._susc_bytesize.value()
+        susc.stopbits = float(self._susc_stopbits.currentText())
+        susc.response_timeout = self._susc_timeout.value()
+        susc.scale_factor = self._susc_scale.value()
+        susc.moment_factor_cgs = self._susc_moment_factor.value()
+        susc.coil_position = self._susc_coil_position.value()
 
         df = cfg.data_files
         df.format       = self._df_format.currentText()

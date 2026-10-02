@@ -23,9 +23,19 @@ from rapidpy_common.hardware import (
     MotorTelemetry,
     convert_position_to_hole,
 )
-from rapid_main.config import AfDemagConfig, IrmArmConfig, SquidConfig, VacuumConfig
+from rapid_main.config import (
+    AfDemagConfig,
+    IrmArmConfig,
+    SquidConfig,
+    SusceptibilityConfig,
+    VacuumConfig,
+)
 from rapid_main.communication_log import CommunicationEvent, CommunicationLogger
 from rapid_main.dac import DacChannelConfig, DacCommandPlanner, DacVoltageCommand
+from rapid_main.susceptibility_transport import (
+    SusceptibilitySerialClient,
+    SusceptibilityTransportConfig,
+)
 
 try:
     from rapidpy_common.adwin_af import (
@@ -639,6 +649,28 @@ class SquidBackend(Protocol):
         ...
 
 
+@runtime_checkable
+class SusceptibilityBackend(Protocol):
+    @property
+    def simulated(self) -> bool:
+        ...
+
+    def is_connected(self) -> bool:
+        ...
+
+    def status(self) -> str:
+        ...
+
+    def zero(self) -> str:
+        ...
+
+    def measure(self) -> float:
+        ...
+
+    def communication_events(self) -> tuple[CommunicationEvent, ...]:
+        ...
+
+
 @dataclass(frozen=True)
 class SquidSnapshot:
     connected: bool
@@ -1126,6 +1158,41 @@ class SquidNoCommBackend(_BaseBackend, SquidBackend):
         return float((x**2 + y**2 + z**2) ** 0.5)
 
 
+class SusceptibilityNoCommBackend(_BaseBackend, SusceptibilityBackend):
+    """Explicit deterministic bridge simulator for training and UI checks."""
+
+    def __init__(self, cfg: SusceptibilityConfig | None = None) -> None:
+        super().__init__(simulated=True)
+        self._cfg = cfg or SusceptibilityConfig()
+        self._zeroed = False
+        self._count = 0
+        self._status = "No-comm susceptibility bridge simulator"
+
+    def is_connected(self) -> bool:
+        return True
+
+    def status(self) -> str:
+        return self._status
+
+    def zero(self) -> str:
+        self._zeroed = True
+        self._status = "Susceptibility bridge zeroed (simulated)"
+        return "OK"
+
+    def measure(self) -> float:
+        if not self._zeroed:
+            raise DiagnosticContractError(
+                "Zero the simulated susceptibility bridge before measuring."
+            )
+        self._count += 1
+        value = float(self._cfg.scale_factor) * (0.001 / self._count)
+        self._status = f"Susceptibility measured: {value:.6g} (simulated)"
+        return value
+
+    def communication_events(self) -> tuple[CommunicationEvent, ...]:
+        return ()
+
+
 class SquidBackendAdapter(_BaseBackend, SquidBackend):
     """Adapter-backed SQUID backend using the shared updown_control SQUID client."""
 
@@ -1208,15 +1275,68 @@ class SquidBackendAdapter(_BaseBackend, SquidBackend):
         return (float(x_emu), float(y_emu), float(z_emu))
 
     def read_susceptibility(self) -> float:
-        self._ensure_connected()
-        if self._baseline_raw is None:
-            raise DiagnosticContractError("SQUID baseline has not been established.")
-        calibration = _ensure_squid_calibration(self._calibration)
-        _, _, _, moment_emu = self._reader.read_moment(  # type: ignore[union-attr]
-            calibration,
-            self._baseline_raw,
+        raise DiagnosticContractError(
+            "The SQUID adapter measures magnetic moment, not susceptibility. "
+            "Use a configured Bartington susceptibility bridge adapter."
         )
-        return float(moment_emu)
+
+
+class SusceptibilityBackendAdapter(_BaseBackend, SusceptibilityBackend):
+    """Live diagnostic adapter for the Bartington bridge serial protocol."""
+
+    def __init__(
+        self,
+        cfg: SusceptibilityConfig | None = None,
+        *,
+        client: SusceptibilitySerialClient | None = None,
+    ) -> None:
+        super().__init__(simulated=False)
+        self._cfg = cfg or SusceptibilityConfig()
+        if not self._cfg.enabled:
+            raise HardwareUnavailableError(
+                "Susceptibility bridge is disabled in application settings."
+            )
+        transport_cfg = SusceptibilityTransportConfig(
+            port=str(self._cfg.port),
+            baud=int(self._cfg.baud),
+            parity=str(self._cfg.parity),
+            bytesize=int(self._cfg.bytesize),
+            stopbits=float(self._cfg.stopbits),
+            response_timeout_s=float(self._cfg.response_timeout),
+            scale_factor=float(self._cfg.scale_factor),
+        )
+        self._client = client or SusceptibilitySerialClient(transport_cfg)
+        self._client.connect()
+        if not self._client.is_connected:
+            raise HardwareUnavailableError(
+                f"Susceptibility bridge did not connect on {self._cfg.port}:{self._cfg.baud}."
+            )
+        self._status = (
+            f"Connected to susceptibility bridge ({self._cfg.port}:{self._cfg.baud})"
+        )
+
+    def is_connected(self) -> bool:
+        return bool(self._client.is_connected)
+
+    def status(self) -> str:
+        return self._status
+
+    def zero(self) -> str:
+        reply = self._client.zero()
+        self._status = "Susceptibility bridge zero confirmed."
+        return reply
+
+    def measure(self) -> float:
+        value = self._client.measure()
+        self._status = f"Susceptibility bridge reading: {value:.9g}"
+        return value
+
+    def disconnect(self) -> None:
+        self._client.close()
+        self._status = "Susceptibility bridge disconnected."
+
+    def communication_events(self) -> tuple[CommunicationEvent, ...]:
+        return self._client.communication_events()
 
 
 @runtime_checkable
@@ -1766,6 +1886,26 @@ def build_squid_backend(
             return SquidNoCommBackend(cfg)
         raise HardwareUnavailableError(
             f"SQUID backend is unavailable in hardware mode: {exc}"
+        ) from exc
+
+
+def build_susceptibility_backend(
+    cfg: SusceptibilityConfig,
+    *,
+    nocomm: bool = False,
+    allow_simulation_fallback: bool = False,
+) -> SusceptibilityBackend:
+    """Build an explicit bridge backend without silent live-mode simulation."""
+
+    if nocomm:
+        return SusceptibilityNoCommBackend(cfg)
+    try:
+        return SusceptibilityBackendAdapter(cfg)
+    except Exception as exc:
+        if allow_simulation_fallback:
+            return SusceptibilityNoCommBackend(cfg)
+        raise HardwareUnavailableError(
+            f"Susceptibility bridge is unavailable in hardware mode: {exc}"
         ) from exc
 
 

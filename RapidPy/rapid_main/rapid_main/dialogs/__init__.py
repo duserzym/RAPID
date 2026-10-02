@@ -11,6 +11,7 @@ from .webcam_dialog import WebcamDialog
 from .dc_motors import DCMotorDialog
 from .startup_guide import StartupGuideDialog
 from .transition_help import TransitionHelpDialog
+from .susceptibility import SusceptibilityDialog
 
 __all__ = [
     "AboutDialog",
@@ -26,5 +27,6 @@ __all__ = [
     "DCMotorDialog",
     "StartupGuideDialog",
     "TransitionHelpDialog",
+    "SusceptibilityDialog",
 ]
 

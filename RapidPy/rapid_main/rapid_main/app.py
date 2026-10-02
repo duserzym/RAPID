@@ -29,6 +29,7 @@ from .diagnostic_services import (
     build_dcmotor_backend,
     build_irm_arm_backend,
     build_squid_backend,
+    build_susceptibility_backend,
     build_vacuum_backend,
     collect_diagnostic_status,
     require_squid_ready,
@@ -43,6 +44,7 @@ from .dialogs import (
     PlotsDialog,
     SampleSelectDialog,
     SquidCommDialog,
+    SusceptibilityDialog,
     StartupGuideDialog,
     TransitionHelpDialog,
     DCMotorDialog,
@@ -1467,6 +1469,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._squid_backend = build_backend_or_unavailable(
             "SQUID", build_squid_backend, self.config.squid, nocomm=nocomm
         )
+        self._susceptibility_backend = build_backend_or_unavailable(
+            "Susceptibility bridge",
+            build_susceptibility_backend,
+            self.config.susceptibility,
+            nocomm=nocomm,
+        )
         self._dc_motor_backend = build_backend_or_unavailable(
             "DC motors",
             build_dcmotor_backend,
@@ -1675,9 +1683,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _launch_susceptibility_bridge(self) -> None:
         self._run_owned_dialog(
-            "squid",
-            "squid_panel",
-            lambda owner: SquidCommDialog(owner, backend=self._squid_backend),
+            "susceptibility",
+            "susceptibility_panel",
+            lambda owner: SusceptibilityDialog(
+                owner, backend=self._susceptibility_backend
+            ),
         )
 
     def _launch_calibrate_rod(self) -> None:
@@ -2188,6 +2198,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 "AF Demag": self._af_demag_backend,
                 "IRM/ARM": self._irm_arm_backend,
                 "SQUID": self._squid_backend,
+                "Susceptibility": self._susceptibility_backend,
                 "DC Motors": self._dc_motor_backend,
             }
         )

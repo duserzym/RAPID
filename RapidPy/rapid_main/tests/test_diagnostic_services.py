@@ -6,7 +6,13 @@ from unittest import mock
 
 from rapidpy_common.hardware import HardwareError, MotorAxisConfig, MotorTelemetry
 
-from rapid_main.config import AfDemagConfig, IrmArmConfig, SquidConfig, VacuumConfig
+from rapid_main.config import (
+    AfDemagConfig,
+    IrmArmConfig,
+    SquidConfig,
+    SusceptibilityConfig,
+    VacuumConfig,
+)
 from rapid_main import diagnostic_services
 from rapid_main.communication_log import CommunicationDirection
 from rapid_main.diagnostic_services import (
@@ -410,6 +416,67 @@ class TestDiagnosticServices(unittest.TestCase):
         self.assertTrue(backend.test_connection())
         self.assertTrue(backend.is_connected())
         self.assertIn("COM7", backend.status())
+
+    def test_live_squid_adapter_does_not_substitute_moment_for_susceptibility(self) -> None:
+        backend = diagnostic_services.SquidBackendAdapter.__new__(
+            diagnostic_services.SquidBackendAdapter
+        )
+
+        with self.assertRaisesRegex(
+            diagnostic_services.DiagnosticContractError,
+            "magnetic moment, not susceptibility",
+        ):
+            backend.read_susceptibility()
+
+    def test_susceptibility_adapter_routes_zero_measure_and_events(self) -> None:
+        class _Client:
+            def __init__(self) -> None:
+                self.is_connected = False
+                self.calls: list[str] = []
+
+            def connect(self) -> None:
+                self.calls.append("connect")
+                self.is_connected = True
+
+            def zero(self) -> str:
+                self.calls.append("zero")
+                return "OK\r"
+
+            def measure(self) -> float:
+                self.calls.append("measure")
+                return 0.0123
+
+            def close(self) -> None:
+                self.calls.append("close")
+                self.is_connected = False
+
+            def communication_events(self):
+                return ()
+
+        client = _Client()
+        cfg = SusceptibilityConfig(enabled=True, port="COM7")
+        backend = diagnostic_services.SusceptibilityBackendAdapter(cfg, client=client)
+
+        self.assertEqual(backend.zero(), "OK\r")
+        self.assertAlmostEqual(backend.measure(), 0.0123)
+        self.assertEqual(backend.communication_events(), ())
+        backend.disconnect()
+        self.assertEqual(client.calls, ["connect", "zero", "measure", "close"])
+        self.assertFalse(backend.is_connected())
+
+    def test_susceptibility_factory_fails_closed_when_disabled(self) -> None:
+        cfg = SusceptibilityConfig(enabled=False, port="COM7")
+
+        with self.assertRaisesRegex(
+            diagnostic_services.HardwareUnavailableError,
+            "disabled",
+        ):
+            diagnostic_services.build_susceptibility_backend(cfg, nocomm=False)
+
+        simulated = diagnostic_services.build_susceptibility_backend(cfg, nocomm=True)
+        self.assertTrue(simulated.simulated)
+        self.assertEqual(simulated.zero(), "OK")
+        self.assertGreater(simulated.measure(), 0.0)
 
     def test_squid_snapshot_flags_disconnected_transport_for_queue_guard(self) -> None:
         class _DisconnectedSquid:

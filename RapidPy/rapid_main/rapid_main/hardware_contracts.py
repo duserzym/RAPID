@@ -242,7 +242,7 @@ class NoCommBackend:
 
 _DEMAG_LABEL_RE = re.compile(r"^(AF(?:MAX|Z)?|IRM|ARM)\s*(\d+(?:\.\d+)?)?(?:_([0-9]+(?:\.[0-9]+)?))?$")
 _THERMAL_LABEL_RE = re.compile(r"^(TT|TH|TEMP)\s*(\d+(?:\.\d+)?)$")
-_MEASUREMENT_ONLY_LABEL_RE = re.compile(r"^(?:NRM(?:-[XYZ])?|SUSC|REPEAT\d+)$")
+_MEASUREMENT_ONLY_LABEL_RE = re.compile(r"^(?:NRM(?:-[XYZ])?|REPEAT\d+)$")
 
 
 def _parse_demag_label(label: str) -> tuple[str, float | None, float | None]:
@@ -481,7 +481,13 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         return self._bracketed.read_squid()
 
     def read_susceptibility(self) -> float:
-        return self._require_measurement().read_susceptibility()
+        if self._config.general.nocomm:
+            return self._require_measurement().read_susceptibility()
+        raise HardwareError(
+            "Live susceptibility acquisition is unavailable: the SQUID magnetic-moment "
+            "transport is not a Bartington susceptibility bridge. Configure a typed bridge "
+            "adapter with zero/measure, coil motion, and holder correction before running SUSC."
+        )
 
     def set_demag_step(self, label: str) -> None:
         """Apply a demagnetization step label to the measurement backend.
@@ -548,6 +554,12 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                 "adapter with temperature readback and safety interlocks is configured."
             )
 
+        if (label or "").strip().upper() == "SUSC" and not self._config.general.nocomm:
+            raise HardwareError(
+                "SUSC has no production susceptibility bridge route. Configure and validate "
+                "bridge zero/measure, coil motion, and holder correction before running it live."
+            )
+
         if not self._config.general.nocomm and not _is_measurement_only_label(label):
             raise HardwareError(
                 f"Treatment label {label!r} has no production actuator route. "
@@ -584,6 +596,13 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                         "furnace/oven adapter with temperature readback and safety interlocks "
                         "is configured."
                     )
+                continue
+            if (label or "").strip().upper() == "SUSC":
+                blockers.append(
+                    "Susceptibility step SUSC cannot run in hardware mode: no production "
+                    "Bartington bridge adapter with zero/measure, coil motion, and holder "
+                    "correction is configured."
+                )
                 continue
             if _is_measurement_only_label(label):
                 continue

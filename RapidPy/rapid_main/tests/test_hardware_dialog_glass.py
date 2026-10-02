@@ -8,11 +8,13 @@ from rapid_main.config import SquidConfig
 from rapid_main.diagnostic_services import (
     IrmArmNoCommBackend,
     SquidNoCommBackend,
+    SusceptibilityNoCommBackend,
     UnavailableBackend,
     VacuumNoCommBackend,
 )
 from rapid_main.dialogs.irm_arm import IrmArmDialog
 from rapid_main.dialogs.squid_comm import SquidCommDialog
+from rapid_main.dialogs.susceptibility import SusceptibilityDialog
 from rapid_main.dialogs.vacuum import VacuumDialog
 from rapid_main.glass_theme import apply_main_glass_theme, set_semantic_status
 
@@ -25,7 +27,10 @@ class HardwareDialogGlassTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         for widget in list(self._app.topLevelWidgets()):
-            if isinstance(widget, (VacuumDialog, IrmArmDialog, SquidCommDialog)):
+            if isinstance(
+                widget,
+                (VacuumDialog, IrmArmDialog, SquidCommDialog, SusceptibilityDialog),
+            ):
                 widget.close()
                 widget.deleteLater()
         self._app.processEvents()
@@ -51,6 +56,7 @@ class HardwareDialogGlassTests(unittest.TestCase):
             VacuumDialog(backend=VacuumNoCommBackend()),
             IrmArmDialog(backend=IrmArmNoCommBackend()),
             SquidCommDialog(backend=SquidNoCommBackend()),
+            SusceptibilityDialog(backend=SusceptibilityNoCommBackend()),
         ]
 
         for dialog in dialogs:
@@ -73,6 +79,7 @@ class HardwareDialogGlassTests(unittest.TestCase):
         vacuum = VacuumDialog(backend=VacuumNoCommBackend())
         irm = IrmArmDialog(backend=IrmArmNoCommBackend())
         squid = SquidCommDialog(backend=SquidNoCommBackend())
+        susceptibility = SusceptibilityDialog(backend=SusceptibilityNoCommBackend())
 
         controls = [
             vacuum._pump_btn,
@@ -91,6 +98,8 @@ class HardwareDialogGlassTests(unittest.TestCase):
             squid._test_btn,
             squid._save_btn,
             squid._cancel_btn,
+            susceptibility._zero_btn,
+            susceptibility._measure_btn,
         ]
         for control in controls:
             with self.subTest(control=control):
@@ -113,6 +122,11 @@ class HardwareDialogGlassTests(unittest.TestCase):
         squid = SquidCommDialog(
             backend=UnavailableBackend("SQUID", "COM7 did not answer")  # type: ignore[arg-type]
         )
+        susceptibility = SusceptibilityDialog(
+            backend=UnavailableBackend(  # type: ignore[arg-type]
+                "Susceptibility", "COM7 did not answer"
+            )
+        )
 
         self.assertEqual(irm._status_lbl.property("status"), "unavailable")
         self.assertTrue(irm._status_lbl.text().startswith("UNAVAILABLE —"))
@@ -120,6 +134,9 @@ class HardwareDialogGlassTests(unittest.TestCase):
         self.assertFalse(irm._reset_btn.isEnabled())
         self.assertEqual(squid._status_lbl.property("status"), "unavailable")
         self.assertTrue(squid._status_lbl.text().startswith("UNAVAILABLE —"))
+        self.assertEqual(susceptibility._status_lbl.property("status"), "unavailable")
+        self.assertFalse(susceptibility._zero_btn.isEnabled())
+        self.assertFalse(susceptibility._measure_btn.isEnabled())
 
     def test_squid_settings_load_and_apply_to_shared_config(self) -> None:
         cfg = SquidConfig(
@@ -154,6 +171,7 @@ class HardwareDialogGlassTests(unittest.TestCase):
             VacuumDialog(backend=VacuumNoCommBackend()),
             IrmArmDialog(backend=IrmArmNoCommBackend()),
             SquidCommDialog(backend=SquidNoCommBackend()),
+            SusceptibilityDialog(backend=SusceptibilityNoCommBackend()),
         ]
 
         for dialog in dialogs:
@@ -184,6 +202,8 @@ class HardwareDialogGlassTests(unittest.TestCase):
                     actions = [dialog._pump_btn, dialog._close_btn]
                 elif isinstance(dialog, IrmArmDialog):
                     actions = [dialog._apply_btn, dialog._reset_btn, dialog._close_btn]
+                elif isinstance(dialog, SusceptibilityDialog):
+                    actions = [dialog._zero_btn, dialog._measure_btn]
                 else:
                     actions = [dialog._test_btn, dialog._save_btn, dialog._cancel_btn]
                     self.assertGreaterEqual(

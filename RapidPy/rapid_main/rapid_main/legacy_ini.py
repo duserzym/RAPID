@@ -152,6 +152,17 @@ def import_vb6_ini(config: AppConfig, path: str | Path) -> LegacyIniImportReport
             )
             mark_mapped(motor_section, key, f"motion.{field_name}")
 
+    raw = _value(parser, motor_section, "SCoilPos")
+    if raw is not None:
+        config.susceptibility.coil_position = _parse_int(
+            raw,
+            default=config.susceptibility.coil_position,
+            section_key=motor_section,
+            field="SCoilPos",
+            warnings=warnings,
+        )
+        mark_mapped(motor_section, "SCoilPos", "susceptibility.coil_position")
+
     # Program section (legacy general settings)
     program_section = "Program"
     raw = _value(parser, program_section, "NoCommMode")
@@ -201,6 +212,51 @@ def import_vb6_ini(config: AppConfig, path: str | Path) -> LegacyIniImportReport
     if mapped:
         config.changer.port = mapped
         mark_mapped(com_section, "COMPortChanger", "changer.port")
+
+    raw = _value(parser, com_section, "COMPortSusceptibility")
+    mapped = _normalize_com_port(
+        raw, field="COMPorts.COMPortSusceptibility", warnings=warnings
+    )
+    if mapped:
+        config.susceptibility.port = mapped
+        mark_mapped(com_section, "COMPortSusceptibility", "susceptibility.port")
+
+    raw = _value(parser, com_section, "SusceptibilitySettings")
+    if raw is not None:
+        parts = [part.strip() for part in raw.split(",")]
+        if len(parts) == 4:
+            config.susceptibility.baud = _parse_int(
+                parts[0],
+                default=config.susceptibility.baud,
+                section_key=com_section,
+                field="SusceptibilitySettings.baud",
+                warnings=warnings,
+            )
+            config.susceptibility.parity = parts[1].upper()
+            config.susceptibility.bytesize = _parse_int(
+                parts[2],
+                default=config.susceptibility.bytesize,
+                section_key=com_section,
+                field="SusceptibilitySettings.bytesize",
+                warnings=warnings,
+            )
+            parsed_stopbits = _parse_float(
+                parts[3],
+                default=config.susceptibility.stopbits,
+                section_key=com_section,
+                field="SusceptibilitySettings.stopbits",
+                warnings=warnings,
+            )
+            config.susceptibility.stopbits = float(parsed_stopbits)
+            mark_mapped(
+                com_section,
+                "SusceptibilitySettings",
+                "susceptibility serial framing",
+            )
+        else:
+            warnings.append(
+                "COMPorts.SusceptibilitySettings must use baud,parity,data,stop format"
+            )
 
     # Magnetometer calibration
     mag_section = "MagnetometerCalibration"
@@ -342,6 +398,34 @@ def import_vb6_ini(config: AppConfig, path: str | Path) -> LegacyIniImportReport
             warnings=warnings,
         )
         mark_mapped(vac_section, "DoVacuumReset", "vacuum.auto_pump")
+
+    susc_cal_section = "SusceptibilityCalibration"
+    for key, field_name in (
+        ("SusceptibilityMomentFactorCGS", "moment_factor_cgs"),
+        ("SusceptibilityScaleFactor", "scale_factor"),
+    ):
+        raw = _value(parser, susc_cal_section, key)
+        if raw is not None:
+            parsed = _parse_float(
+                raw,
+                default=getattr(config.susceptibility, field_name),
+                section_key=susc_cal_section,
+                field=key,
+                warnings=warnings,
+            )
+            setattr(config.susceptibility, field_name, float(parsed))
+            mark_mapped(susc_cal_section, key, f"susceptibility.{field_name}")
+
+    raw = _value(parser, "Modules", "EnableSusceptibility")
+    if raw is not None:
+        config.susceptibility.enabled = _parse_bool(
+            raw,
+            default=config.susceptibility.enabled,
+            section_key="Modules",
+            field="EnableSusceptibility",
+            warnings=warnings,
+        )
+        mark_mapped("Modules", "EnableSusceptibility", "susceptibility.enabled")
 
     # Optional safety / quality mappings (if present)
     raw = _value(parser, "SampleChanger", "HoleSlotNum")

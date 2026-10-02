@@ -555,8 +555,9 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
         backend = DeterministicBackend([
             ("NRM", 1.0, 2.0, 3.0),
             ("AF20", 2.0, 2.2, 2.6),
+            ("SUSC", 1.8, 2.0, 2.4),
         ])
-        labels = ["NRM", "AF20"]
+        labels = ["NRM", "AF20", "SUSC"]
         step_results: list[object] = []
         errors: list[str] = []
         phases: list[str] = []
@@ -579,11 +580,11 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
             self.assertEqual(finished, [False])
             self.assertEqual(phases[0], "preflight")
             self.assertEqual(phases[-1], "complete")
-            self.assertEqual(len(step_results), 2)
+            self.assertEqual(len(step_results), 3)
             self.assertEqual(backend.preflight_calls, 1)
             self.assertEqual(backend.step_calls, labels)
-            self.assertEqual(backend.squid_calls, 2)
-            self.assertEqual(backend.susc_calls, 2)
+            self.assertEqual(backend.squid_calls, 3)
+            self.assertEqual(backend.susc_calls, 1)
             self.assertTrue((out / "GOOD1").exists())
             self.assertTrue((out / "GOOD1" / "GOOD1").exists())
             self.assertTrue((out / "GOOD1" / "GOOD1.rmg").exists())
@@ -593,8 +594,8 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
             susceptibility_payload = json.loads(susceptibility_summary.read_text(encoding="utf-8"))
             self.assertEqual(susceptibility_payload["schema"], "rapidpy.susceptibility.summary.v1")
             self.assertEqual(susceptibility_payload["sample"], "GOOD1")
-            self.assertEqual(susceptibility_payload["record_count"], 2)
-            self.assertEqual(susceptibility_payload["records"][0]["label"], "NRM")
+            self.assertEqual(susceptibility_payload["record_count"], 1)
+            self.assertEqual(susceptibility_payload["records"][0]["label"], "SUSC")
             self.assertAlmostEqual(susceptibility_payload["records"][0]["susceptibility"], 0.05)
             self.assertTrue(susceptibility_payload["hardware_validation_required"])
             workflow_summary = out / "GOOD1" / "workflow_summary.json"
@@ -630,11 +631,48 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
             self.assertIn("\tRX\tGOOD1\t(1.0, 2.0, 3.0)\tread_squid", transcript_text)
             self.assertIn("\tRX\tGOOD1\t0.05\tread_susceptibility", transcript_text)
             self.assertEqual(
-                (out / "GOOD1" / "GOOD1.rmg").read_text(encoding="latin-1").count("\n"), 2
+                (out / "GOOD1" / "GOOD1.rmg").read_text(encoding="latin-1").count("\n"), 3
             )
         self.assertIn("measuring", phases)
         allowed = {phase.value for phase in WorkflowPhase}
         self.assertTrue(set(phases).issubset(allowed))
+
+    def test_requested_susceptibility_failure_aborts_without_publishing_run(self) -> None:
+        class _FailingSusceptibilityBackend(DeterministicBackend):
+            def read_susceptibility(self) -> float:
+                self.susc_calls += 1
+                raise RuntimeError("bridge timeout")
+
+        backend = _FailingSusceptibilityBackend([("SUSC", 1.0, 2.0, 3.0)])
+        errors: list[str] = []
+        finished: list[bool] = []
+
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out"
+            worker = MeasurementWorker(
+                meta=_meta("SUSC_FAIL"),
+                labels=["SUSC"],
+                output_dir=out / "SUSC_FAIL",
+                backend=backend,
+            )
+            worker.error_occurred.connect(errors.append)
+            worker.run_finished.connect(finished.append)
+            worker.run()
+
+            workflow = json.loads(
+                (out / "SUSC_FAIL" / "workflow_summary.json").read_text(encoding="utf-8")
+            )
+            self.assertFalse((out / "SUSC_FAIL" / "SUSC_FAIL").exists())
+            self.assertFalse((out / "SUSC_FAIL" / "susceptibility.json").exists())
+
+        self.assertEqual(backend.susc_calls, 1)
+        self.assertEqual(finished, [True])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Susceptibility read error at step SUSC", errors[0])
+        self.assertIn("bridge timeout", errors[0])
+        self.assertTrue(workflow["aborted"])
+        self.assertEqual(workflow["final_phase"], "returning")
+        self.assertIn("error", [row["phase"] for row in workflow["phases"]])
 
     def test_backend_transport_events_are_published_once(self) -> None:
         class TranscriptBackend(DeterministicBackend):

@@ -29,6 +29,7 @@ class ConfigBackupTests(unittest.TestCase):
         config.general.operator = "Operator A"
         config.squid.port = "COM17"
         config.motion.zero_pos = -1200
+        config.susceptibility.port = "COM7"
 
         with tempfile.TemporaryDirectory() as temporary:
             path = write_config_backup(config, Path(temporary) / "backup.json")
@@ -40,6 +41,7 @@ class ConfigBackupTests(unittest.TestCase):
         self.assertEqual(restored.general.operator, "Operator A")
         self.assertEqual(restored.squid.port, "COM17")
         self.assertEqual(restored.motion.zero_pos, -1200)
+        self.assertEqual(restored.susceptibility.port, "COM7")
 
     def test_backup_reader_rejects_unknown_or_incomplete_schema(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

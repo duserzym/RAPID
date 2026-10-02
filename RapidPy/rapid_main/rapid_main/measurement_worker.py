@@ -374,20 +374,30 @@ class MeasurementWorker(QtCore.QThread):
                 break
 
             susc = 0.0
-            try:
-                self._emit_phase(WorkflowPhase.MEASURING)
-                susc = self._call_with_timeout(
-                    self._backend.read_susceptibility,
-                    timeout=self._get_backend_timeout("susceptibility_timeout"),
-                    phase="read_susceptibility",
-                )
-                self._comm_received(susc, detail="read_susceptibility")
-            except MeasurementHaltRequested:
-                aborted = True
-                self._emit_phase(WorkflowPhase.HALTED)
-                break
-            except Exception:
-                pass  # susceptibility is optional
+            if label.strip().upper() == "SUSC":
+                try:
+                    self._emit_phase(WorkflowPhase.MEASURING)
+                    raw_susc = self._call_with_timeout(
+                        self._backend.read_susceptibility,
+                        timeout=self._get_backend_timeout("susceptibility_timeout"),
+                        phase="read_susceptibility",
+                    )
+                    susc = float(raw_susc)
+                    if not math.isfinite(susc):
+                        raise ValueError(f"non-finite susceptibility reading: {raw_susc!r}")
+                    self._comm_received(susc, detail="read_susceptibility")
+                except MeasurementHaltRequested:
+                    aborted = True
+                    self._emit_phase(WorkflowPhase.HALTED)
+                    break
+                except Exception as exc:
+                    self._emit_error(
+                        f"Susceptibility read error at step {label}: {exc}",
+                        phase=WorkflowPhase.MEASURING,
+                    )
+                    self._emit_phase(WorkflowPhase.ERROR)
+                    aborted = True
+                    break
 
             step = _build_step(
                 label=label,
@@ -408,13 +418,14 @@ class MeasurementWorker(QtCore.QThread):
                         f"Step {label} is already present from an interrupted run; "
                         "it was not written twice."
                     )
-                susceptibility_records.append(
-                    {
-                        "step_index": idx,
-                        "label": label,
-                        "susceptibility": float(susc),
-                    }
-                )
+                if label.strip().upper() == "SUSC":
+                    susceptibility_records.append(
+                        {
+                            "step_index": idx,
+                            "label": label,
+                            "susceptibility": float(susc),
+                        }
+                    )
             except Exception as exc:
                 self._emit_error(f"File write error at step {label}: {exc}", phase=WorkflowPhase.SAVING)
                 self._emit_phase(WorkflowPhase.ERROR)

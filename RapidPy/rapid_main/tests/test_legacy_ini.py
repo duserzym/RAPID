@@ -26,6 +26,15 @@ class TestLegacyIniImport(unittest.TestCase):
         self.assertEqual(cfg.squid.port, "COM1")
         self.assertEqual(cfg.vacuum.port, "COM1")
         self.assertEqual(cfg.changer.port, "COM3")
+        self.assertEqual(cfg.susceptibility.port, "COM7")
+        self.assertEqual(cfg.susceptibility.baud, 1200)
+        self.assertEqual(cfg.susceptibility.parity, "N")
+        self.assertEqual(cfg.susceptibility.bytesize, 8)
+        self.assertEqual(cfg.susceptibility.stopbits, 2.0)
+        self.assertEqual(cfg.susceptibility.coil_position, -22700)
+        self.assertFalse(cfg.susceptibility.enabled)
+        self.assertAlmostEqual(cfg.susceptibility.scale_factor, 1.0)
+        self.assertAlmostEqual(cfg.susceptibility.moment_factor_cgs, 0.0000097914)
 
         self.assertAlmostEqual(cfg.calibration.cal_x, 2.2792, places=5)
         self.assertAlmostEqual(cfg.calibration.cal_y, -2.2940, places=5)
@@ -46,6 +55,7 @@ class TestLegacyIniImport(unittest.TestCase):
 
         self.assertIn("Program.LastLogin -> general.operator", report.mapped_fields)
         self.assertTrue(any("AFRampRate" in item for item in report.mapped_fields))
+        self.assertTrue(any("COMPortSusceptibility" in item for item in report.mapped_fields))
 
     def test_invalid_numbers_are_defaulted_with_warnings(self) -> None:
         ini_text = """[Program]

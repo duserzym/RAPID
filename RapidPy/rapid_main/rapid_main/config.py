@@ -119,6 +119,22 @@ class VacuumConfig:
 
 
 @dataclass
+class SusceptibilityConfig:
+    """Bartington bridge settings mapped from the legacy RAPID INI."""
+
+    enabled:           bool  = False
+    port:              str   = ""
+    baud:              int   = 1200
+    parity:            str   = "N"
+    bytesize:          int   = 8
+    stopbits:          float = 2.0
+    response_timeout:  float = 35.0
+    scale_factor:      float = 1.0
+    moment_factor_cgs: float = 1.0e-5
+    coil_position:     int   = 0
+
+
+@dataclass
 class DataFilesConfig:
     format:       str  = "CSV (comma-separated)"
     naming:       str  = "SampleName_Date"
@@ -261,6 +277,7 @@ class AppConfig:
     irm_arm:    IrmArmConfig       = field(default_factory=IrmArmConfig)
     af_demag:   AfDemagConfig      = field(default_factory=AfDemagConfig)
     vacuum:     VacuumConfig       = field(default_factory=VacuumConfig)
+    susceptibility: SusceptibilityConfig = field(default_factory=SusceptibilityConfig)
     data_files: DataFilesConfig    = field(default_factory=DataFilesConfig)
     changer:    ChangerConfig      = field(default_factory=ChangerConfig)
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
@@ -313,6 +330,7 @@ class AppConfig:
             irm_arm=    _merge(IrmArmConfig,        d.get("irm_arm",     {})),
             af_demag=   _merge(AfDemagConfig,       d.get("af_demag",    {})),
             vacuum=     _merge(VacuumConfig,        d.get("vacuum",      {})),
+            susceptibility=_merge(SusceptibilityConfig, d.get("susceptibility", {})),
             data_files= _merge(DataFilesConfig,     d.get("data_files",  {})),
             changer=    _merge(ChangerConfig,       d.get("changer",     {})),
             calibration=_merge(CalibrationConfig,   d.get("calibration", {})),

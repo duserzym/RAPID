@@ -571,7 +571,7 @@ class TestHardwareContracts(unittest.TestCase):
         measurement = _RecordingMeasurement()
         backend._measurement = measurement
 
-        measurement_only = ("NRM", "NRM-X", "NRM-Y", "NRM-Z", "SUSC", "REPEAT2")
+        measurement_only = ("NRM", "NRM-X", "NRM-Y", "NRM-Z", "REPEAT2")
         self.assertTrue(backend.validate_treatment_plan(measurement_only).ok)
         for label in measurement_only:
             backend.set_demag_step(label)
@@ -586,16 +586,25 @@ class TestHardwareContracts(unittest.TestCase):
             "IF400",
             "CUSTOM",
             "AFBOGUS",
+            "SUSC",
         )
         preflight = backend.validate_treatment_plan(unsupported)
 
         self.assertFalse(preflight.ok)
         self.assertEqual(len(preflight.blockers), len(unsupported))
         for label in unsupported:
-            self.assertTrue(any(repr(label) in item for item in preflight.blockers))
+            if label == "SUSC":
+                self.assertTrue(
+                    any("Susceptibility step SUSC" in item for item in preflight.blockers)
+                )
+            else:
+                self.assertTrue(any(repr(label) in item for item in preflight.blockers))
         for label in unsupported:
             if label == "IRM":
                 with self.assertRaisesRegex(ValueError, "requires numeric field"):
+                    backend.set_demag_step(label)
+            elif label == "SUSC":
+                with self.assertRaisesRegex(HardwareError, "no production susceptibility bridge"):
                     backend.set_demag_step(label)
             else:
                 with self.assertRaisesRegex(HardwareError, "no production actuator route"):
