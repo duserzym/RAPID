@@ -242,8 +242,11 @@ explicit hardware operation, never a silent accept.
 - susceptibility, VRM, and rock-magnetic acquisition with reproducible bundles;
 - interrupted-queue recovery and physical safe-state acceptance;
 - DC motor encoder, torque/current, stall, limit, and direction verification;
-- serial retry/backoff, stale-reply rejection, and per-adapter raw transport
-  logs.
+- serial retry/backoff and stale-reply rejection. The production bracketed
+  SQUID adapter now carries exact raw TX/RX/error events into each run's
+  `communication.tsv` exactly once, with simulated evidence excluded from the
+  live adapter stream; equivalent integration for other retained adapters and
+  physical transcript acceptance remain open.
 
 ### P2 — operator and analysis parity
 
@@ -286,7 +289,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **479 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **484 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
@@ -330,6 +333,12 @@ summary:
   accessible Analysis tab and in JSON/CSV: North/East/Down principal direction,
   explained variance, RMS perpendicular residual, moment statistics, decay
   ratios, monotonicity, and log-decay slope.
+- The production bracketed SQUID adapter now records exact clear/reset, range,
+  latch, counter, and DVM TX/RX/error events. Immutable snapshots pass through
+  both backend layers and are merged idempotently into each run's
+  `communication.tsv`; simulated adapters cannot publish this stream as live
+  evidence. Five focused tests cover ordering, propagation, immutability,
+  idempotence, and simulation isolation without opening a hardware port.
 - `python -m compileall` is clean across `rapid_main`, its tests,
   `updown_control`, and `rapidpy_common`. The repository configures no linter
   or type checker (no ruff/flake8/mypy config and no lint CI job), so none was
