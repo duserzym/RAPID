@@ -285,7 +285,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **474 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **475 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
@@ -323,6 +323,8 @@ summary:
   replay runs publish all core and auxiliary artifacts under `SIMULATED`; a
   live-declared backend returning a simulated block is rejected before state or
   output mutation.
+- After the panel publishes `quicklook.json`, it atomically reconciles the
+  worker's `artifact_index.json` entry with the file's actual presence and size.
 - `python -m compileall` is clean across `rapid_main`, its tests,
   `updown_control`, and `rapidpy_common`. The repository configures no linter
   or type checker (no ruff/flake8/mypy config and no lint CI job), so none was

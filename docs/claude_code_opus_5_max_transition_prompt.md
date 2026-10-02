@@ -68,9 +68,10 @@ implementation baseline:
 - `786c36a` — record the guidance-dialog readiness evidence; and
 - `d170a93` — finish the glass data/review-dialog slice; and
 - `1536b5b` — finish the remaining glass dialogs and runtime fixes; and
-- `dfa70ae` — add transactional plot exports and complete simulation-artifact isolation.
+- `dfa70ae` — add transactional plot exports and complete simulation-artifact isolation; and
+- `c0047ac` — reconcile quicklook publication with the run artifact index.
 
-The complete RapidPy suite now reports **474 passing tests** using
+The complete RapidPy suite now reports **475 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
