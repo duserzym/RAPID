@@ -222,6 +222,10 @@ _EXTRA_CSS = """
         background: rgba(107, 114, 128, 0.12); border: 1px solid rgba(107, 114, 128, 0.4);
         border-radius: 8px; padding: 3px 10px; color: #374151; font-weight: 600;
     }
+    QLabel#flowOverride {
+        background: rgba(71, 85, 105, 0.15); border: 1px dashed rgba(71, 85, 105, 0.55);
+        border-radius: 8px; padding: 3px 10px; color: #334155; font-weight: 700;
+    }
     QLabel#instOk {
         background: rgba(34,197,94,0.12); border: 1px solid rgba(34,197,94,0.35);
         border-radius: 7px; padding: 2px 9px; color: #15803d; font-size: 12px;
@@ -229,6 +233,11 @@ _EXTRA_CSS = """
     QLabel#instErr {
         background: rgba(220,38,38,0.10); border: 1px solid rgba(220,38,38,0.35);
         border-radius: 7px; padding: 2px 9px; color: #b91c1c; font-size: 12px;
+    }
+    QLabel#instSim {
+        background: rgba(245,158,11,0.13); border: 1px solid rgba(217,119,6,0.38);
+        border-radius: 7px; padding: 2px 9px; color: #92400e; font-size: 12px;
+        font-weight: 650;
     }
     QLabel#instUnk {
         background: rgba(107,114,128,0.10); border: 1px solid rgba(107,114,128,0.3);
@@ -403,6 +412,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._queue_last_warnings: list[str] = []
         self._queue_paused: bool = False
         self._queue_lease: object | None = None
+        self._workflow_state = "idle"
+        self._current_step = "—"
+        self._current_treatment = "—"
+        self._status_override_active = False
 
         # Live countdown timer (1 Hz, used when a run is active)
         self._run_start_time: "datetime | None" = None
@@ -424,6 +437,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._nocomm_btn.setChecked(self.config.general.nocomm)
         self._nocomm_btn.blockSignals(False)
         self._on_nocomm_toggled(self.config.general.nocomm)
+
+        self._diagnostic_timer = QtCore.QTimer(self)
+        self._diagnostic_timer.setInterval(10_000)
+        self._diagnostic_timer.timeout.connect(self._refresh_dashboard_diagnostics)
+        self._diagnostic_timer.start()
+        QtCore.QTimer.singleShot(0, self._refresh_dashboard_diagnostics)
 
         self._clock = QtCore.QTimer(self)
         self._clock.timeout.connect(self._tick_clock)
@@ -451,8 +470,8 @@ class MainWindow(QtWidgets.QMainWindow):
         hl.addWidget(title)
         hl.addWidget(_vline())
 
-        self._flow_lbl = QtWidgets.QLabel("◉  Running")
-        self._flow_lbl.setObjectName("flowRunning")
+        self._flow_lbl = QtWidgets.QLabel("◎  Idle")
+        self._flow_lbl.setObjectName("flowIdle")
         self._flow_lbl.setToolTip("Run state")
         _allow_horizontal_compression(self._flow_lbl)
         hl.addWidget(self._flow_lbl)
@@ -617,6 +636,9 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._stack.setMinimumSize(0, 0)
         self._dashboard   = DashboardPanel()
+        self._dashboard.refresh_diagnostics_requested.connect(
+            self._refresh_dashboard_diagnostics
+        )
         self._sample_queue = SampleQueuePanel()
         self._sequence    = SequencePanel()
         self._measurement = MeasurementPanel()
@@ -641,6 +663,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             panel.setMinimumSize(0, 0)
             self._stack.addWidget(panel)
+        self._sync_dashboard_run_state()
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         splitter.setObjectName("mainSplit")
@@ -1319,13 +1342,14 @@ class MainWindow(QtWidgets.QMainWindow):
             running=True,
             start_time=self._run_start_time,
         )
+        self._sync_dashboard_run_state()
 
     # ── Menu bar ──────────────────────────────────────────────────────────────
     def _build_menu(self) -> None:
         mb = self.menuBar()
 
         fm = mb.addMenu("&File")
-        fm.addAction("&New Session")
+        fm.addAction("&New Session", self._new_session)
         fm.addAction("&Log Out", self._launch_login)
         fm.addSeparator()
         fm.addAction("E&xit", self._request_shutdown)
@@ -1345,11 +1369,28 @@ class MainWindow(QtWidgets.QMainWindow):
         vm.addAction("&Webcam Monitor", self._launch_webcam)
 
         flm = mb.addMenu("F&low")
-        flm.addAction("&Running")
-        flm.addAction("&Paused")
-        flm.addAction("&Halted")
+        self._flow_running_action = flm.addAction("&Running / Resume", self._flow_resume_requested)
+        self._flow_paused_action = flm.addAction("&Paused", self._flow_pause_requested)
+        self._flow_halted_action = flm.addAction("&Halted", self._flow_halt_requested)
+        for action in (
+            self._flow_running_action,
+            self._flow_paused_action,
+            self._flow_halted_action,
+        ):
+            action.setCheckable(True)
+        self._flow_action_group = QtGui.QActionGroup(self)
+        self._flow_action_group.setExclusive(True)
+        self._flow_action_group.addAction(self._flow_running_action)
+        self._flow_action_group.addAction(self._flow_paused_action)
+        self._flow_action_group.addAction(self._flow_halted_action)
         flm.addSeparator()
-        flm.addAction("Code &Override")
+        self._status_override_action = flm.addAction(
+            "Status Color &Override", self._toggle_status_override
+        )
+        self._status_override_action.setCheckable(True)
+        self._status_override_action.setToolTip(
+            "Visual maintenance indicator only; never bypasses hardware interlocks or preflight."
+        )
 
         dm = mb.addMenu("&Diagnostics")
         dm.addAction("DC &Motors",    self._launch_dc_motors)
@@ -1423,14 +1464,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.config.save()
         self._measurement_backend = build_measurement_backend(self.config)
         self._rebuild_diagnostic_backends(nocomm=bool(on))
-        if on:
-            self._flow_lbl.setObjectName("flowNocomm")
-            self._flow_lbl.setText("⊘  No-Comm")
-        else:
-            self._flow_lbl.setObjectName("flowRunning")
-            self._flow_lbl.setText("◉  Running")
-        self._flow_lbl.style().unpolish(self._flow_lbl)
-        self._flow_lbl.style().polish(self._flow_lbl)
+        self.set_flow_state(self._workflow_state)
+        mode = "No-Comm simulation" if on else "hardware"
+        self.set_status(f"Operating mode changed to {mode}.")
+        if hasattr(self, "_dashboard"):
+            self._refresh_dashboard_diagnostics()
 
     # ── Diagnostic launchers ───────────────────────────────────────────────────
     def _launch_dc_motors(self) -> None:
@@ -1740,7 +1778,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _confirm_shutdown(self, *, prompt: bool = True, on_close: bool = False) -> bool:
         """Prompt the operator to confirm shutdown and safely halt active workflow."""
-        if on_close and self._has_active_automation():
+        del on_close  # retained for compatibility with existing callers/tests
+        if prompt and hasattr(self, "_sequence"):
+            if not self._sequence.confirm_discard_changes():
+                return False
+
+        active = self._has_active_automation()
+        if prompt and active:
             if (
                 QtWidgets.QMessageBox.question(
                     self,
@@ -1757,7 +1801,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 != QtWidgets.QMessageBox.StandardButton.Yes
             ):
                 return False
-        elif on_close and prompt:
+        elif prompt:
             if (
                 QtWidgets.QMessageBox.question(
                     self,
@@ -1771,29 +1815,13 @@ class MainWindow(QtWidgets.QMainWindow):
             ):
                 return False
 
-        if self._has_active_automation():
+        if active:
             self.halt_measurement()
-
-        if prompt and not on_close:
-            if (
-                QtWidgets.QMessageBox.question(
-                    self,
-                    "Shutdown requested",
-                    "Stop and close RAPID?",
-                    QtWidgets.QMessageBox.StandardButton.Yes
-                    | QtWidgets.QMessageBox.StandardButton.No,
-                    QtWidgets.QMessageBox.StandardButton.Yes,
-                )
-                != QtWidgets.QMessageBox.StandardButton.Yes
-            ):
-                return False
-
         return True
 
     def _request_shutdown(self) -> None:
         """Run shutdown flow from menu and toolbar actions."""
-        if self._confirm_shutdown():
-            self.close()
+        self.close()
 
     def _restore_layout_state(self) -> None:
         geometry = self._settings.value("ui/window_geometry")
@@ -1969,8 +1997,72 @@ class MainWindow(QtWidgets.QMainWindow):
         self._nav_select(0)
         QtWidgets.QMessageBox.information(self, "Reset Layout", "Layout reset to defaults.")
 
+    def _new_session(self) -> None:
+        """Reset transient operator work without touching configuration or holder state."""
+        if self._has_active_automation():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "New Session",
+                "Halt or finish the active workflow before starting a new session.",
+            )
+            return
+        if not self._sequence.confirm_discard_changes():
+            return
+        if (
+            QtWidgets.QMessageBox.question(
+                self,
+                "New Session",
+                "Start a new session? This clears the current queue, sequence, and "
+                "measurement view. Saved files, settings, calibration, and holder state remain unchanged.",
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No,
+            )
+            != QtWidgets.QMessageBox.StandardButton.Yes
+        ):
+            return
+        self.cancel_queue_run("New session started.")
+        self._sample_queue._clear_table()
+        self._sequence.clear_for_new_session()
+        if hasattr(self._measurement, "_clear_measurement_plot"):
+            self._measurement._clear_measurement_plot()
+        if hasattr(self._measurement, "set_specimen_context"):
+            self._measurement.set_specimen_context("UNKNOWN")
+        self._queue_plan = []
+        self._queue_pos = 0
+        self._queue_resume_pos = 0
+        self._queue_current_sample = None
+        self._queue_current_command = None
+        self._current_step = "—"
+        self._current_treatment = "—"
+        self.set_step("—")
+        self.set_flow_state("idle")
+        self._save_queue_state()
+        self.set_status("New session ready. Saved data and holder correction were preserved.")
+        self.log_event("New operator session started; transient queue and sequence state cleared.")
+        self._nav_select(0)
+
     def _launch_login(self) -> None:
-        LoginDialog(self).exec()
+        if self._has_active_automation():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Change Operator",
+                "Halt or finish the active run before changing operator identity.",
+            )
+            return
+        dialog = LoginDialog(self)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        self.config.general.operator = dialog.operator_name
+        self.config.general.nocomm = bool(dialog.nocomm)
+        self.config.save()
+        self._settings_panel.load_from_config(self.config)
+        self._nocomm_btn.blockSignals(True)
+        self._nocomm_btn.setChecked(bool(dialog.nocomm))
+        self._nocomm_btn.blockSignals(False)
+        self._on_nocomm_toggled(bool(dialog.nocomm))
+        self.set_status(f"Operator changed to {dialog.operator_name}.")
+        self.log_event(f"Operator session changed to {dialog.operator_name}.")
 
     def _launch_about(self) -> None:
         AboutDialog(self).exec()
@@ -2042,6 +2134,14 @@ class MainWindow(QtWidgets.QMainWindow):
             }
         )
 
+    @QtCore.Slot()
+    def _refresh_dashboard_diagnostics(self) -> None:
+        """Refresh the dashboard from the same backend snapshot used by Debug."""
+        if not hasattr(self, "_dashboard"):
+            return
+        lines = self._diagnostic_status_lines()
+        self._dashboard.update_diagnostics(lines)
+
     def _launch_step_monitor(self) -> None:
         if not hasattr(self, "_step_dlg") or not self._step_dlg.isVisible():
             self._step_dlg = StepMonitorDialog(self)
@@ -2110,17 +2210,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sb_status.setText(text)
 
     def set_sample(self, name: str) -> None:
+        self._current_sample = name or "UNKNOWN"
         self._sb_sample.setText(f"Sample: {name}")
         self._sample_hdr.setText(f"Sample: {name}")
+        self._sync_dashboard_run_state()
 
     def set_step(self, step: str) -> None:
+        self._current_step = step or "—"
+        self._current_treatment = step or "—"
         self._step_hdr.setText(f"Step: {step}")
+        self._sync_dashboard_run_state()
 
     def set_position(self, pos: str) -> None:
         self._sb_pos.setText(f"Pos: {pos}")
 
     def set_flow_state(self, state: str) -> None:
         """Update the top-of-screen workflow label from a phase name."""
+        self._workflow_state = state
         icons = {
             "running": "◉  Running",
             "paused": "⏸  Paused",
@@ -2153,10 +2259,83 @@ class MainWindow(QtWidgets.QMainWindow):
             "complete": "flowComplete",
             "error": "flowError",
         }
-        self._flow_lbl.setText(icons.get(state, state))
-        self._flow_lbl.setObjectName(names.get(state, "flowRunning"))
+        if self._status_override_active:
+            self._flow_lbl.setText("◇  Status Override")
+            self._flow_lbl.setObjectName("flowOverride")
+        else:
+            self._flow_lbl.setText(icons.get(state, state))
+            self._flow_lbl.setObjectName(names.get(state, "flowRunning"))
         self._flow_lbl.style().unpolish(self._flow_lbl)
         self._flow_lbl.style().polish(self._flow_lbl)
+        for action_name, checked_state in (
+            ("_flow_running_action", "running"),
+            ("_flow_paused_action", "paused"),
+            ("_flow_halted_action", "halted"),
+        ):
+            action = getattr(self, action_name, None)
+            if action is not None:
+                action.setChecked(state == checked_state)
+        self._sync_dashboard_run_state()
+
+    def _elapsed_run_text(self) -> str:
+        if self._run_start_time is None:
+            return "00:00:00"
+        seconds = max(0, int((datetime.now() - self._run_start_time).total_seconds()))
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    def _sync_dashboard_run_state(self) -> None:
+        if not hasattr(self, "_dashboard"):
+            return
+        self._dashboard.update_run_state(
+            self._workflow_state.replace("_", " ").title(),
+            self._current_sample if self._current_sample != "UNKNOWN" else "—",
+            self._current_step,
+            self._current_treatment,
+            self._elapsed_run_text(),
+        )
+
+    def _measurement_is_paused(self) -> bool:
+        worker = getattr(self._measurement, "_worker", None)
+        return bool(worker is not None and getattr(worker, "is_paused", False))
+
+    def _flow_resume_requested(self, _checked: bool = False) -> None:
+        if self._queue_paused or self._measurement_is_paused():
+            self.toggle_queue_pause()
+            return
+        if self._has_active_automation():
+            self.set_status("Workflow is already running.")
+        else:
+            self.set_status("No paused workflow to resume. Start from Queue or Live Measurement.")
+
+    def _flow_pause_requested(self, _checked: bool = False) -> None:
+        if not self._has_active_automation():
+            self.set_status("No active workflow to pause.")
+            self.set_flow_state(self._workflow_state)
+            return
+        if self._queue_paused or self._measurement_is_paused():
+            self.set_status("Workflow is already paused.")
+            self.set_flow_state("paused")
+            return
+        self.toggle_queue_pause()
+
+    def _flow_halt_requested(self, _checked: bool = False) -> None:
+        self._on_header_halt()
+        self.set_flow_state(self._workflow_state)
+
+    def _toggle_status_override(self, enabled: bool) -> None:
+        """Mirror VB6 Code Grey as a visual-only maintenance indicator."""
+        self._status_override_active = bool(enabled)
+        self.set_flow_state(self._workflow_state)
+        if enabled:
+            self.set_status(
+                "Status color override enabled. Hardware interlocks and preflight remain enforced."
+            )
+            self.log_event("Visual status override enabled; safety behavior unchanged.")
+        else:
+            self.set_status("Status color override cleared.")
+            self.log_event("Visual status override cleared.")
 
     def toggle_queue_pause(self) -> None:
         """Pause or resume active queue automation."""
