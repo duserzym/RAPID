@@ -42,9 +42,11 @@ class TransitionHelpDialog(QtWidgets.QDialog):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("glassDialog")
         self.setWindowTitle("Where did this VB6 control go?")
         self.resize(820, 500)
-        self.setMinimumSize(520, 320)
+        self.setAccessibleName("VB6 to RapidPy transition help")
+        self.setMinimumSize(420, 320)
         self.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowContextHelpButtonHint)
         self._build_ui()
         self._populate()
@@ -55,18 +57,22 @@ class TransitionHelpDialog(QtWidgets.QDialog):
         layout.setSpacing(10)
 
         title = QtWidgets.QLabel("VB6 → RapidPy Task Map")
-        title.setObjectName("sectionHdr")
+        title.setObjectName("dialogTitle")
+        title.setAccessibleName("VB6 to RapidPy task map title")
+        title.setWordWrap(True)
         layout.addWidget(title)
         note = QtWidgets.QLabel(
             "Search by an old form name or operator task. Hardware-gated entries are "
             "available for software review but are not production-validated."
         )
         note.setWordWrap(True)
+        note.setObjectName("dialogSubtitle")
         layout.addWidget(note)
 
         self._search = QtWidgets.QLineEdit()
         self._search.setPlaceholderText("Search frmMeasure, vacuum, sequence, calibration…")
         self._search.setClearButtonEnabled(True)
+        self._search.setAccessibleName("Search legacy VB6 tasks and forms")
         self._search.textChanged.connect(self._apply_filter)
         layout.addWidget(self._search)
 
@@ -77,6 +83,10 @@ class TransitionHelpDialog(QtWidgets.QDialog):
         self._table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self._table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self._table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self._table.setAccessibleName("VB6 to RapidPy task mapping results")
+        self._table.setAccessibleDescription(
+            "Each row names the legacy form, operator task, RapidPy destination, and readiness."
+        )
         self._table.verticalHeader().setVisible(False)
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
@@ -86,13 +96,21 @@ class TransitionHelpDialog(QtWidgets.QDialog):
         self._table.doubleClicked.connect(self._open_selected)
         layout.addWidget(self._table, 1)
 
-        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Close)
-        self._open_button = buttons.addButton(
+        self._buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Close)
+        self._buttons.setAccessibleName("Transition help actions")
+        self._open_button = self._buttons.addButton(
             "Open Destination", QtWidgets.QDialogButtonBox.ActionRole
         )
+        self._open_button.setAccessibleName("Open selected RapidPy destination")
+        self._open_button.setEnabled(False)
         self._open_button.clicked.connect(self._open_selected)
-        buttons.rejected.connect(self.close)
-        layout.addWidget(buttons)
+        self._close_button = self._buttons.button(
+            QtWidgets.QDialogButtonBox.StandardButton.Close
+        )
+        if self._close_button is not None:
+            self._close_button.setAccessibleName("Close transition help")
+        self._buttons.rejected.connect(self.close)
+        layout.addWidget(self._buttons)
 
     def _populate(self) -> None:
         self._table.setRowCount(0)
@@ -106,6 +124,7 @@ class TransitionHelpDialog(QtWidgets.QDialog):
                 self._table.setItem(row, column, item)
         if self._table.rowCount():
             self._table.selectRow(0)
+            self._open_button.setEnabled(True)
 
     def _apply_filter(self, text: str) -> None:
         query = text.casefold().strip()
@@ -121,6 +140,10 @@ class TransitionHelpDialog(QtWidgets.QDialog):
         )
         if visible is not None:
             self._table.selectRow(visible)
+            self._open_button.setEnabled(True)
+        else:
+            self._table.clearSelection()
+            self._open_button.setEnabled(False)
 
     def _open_selected(self) -> None:
         selected = self._table.selectionModel().selectedRows()

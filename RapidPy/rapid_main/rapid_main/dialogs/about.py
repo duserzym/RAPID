@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import platform
+
 from PySide6 import QtCore, QtGui, QtWidgets
 
 
@@ -8,8 +10,10 @@ class AboutDialog(QtWidgets.QDialog):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("glassDialog")
         self.setWindowTitle("About RAPID v4")
-        self.setMinimumWidth(440)
+        self.setAccessibleName("About RAPID version 4")
+        self.setMinimumWidth(340)
         self.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowContextHelpButtonHint)
         self._build_ui()
 
@@ -20,48 +24,44 @@ class AboutDialog(QtWidgets.QDialog):
 
         # ── Header stripe ──────────────────────────────────────────────────
         header = QtWidgets.QFrame()
-        header.setFixedHeight(96)
-        header.setStyleSheet(
-            "background: qlineargradient(x1:0,y1:0,x2:1,y2:1,"
-            "stop:0 #4a0111, stop:1 #7A0219); border: none;"
-        )
+        header.setObjectName("dialogHero")
+        header.setMinimumHeight(96)
         hl = QtWidgets.QVBoxLayout(header)
         hl.setContentsMargins(24, 14, 24, 14)
 
         title_lbl = QtWidgets.QLabel("RAPID v4")
-        title_lbl.setStyleSheet(
-            "font-size: 28px; font-weight: 800; color: #ffffff; background: transparent;"
-        )
+        title_lbl.setObjectName("dialogHeroTitle")
+        title_lbl.setAccessibleName("RAPID version 4")
         sub_lbl = QtWidgets.QLabel("Paleomagnetics Control System")
-        sub_lbl.setStyleSheet(
-            "font-size: 12px; color: rgba(255,255,255,0.68); background: transparent;"
-        )
+        sub_lbl.setObjectName("dialogHeroSubtitle")
         hl.addWidget(title_lbl)
         hl.addWidget(sub_lbl)
         vl.addWidget(header)
 
         # ── Body ───────────────────────────────────────────────────────────
         body = QtWidgets.QWidget()
+        body.setObjectName("dialogBody")
         bl = QtWidgets.QVBoxLayout(body)
         bl.setContentsMargins(24, 20, 24, 16)
         bl.setSpacing(8)
 
+        details = QtWidgets.QFormLayout()
+        details.setSpacing(7)
+        details.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
         for key, val in [
-            ("Version",      "4.0  (Phase 2 — Dialogs)"),
-            ("Runtime",      "Python 3.13  ·  PySide6 / Qt6"),
+            ("Version",      "4.0  (transition build)"),
+            ("Runtime",      f"Python {platform.python_version()}  ·  Qt {QtCore.qVersion()}"),
             ("Institution",  "IRM — University of Minnesota"),
             ("License",      "GPLv3 open-source"),
             ("VB6 origin",   "RAPID v3 · Sourceforge"),
         ]:
-            row = QtWidgets.QHBoxLayout()
             k = QtWidgets.QLabel(f"{key}:")
-            k.setFixedWidth(110)
-            k.setStyleSheet("color: #9a8885; font-size: 12px;")
+            k.setObjectName("metaKey")
             v = QtWidgets.QLabel(val)
-            v.setStyleSheet("color: #2f2827; font-size: 12px;")
-            row.addWidget(k)
-            row.addWidget(v, 1)
-            bl.addLayout(row)
+            v.setObjectName("metaValue")
+            v.setWordWrap(True)
+            details.addRow(k, v)
+        bl.addLayout(details)
 
         bl.addSpacing(8)
         desc = QtWidgets.QLabel(
@@ -71,7 +71,8 @@ class AboutDialog(QtWidgets.QDialog):
             "the original VB6 application."
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: #6b7280; font-size: 11px;")
+        desc.setObjectName("guidanceText")
+        desc.setAccessibleName("RAPID application description")
         bl.addWidget(desc)
         vl.addWidget(body)
 
@@ -79,18 +80,20 @@ class AboutDialog(QtWidgets.QDialog):
         btn_row = QtWidgets.QHBoxLayout()
         btn_row.setContentsMargins(24, 4, 24, 18)
 
-        gh_btn = QtWidgets.QPushButton("GitHub ↗")
-        gh_btn.clicked.connect(
+        self._github_btn = QtWidgets.QPushButton("GitHub ↗")
+        self._github_btn.setAccessibleName("Open RAPID repository on GitHub")
+        self._github_btn.clicked.connect(
             lambda: QtGui.QDesktopServices.openUrl(
                 QtCore.QUrl("https://github.com/duserzym/RAPID")
             )
         )
-        ok_btn = QtWidgets.QPushButton("OK")
-        ok_btn.setObjectName("accent")
-        ok_btn.setDefault(True)
-        ok_btn.clicked.connect(self.accept)
+        self._ok_btn = QtWidgets.QPushButton("OK")
+        self._ok_btn.setObjectName("accent")
+        self._ok_btn.setAccessibleName("Close About RAPID")
+        self._ok_btn.setDefault(True)
+        self._ok_btn.clicked.connect(self.accept)
 
-        btn_row.addWidget(gh_btn)
+        btn_row.addWidget(self._github_btn)
         btn_row.addStretch()
-        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(self._ok_btn)
         vl.addLayout(btn_row)

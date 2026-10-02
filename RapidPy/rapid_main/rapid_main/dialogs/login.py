@@ -18,10 +18,13 @@ class LoginDialog(QtWidgets.QDialog):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("glassDialog")
         self.setWindowTitle("Operator Login")
-        self.setFixedWidth(360)
+        self.setAccessibleName("Operator session login")
+        self.setMinimumWidth(320)
         self.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowContextHelpButtonHint)
         self._build_ui()
+        self.resize(360, self.sizeHint().height())
 
     # ── Public ─────────────────────────────────────────────────────────────
     @property
@@ -35,36 +38,55 @@ class LoginDialog(QtWidgets.QDialog):
         vl.setSpacing(14)
 
         hdr = QtWidgets.QLabel("Sign in to begin session")
-        hdr.setStyleSheet("font-size: 15px; font-weight: 700; color: #7A0219;")
+        hdr.setObjectName("dialogTitle")
+        hdr.setAccessibleName("Operator login title")
         vl.addWidget(hdr)
 
         fl = QtWidgets.QFormLayout()
         fl.setSpacing(10)
         fl.setLabelAlignment(QtCore.Qt.AlignRight)
+        fl.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._name_edit = QtWidgets.QComboBox()
         self._name_edit.setEditable(True)
         self._name_edit.addItems(_PRESET_OPERATORS)
         self._name_edit.setCurrentIndex(-1)
         self._name_edit.lineEdit().setPlaceholderText("Your name or initials")
+        self._name_edit.setAccessibleName("Operator name or initials")
         fl.addRow("Operator:", self._name_edit)
 
         self._lab_lbl = QtWidgets.QLabel("IRM — University of Minnesota")
-        self._lab_lbl.setStyleSheet("color: #6b7280; font-size: 11px;")
+        self._lab_lbl.setObjectName("dialogSubtitle")
+        self._lab_lbl.setWordWrap(True)
+        self._lab_lbl.setAccessibleName("Laboratory name")
         fl.addRow("Laboratory:", self._lab_lbl)
 
         self._nocomm_chk = QtWidgets.QCheckBox("Start in No-Comm mode (no hardware)")
+        self._nocomm_chk.setAccessibleName("Start session without hardware communication")
+        self._nocomm_chk.setAccessibleDescription(
+            "Uses simulation-only diagnostic backends and does not provide hardware evidence."
+        )
         fl.addRow("", self._nocomm_chk)
 
         vl.addLayout(fl)
 
         # ── Buttons ──────────────────────────────────────────────────────
-        btns = QtWidgets.QDialogButtonBox(
+        self._buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
         )
-        btns.accepted.connect(self._on_accept)
-        btns.rejected.connect(self.reject)
-        vl.addWidget(btns)
+        self._buttons.setAccessibleName("Operator login actions")
+        self._ok_button = self._buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+        self._cancel_button = self._buttons.button(
+            QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        if self._ok_button is not None:
+            self._ok_button.setText("Start Session")
+            self._ok_button.setAccessibleName("Start operator session")
+        if self._cancel_button is not None:
+            self._cancel_button.setAccessibleName("Cancel operator login")
+        self._buttons.accepted.connect(self._on_accept)
+        self._buttons.rejected.connect(self.reject)
+        vl.addWidget(self._buttons)
 
         self._name_edit.lineEdit().returnPressed.connect(self._on_accept)
 

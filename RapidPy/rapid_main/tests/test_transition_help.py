@@ -45,6 +45,17 @@ class TransitionHelpTests(unittest.TestCase):
         self.assertEqual(destinations, ["measure"])
         dialog.deleteLater()
 
+    def test_no_search_results_disable_open_destination(self) -> None:
+        dialog = TransitionHelpDialog()
+
+        dialog._search.setText("definitely-not-a-legacy-control")
+
+        self.assertFalse(dialog._open_button.isEnabled())
+        self.assertFalse(dialog._table.selectionModel().selectedRows())
+        dialog._search.setText("vacuum")
+        self.assertTrue(dialog._open_button.isEnabled())
+        dialog.deleteLater()
+
     def test_main_window_routes_panel_and_diagnostic_destinations(self) -> None:
         controller = type("Controller", (), {})()
         controller.navigate_to = Mock()

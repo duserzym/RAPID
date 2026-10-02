@@ -135,6 +135,18 @@ QDialog#glassDialog QFrame#dialogCard {{
     border-bottom-color: rgba(122, 2, 25, 42);
     border-radius: 16px;
 }}
+QDialog#glassDialog QFrame#dialogHero {{
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 {TOKENS.maroon_dark}, stop:1 {TOKENS.maroon}
+    );
+    border: none;
+    border-bottom: 3px solid {TOKENS.gold};
+}}
+QDialog#glassDialog QWidget#dialogBody {{
+    background: {TOKENS.surface};
+    border: none;
+}}
 QDialog#glassDialog QScrollArea,
 QDialog#glassDialog QScrollArea > QWidget > QWidget {{
     background: transparent;
@@ -145,9 +157,34 @@ QDialog#glassDialog QLabel#dialogTitle {{
     font-size: 16px;
     font-weight: 750;
 }}
+QDialog#glassDialog QLabel#dialogHeroTitle {{
+    color: white;
+    background: transparent;
+    font-size: 28px;
+    font-weight: 800;
+}}
+QDialog#glassDialog QLabel#dialogHeroSubtitle {{
+    color: rgba(255, 255, 255, 190);
+    background: transparent;
+    font-size: 12px;
+}}
 QDialog#glassDialog QLabel#dialogSubtitle,
 QDialog#glassDialog QLabel#unitLabel {{
     color: {TOKENS.muted};
+}}
+QDialog#glassDialog QLabel#guidanceText {{
+    color: #4d3a39;
+    background: rgba(255, 255, 255, 145);
+    border: 1px solid rgba(122, 2, 25, 38);
+    border-radius: 12px;
+    padding: 10px 12px;
+}}
+QDialog#glassDialog QLabel#metaKey {{
+    color: {TOKENS.muted};
+    font-weight: 650;
+}}
+QDialog#glassDialog QLabel#metaValue {{
+    color: {TOKENS.ink};
 }}
 QDialog#glassDialog QLabel#readingDisplay {{
     color: {TOKENS.ink};
