@@ -378,6 +378,13 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
     def acquisition_error(self) -> str:
         return self._acquisition_error
 
+    def communication_events(self):
+        """Return immutable raw SQUID traffic for the current run."""
+
+        if self._bracketed is None:
+            return ()
+        return tuple(self._bracketed.communication_events())
+
     def holder_status(self):
         """Holder validity summary for the operator UI."""
         return self._holder_store.status(is_up=self._direction_up)
@@ -614,6 +621,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             direction_provider=lambda: self._direction_up,
             context_provider=self._block_context,
             simulated=self.simulated,
+            communication_events_provider=transport.communication_events,
         )
         self._acquisition_error = ""
 

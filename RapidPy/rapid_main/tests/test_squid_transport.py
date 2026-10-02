@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timezone
 
 from rapid_main.acquisition import (
     AcquisitionConfig,
@@ -9,6 +10,7 @@ from rapid_main.acquisition import (
     BracketedAcquisitionService,
     MotionOutcome,
 )
+from rapid_main.communication_log import CommunicationDirection, CommunicationLogger
 from rapid_main.config import AppConfig, CalibrationConfig, SquidConfig
 from rapid_main.magnetometer import ZeroPairValidation
 from rapid_main.squid_transport import (
@@ -148,6 +150,76 @@ class RawSquidTransportTests(unittest.TestCase):
         self.assertAlmostEqual(block.positions[0][2], 3.0)
         self.assertEqual(("set_range", ("A", "1")), client.calls[0])
 
+    def test_records_exact_commands_and_replies_in_transport_order(self) -> None:
+        client = _FakeSquidClient(
+            [((0.0, -1.0), (0.0, -2.0), (0.0, -3.0))]
+        )
+        logger = CommunicationLogger(
+            "SQUID-2G",
+            port="COM7",
+            clock=lambda: datetime(2026, 10, 2, tzinfo=timezone.utc),
+        )
+        transport = RawSquidTransport(
+            client,
+            config=SquidTransportConfig(port="COM7"),
+            communication_logger=logger,
+        )
+
+        transport.clear_and_reset_counters("A")
+        transport.set_range("A", "H")
+        latch = transport.latch("A")
+        for axis in "XYZ":
+            transport.read_axis(axis)
+
+        events = transport.communication_events()
+        self.assertIsInstance(events, tuple)
+        self.assertEqual(
+            [(event.direction.value, event.payload) for event in events],
+            [
+                ("TX", "ACLP"),
+                ("TX", "ARC"),
+                ("TX", "ACRH"),
+                ("TX", "ALC"),
+                ("TX", "ALD"),
+                ("TX", "XSC"),
+                ("RX", "0"),
+                ("TX", "XSD"),
+                ("RX", "-1"),
+                ("TX", "YSC"),
+                ("RX", "0"),
+                ("TX", "YSD"),
+                ("RX", "-2"),
+                ("TX", "ZSC"),
+                ("RX", "0"),
+                ("TX", "ZSD"),
+                ("RX", "-3"),
+            ],
+        )
+        self.assertTrue(all(event.port == "COM7" for event in events))
+        self.assertTrue(all(latch.latch_id in event.detail for event in events[3:]))
+        with self.assertRaises(AttributeError):
+            events.append(events[0])  # type: ignore[attr-defined]
+
+    def test_adapter_error_is_recorded_and_original_exception_propagates(self) -> None:
+        failure = RuntimeError("serial read failed")
+
+        class _FailingClient(_FakeSquidClient):
+            def read_axis(self, axis: str, *, range_value: float = 1.0):
+                raise failure
+
+        client = _FailingClient([counts_for((1.0, 2.0, 3.0), CALIBRATION)])
+        transport = RawSquidTransport(client, config=SquidTransportConfig(port="COM9"))
+        transport.latch("A")
+
+        with self.assertRaises(RuntimeError) as raised:
+            transport.read_axis("X")
+
+        self.assertIs(raised.exception, failure)
+        event = transport.communication_events()[-1]
+        self.assertEqual(event.direction, CommunicationDirection.ERROR)
+        self.assertEqual(event.payload, "X")
+        self.assertIn("serial read failed", event.detail)
+
 
 class TurningPositionWrapTests(unittest.TestCase):
     def test_full_negative_rotation_wraps_to_zero(self) -> None:
@@ -275,6 +347,31 @@ class BracketedSquidBackendTests(unittest.TestCase):
 
         self.assertEqual(vertical.moves, [(-25886, 2)])
         self.assertEqual(turning.angles, [0.0])
+
+    def test_communication_event_snapshot_is_forwarded_immutably(self) -> None:
+        logger = CommunicationLogger("SQUID-2G", port="COM4")
+        logger.sent("ALC", detail="latch")
+        backend, _vertical, _turning = self._backend(
+            communication_events_provider=lambda: tuple(logger.transcript.events)
+        )
+
+        events = backend.communication_events()
+
+        self.assertIsInstance(events, tuple)
+        self.assertEqual(events[0].payload, "ALC")
+        logger.sent("ALD", detail="latch")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(len(backend.communication_events()), 2)
+
+    def test_simulated_backend_cannot_publish_events_as_live_transport_evidence(self) -> None:
+        logger = CommunicationLogger("SQUID-2G", port="SIMULATED")
+        logger.sent("ALC", detail="synthetic latch")
+        backend, _vertical, _turning = self._backend(
+            simulated=True,
+            communication_events_provider=lambda: tuple(logger.transcript.events),
+        )
+
+        self.assertEqual(backend.communication_events(), ())
 
 
 class MotionOutcomeTests(unittest.TestCase):

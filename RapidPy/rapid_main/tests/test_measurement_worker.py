@@ -5,11 +5,13 @@ import tempfile
 import time
 import threading
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6 import QtCore
 
 from rapid_main.data_model import SpecimenMeta
+from rapid_main.communication_log import CommunicationDirection, CommunicationEvent
 from rapid_main.hardware_contracts import PreflightResult
 from rapid_main.magnetometer import BracketedMeasurementBlock, ZeroPairValidation
 from rapid_main.measurement_worker import MeasurementWorker
@@ -590,6 +592,53 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
         self.assertIn("measuring", phases)
         allowed = {phase.value for phase in WorkflowPhase}
         self.assertTrue(set(phases).issubset(allowed))
+
+    def test_backend_transport_events_are_published_once(self) -> None:
+        class TranscriptBackend(DeterministicBackend):
+            def __init__(self) -> None:
+                super().__init__([("NRM", 1.0, 2.0, 3.0)])
+                self._events = (
+                    CommunicationEvent(
+                        timestamp=datetime(2026, 10, 2, tzinfo=timezone.utc),
+                        channel="SQUID-2G",
+                        direction=CommunicationDirection.TX,
+                        port="COM7",
+                        payload="XSC",
+                        detail="counter axis=X latch_id=A-000001",
+                    ),
+                    CommunicationEvent(
+                        timestamp=datetime(2026, 10, 2, tzinfo=timezone.utc),
+                        channel="SQUID-2G",
+                        direction=CommunicationDirection.RX,
+                        port="COM7",
+                        payload="12",
+                        detail="counter axis=X latch_id=A-000001",
+                    ),
+                )
+
+            def communication_events(self):
+                return self._events
+
+        backend = TranscriptBackend()
+
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out"
+            worker = MeasurementWorker(
+                meta=_meta("TRANSCRIPT"),
+                labels=["NRM"],
+                output_dir=out / "TRANSCRIPT",
+                backend=backend,
+            )
+            worker.run()
+            worker._write_communication_transcript()
+
+            transcript = (out / "TRANSCRIPT" / "communication.tsv").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertEqual(transcript.count("\tSQUID-2G\tTX\tCOM7\tXSC\t"), 1)
+        self.assertEqual(transcript.count("\tSQUID-2G\tRX\tCOM7\t12\t"), 1)
+        self.assertIn("\tmeasurement-worker\tINFO\tTRANSCRIPT\t\tbundle initialized", transcript)
 
     def test_magnetometer_reading_quality_flags_are_operator_warnings(self) -> None:
         from rapid_main.magnetometer import MagnetometerReading

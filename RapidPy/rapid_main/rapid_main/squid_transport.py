@@ -34,6 +34,7 @@ from rapid_main.acquisition import (
     RecoveryRecord,
 )
 from rapid_main.config import AppConfig
+from rapid_main.communication_log import CommunicationEvent, CommunicationLogger
 from rapid_main.magnetometer import (
     BracketedMeasurementBlock,
     Position4,
@@ -71,9 +72,18 @@ class RawSquidTransport:
     ``ALC``/``ALD`` pair.
     """
 
-    def __init__(self, client: object, *, config: SquidTransportConfig) -> None:
+    def __init__(
+        self,
+        client: object,
+        *,
+        config: SquidTransportConfig,
+        communication_logger: CommunicationLogger | None = None,
+    ) -> None:
         self._client = client
         self._config = config
+        self._communication_logger = communication_logger or CommunicationLogger(
+            "SQUID-2G", port=config.port
+        )
         self._latch_serial = 0
         self._latch_id = ""
 
@@ -85,30 +95,78 @@ class RawSquidTransport:
     def latch_id(self) -> str:
         return self._latch_id
 
+    def communication_events(self) -> tuple[CommunicationEvent, ...]:
+        """Return an immutable snapshot of exact adapter traffic."""
+
+        return tuple(self._communication_logger.transcript.events)
+
     def is_connected(self) -> bool:
         return bool(getattr(self._client, "is_connected", False))
 
     def clear_and_reset_counters(self, axis: str = "A") -> None:
         self._require_connected()
-        self._client.clear_and_reset(axis)  # type: ignore[attr-defined]
+        try:
+            commands = self._client.clear_and_reset(axis)  # type: ignore[attr-defined]
+        except Exception as exc:
+            self._communication_logger.error(
+                f"clear/reset failed for axis {axis}: {exc}", payload=axis
+            )
+            raise
+        for command in commands:
+            self._communication_logger.sent(command, detail=f"clear/reset axis={axis}")
 
     def set_range(self, axis: str, range_label: str) -> None:
         self._require_connected()
-        self._client.set_range(axis, range_label)  # type: ignore[attr-defined]
+        try:
+            commands = self._client.set_range(axis, range_label)  # type: ignore[attr-defined]
+        except Exception as exc:
+            self._communication_logger.error(
+                f"set range failed for axis {axis}: {exc}", payload=range_label
+            )
+            raise
+        for command in commands:
+            self._communication_logger.sent(
+                command, detail=f"set range axis={axis} range={range_label}"
+            )
 
     def latch(self, axis: str = "A", *, settle: bool = False) -> LatchResult:
         self._require_connected()
         settle_s = float(self._config.settle_delay_s) if settle else 0.0
-        commands = self._client.latch(axis, settle_s=settle_s)  # type: ignore[attr-defined]
+        try:
+            commands = self._client.latch(axis, settle_s=settle_s)  # type: ignore[attr-defined]
+        except Exception as exc:
+            self._communication_logger.error(
+                f"latch failed for axis {axis}: {exc}", payload=axis
+            )
+            raise
         self._latch_serial += 1
         self._latch_id = f"{axis}-{self._latch_serial:06d}"
+        for command in commands:
+            self._communication_logger.sent(
+                command, detail=f"latch axis={axis} latch_id={self._latch_id}"
+            )
         return LatchResult(latch_id=self._latch_id, commands=tuple(commands))
 
     def read_axis(self, axis: str) -> AxisReply:
         self._require_connected()
         if not self._latch_id:
-            raise SquidTransportError("read_axis called before a latch cycle")
-        sample = self._client.read_axis(axis, range_value=self._config.range_value)  # type: ignore[attr-defined]
+            error = SquidTransportError("read_axis called before a latch cycle")
+            self._communication_logger.error(str(error), payload=axis)
+            raise error
+        try:
+            sample = self._client.read_axis(  # type: ignore[attr-defined]
+                axis, range_value=self._config.range_value
+            )
+        except Exception as exc:
+            self._communication_logger.error(
+                f"read axis {axis} failed: {exc}", payload=axis
+            )
+            raise
+        detail = f"axis={axis} latch_id={self._latch_id}"
+        self._communication_logger.sent(sample.count_command, detail=f"counter {detail}")
+        self._communication_logger.received(sample.count_reply, detail=f"counter {detail}")
+        self._communication_logger.sent(sample.data_command, detail=f"data {detail}")
+        self._communication_logger.received(sample.data_reply, detail=f"data {detail}")
         return AxisReply(
             counts=float(sample.counts),
             dvm=float(sample.dvm),
@@ -122,9 +180,11 @@ class RawSquidTransport:
 
     def _require_connected(self) -> None:
         if not self.is_connected():
-            raise SquidTransportError(
+            error = SquidTransportError(
                 f"SQUID transport is not connected ({self._config.port}:{self._config.baud})."
             )
+            self._communication_logger.error(str(error))
+            raise error
 
 
 class MotorVerticalController:
@@ -240,6 +300,7 @@ class BracketedSquidBackend:
         context_provider: Callable[[], BlockContext] | None = None,
         flux_discontinuity_retries: int = 2,
         simulated: bool = False,
+        communication_events_provider: Callable[[], tuple[CommunicationEvent, ...]] | None = None,
     ) -> None:
         self._service = service
         self._holder_provider = holder_provider
@@ -247,6 +308,7 @@ class BracketedSquidBackend:
         self._context_provider = context_provider
         self.flux_discontinuity_retries = max(0, int(flux_discontinuity_retries))
         self._simulated = bool(simulated)
+        self._communication_events_provider = communication_events_provider
         self._last_acquisition: BracketedAcquisition | None = None
         self._recoveries: list[RecoveryRecord] = []
 
@@ -261,6 +323,13 @@ class BracketedSquidBackend:
     @property
     def recovery_records(self) -> tuple[RecoveryRecord, ...]:
         return tuple(self._recoveries)
+
+    def communication_events(self) -> tuple[CommunicationEvent, ...]:
+        """Return an immutable adapter-event snapshot for run publication."""
+
+        if self._simulated or self._communication_events_provider is None:
+            return ()
+        return tuple(self._communication_events_provider())
 
     def read_squid(self) -> BracketedMeasurementBlock:
         context = self._context_provider() if self._context_provider else BlockContext()

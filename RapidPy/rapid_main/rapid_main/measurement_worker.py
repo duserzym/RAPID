@@ -176,6 +176,7 @@ class MeasurementWorker(QtCore.QThread):
         self._timeout_epsilon = 0.05
         self._state = WorkflowStateMachine()
         self._comm_logger: CommunicationLogger | None = None
+        self._backend_comm_event_count = 0
         self._phase_history: list[dict[str, object]] = []
 
     # Control API
@@ -778,6 +779,14 @@ class MeasurementWorker(QtCore.QThread):
         if self._comm_logger is None:
             return
         try:
+            provider = getattr(self._backend, "communication_events", None)
+            if callable(provider):
+                backend_events = tuple(provider())
+                if len(backend_events) >= self._backend_comm_event_count:
+                    self._comm_logger.transcript.extend(
+                        backend_events[self._backend_comm_event_count :]
+                    )
+                    self._backend_comm_event_count = len(backend_events)
             self._comm_logger.write_text(self._publish_dir / "communication.tsv")
         except Exception as exc:
             self.error_occurred.emit(f"Failed to write communication transcript: {exc}")
