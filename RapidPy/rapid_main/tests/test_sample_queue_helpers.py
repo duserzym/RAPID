@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
+from pathlib import Path
 
 from PySide6 import QtWidgets
 
@@ -10,7 +12,9 @@ from rapid_main.panels.sample_queue import (
     _parse_hole,
     _parse_step_count,
     _read_queue_rows,
+    read_queue_file,
     _status_for_recovery_action,
+    write_queue_file,
 )
 
 
@@ -100,6 +104,61 @@ class TestSampleQueueHelpers(unittest.TestCase):
             self.assertEqual(len(rows), 1)
         finally:
             panel.deleteLater()
+
+    def test_sequential_positions_preserve_samples_and_treatments(self) -> None:
+        panel = SampleQueuePanel()
+        try:
+            names_before = [panel._safe_cell(row, 2) for row in range(panel._table.rowCount())]
+            treatments_before = [panel._safe_cell(row, 4) for row in range(panel._table.rowCount())]
+
+            panel.apply_sequential_positions(start=7, prefix="C")
+
+            self.assertEqual(
+                [panel._safe_cell(row, 1) for row in range(panel._table.rowCount())],
+                ["C7", "C8", "C9"],
+            )
+            self.assertEqual(
+                [panel._safe_cell(row, 2) for row in range(panel._table.rowCount())],
+                names_before,
+            )
+            self.assertEqual(
+                [panel._safe_cell(row, 4) for row in range(panel._table.rowCount())],
+                treatments_before,
+            )
+        finally:
+            panel.deleteLater()
+
+    def test_queue_json_and_csv_round_trip(self) -> None:
+        rows = [
+            {
+                "position": "A1",
+                "sample_name": "SPEC-1",
+                "sample_set": "SITE-A",
+                "treatment": "NRM → AF20",
+                "status": "Pending",
+            },
+            {
+                "position": "A2",
+                "sample_name": "SPEC-2",
+                "sample_set": "SITE-A",
+                "treatment": "NRM",
+                "status": "Done",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for suffix in (".json", ".csv"):
+                with self.subTest(suffix=suffix):
+                    path = write_queue_file(root / f"queue{suffix}", rows)
+                    self.assertEqual(read_queue_file(path), rows)
+                    self.assertFalse(path.with_name(path.name + ".tmp").exists())
+
+    def test_queue_import_rejects_unknown_schema_before_table_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "queue.json"
+            path.write_text('{"schema":"unknown","rows":[]}', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Unsupported queue file schema"):
+                read_queue_file(path)
 
 
 if __name__ == "__main__":

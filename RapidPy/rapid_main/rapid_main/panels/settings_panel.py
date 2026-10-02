@@ -75,12 +75,18 @@ class SettingsPanel(QtWidgets.QWidget):
         fl.setSpacing(10)
         fl.setLabelAlignment(QtCore.Qt.AlignRight)
 
-        def _path_row(label: str) -> QtWidgets.QHBoxLayout:
+        self._path_browse_buttons: dict[str, QtWidgets.QPushButton] = {}
+
+        def _path_row(label: str) -> QtWidgets.QLineEdit:
             rl = QtWidgets.QHBoxLayout()
             edit = QtWidgets.QLineEdit()
             edit.setPlaceholderText("Browse or type path…")
             browse = QtWidgets.QPushButton("Browse…")
             browse.setFixedWidth(80)
+            browse.clicked.connect(
+                lambda _checked=False, target=edit: self._browse_directory(target)
+            )
+            self._path_browse_buttons[label] = browse
             rl.addWidget(edit)
             rl.addWidget(browse)
             fl.addRow(label, rl)
@@ -110,6 +116,19 @@ class SettingsPanel(QtWidgets.QWidget):
         vl.setContentsMargins(0, 0, 0, 0)
         vl.addWidget(scroll)
         return w
+
+    def _browse_directory(self, target: QtWidgets.QLineEdit) -> bool:
+        current = target.text().strip()
+        selected = QtWidgets.QFileDialog.getExistingDirectory(
+            self,
+            "Select folder",
+            current,
+            QtWidgets.QFileDialog.Option.ShowDirsOnly,
+        )
+        if not selected:
+            return False
+        target.setText(str(Path(selected)))
+        return True
 
     # ── SQUID tab ─────────────────────────────────────────────────────────────
     def _build_squid_tab(self) -> QtWidgets.QWidget:

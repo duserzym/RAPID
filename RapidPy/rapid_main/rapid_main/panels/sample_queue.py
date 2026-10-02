@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import csv
+import json
+import os
 import re
+from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from rapid_main.printing import print_widget_snapshot
 from rapid_main.queue_compiler import QueueOptions, QueueSample, validate_queue_samples
 
 
 # Sample table column definitions
 _COLS = ["#", "Position", "Sample Name", "Sample Set", "Treatment Steps", "Status"]
+_QUEUE_FILE_SCHEMA = "rapidpy.sample_queue.v1"
 
 
 class SampleQueuePanel(QtWidgets.QWidget):
@@ -77,14 +83,24 @@ class SampleQueuePanel(QtWidgets.QWidget):
         hl.addWidget(self._recovery_btn)
         hl.addWidget(_vline())
 
-        add_btn = QtWidgets.QPushButton("[+]  Add Sample")
-        seq_btn = QtWidgets.QPushButton("[→]  Sequential")
+        self._add_btn = QtWidgets.QPushButton("[+]  Add Sample")
+        self._seq_btn = QtWidgets.QPushButton("[→]  Sequential")
         clr_btn = QtWidgets.QPushButton("[x]  Clear")
-        exp_btn = QtWidgets.QPushButton("[↑]  Export")
-        imp_btn = QtWidgets.QPushButton("[↓]  Import")
+        self._export_btn = QtWidgets.QPushButton("[↑]  Export")
+        self._import_btn = QtWidgets.QPushButton("[↓]  Import")
+        self._add_btn.clicked.connect(self._add_sample_dialog)
+        self._seq_btn.clicked.connect(self._make_positions_sequential)
         clr_btn.clicked.connect(self._clear_table)
+        self._export_btn.clicked.connect(self._export_queue)
+        self._import_btn.clicked.connect(self._import_queue)
 
-        for btn in (add_btn, seq_btn, clr_btn, exp_btn, imp_btn):
+        for btn in (
+            self._add_btn,
+            self._seq_btn,
+            clr_btn,
+            self._export_btn,
+            self._import_btn,
+        ):
             hl.addWidget(btn)
 
         hl.addStretch()
@@ -149,6 +165,124 @@ class SampleQueuePanel(QtWidgets.QWidget):
             self._table.setItem(row, col, item)
         self._set_status(row, status)
 
+    def _insert_sample_row(
+        self,
+        row: int,
+        *,
+        position: str,
+        name: str,
+        sample_set: str,
+        treatment: str,
+        status: str = "Pending",
+    ) -> None:
+        row = max(0, min(int(row), self._table.rowCount()))
+        self._table.insertRow(row)
+        values = [str(row + 1), position, name, sample_set, treatment, status]
+        for col, text in enumerate(values):
+            item = QtWidgets.QTableWidgetItem(text)
+            if col in (0, 5):
+                item.setTextAlignment(QtCore.Qt.AlignCenter)
+            self._table.setItem(row, col, item)
+        self._set_status(row, status)
+        self._renumber_rows()
+
+    def _add_sample_dialog(self, *, insert_at: int | None = None) -> bool:
+        row = self._table.rowCount() if insert_at is None else int(insert_at)
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Add queue sample")
+        form = QtWidgets.QFormLayout(dialog)
+        position = QtWidgets.QLineEdit(f"A{row + 1}")
+        name = QtWidgets.QLineEdit()
+        sample_set = QtWidgets.QLineEdit()
+        treatment = QtWidgets.QLineEdit("NRM")
+        form.addRow("Changer position", position)
+        form.addRow("Sample name", name)
+        form.addRow("Sample set", sample_set)
+        form.addRow("Treatment sequence", treatment)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        name.setFocus()
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return False
+        if not position.text().strip() or not name.text().strip():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Add queue sample",
+                "Changer position and sample name are required.",
+            )
+            return False
+        self._insert_sample_row(
+            row,
+            position=position.text().strip(),
+            name=name.text().strip(),
+            sample_set=sample_set.text().strip(),
+            treatment=treatment.text().strip() or "NRM",
+        )
+        return True
+
+    def _make_positions_sequential(self) -> bool:
+        if self._table.rowCount() == 0:
+            QtWidgets.QMessageBox.information(self, "Sequential positions", "The queue is empty.")
+            return False
+        start, accepted = QtWidgets.QInputDialog.getInt(
+            self,
+            "Sequential positions",
+            "First changer hole",
+            1,
+            1,
+            9999,
+        )
+        if not accepted:
+            return False
+        self.apply_sequential_positions(start)
+        return True
+
+    def apply_sequential_positions(self, start: int = 1, prefix: str = "A") -> None:
+        """Assign deterministic changer positions while preserving queue content."""
+        for row in range(self._table.rowCount()):
+            self._table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{prefix}{start + row}"))
+        self._renumber_rows()
+
+    def _export_queue(self) -> Path | None:
+        filename, _selected = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Export sample queue",
+            "rapid_queue.json",
+            "RAPID queue (*.json);;CSV queue (*.csv)",
+        )
+        if not filename:
+            return None
+        path = Path(filename)
+        try:
+            write_queue_file(path, self.row_snapshot())
+        except (OSError, ValueError) as exc:
+            QtWidgets.QMessageBox.critical(self, "Export sample queue", str(exc))
+            return None
+        return path
+
+    def _import_queue(self) -> Path | None:
+        filename, _selected = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Import sample queue",
+            "",
+            "RAPID queue (*.json *.csv);;All files (*)",
+        )
+        if not filename:
+            return None
+        path = Path(filename)
+        try:
+            rows = read_queue_file(path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            QtWidgets.QMessageBox.critical(self, "Import sample queue", str(exc))
+            return None
+        self.load_rows(rows)
+        return path
+
     def _clear_table(self) -> None:
         self._table.setRowCount(0)
         self._update_count()
@@ -162,9 +296,9 @@ class SampleQueuePanel(QtWidgets.QWidget):
         if row < 0:
             return
         menu = QtWidgets.QMenu(self)
-        menu.addAction("Sample Info")
+        menu.addAction("Sample Info", lambda: self._show_sample_info(row))
         menu.addSeparator()
-        menu.addAction("Insert Sample Above")
+        menu.addAction("Insert Sample Above", lambda: self._add_sample_dialog(insert_at=row))
         menu.addAction("Delete", lambda: self._table.removeRow(row))
         menu.addAction("Delete without Gap", lambda: self._table.removeRow(row))
         menu.addSeparator()
@@ -178,8 +312,25 @@ class SampleQueuePanel(QtWidgets.QWidget):
             menu.addAction("Re-run interrupted sample", lambda: self.apply_recovery_to_row(row, "rerun"))
             menu.addAction("Skip interrupted sample", lambda: self.apply_recovery_to_row(row, "skip"))
             menu.addAction("Abort interrupted sample", lambda: self.apply_recovery_to_row(row, "abort"))
-        menu.addAction("Delete next 9 samples")
+        menu.addAction("Delete next 9 samples", lambda: self._delete_row_span(row, 10))
         menu.exec(self._table.viewport().mapToGlobal(pos))
+
+    def _show_sample_info(self, row: int) -> None:
+        QtWidgets.QMessageBox.information(
+            self,
+            "Queue sample",
+            "\n".join(
+                f"{column}: {self._safe_cell(row, index)}"
+                for index, column in enumerate(_COLS[1:], start=1)
+            ),
+        )
+
+    def _delete_row_span(self, start: int, count: int) -> None:
+        for _ in range(max(0, int(count))):
+            if start >= self._table.rowCount():
+                break
+            self._table.removeRow(start)
+        self._renumber_rows()
 
     def _on_run_queue(self) -> None:
         rows, errors = _read_queue_rows(self._table)
@@ -517,9 +668,78 @@ class SampleQueuePanel(QtWidgets.QWidget):
 
         cl.addStretch()
 
-        print_btn = QtWidgets.QPushButton("[🖨]  Print List")
-        cl.addWidget(print_btn)
+        self._print_btn = QtWidgets.QPushButton("[🖨]  Print List")
+        self._print_btn.clicked.connect(self._print_queue)
+        cl.addWidget(self._print_btn)
         return card
+
+    def _print_queue(self) -> bool:
+        return print_widget_snapshot(
+            self,
+            self._table,
+            title="RAPID sample queue",
+        )
+
+
+def write_queue_file(path: Path | str, rows: list[dict[str, str]]) -> Path:
+    """Write a portable queue document using an atomic same-directory replace."""
+
+    destination = Path(path)
+    if destination.suffix.lower() not in {".json", ".csv"}:
+        destination = destination.with_suffix(".json")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(destination.name + ".tmp")
+    fields = ("position", "sample_name", "sample_set", "treatment", "status")
+    try:
+        if destination.suffix.lower() == ".csv":
+            with temporary.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fields)
+                writer.writeheader()
+                for row in rows:
+                    writer.writerow({field: str(row.get(field, "")) for field in fields})
+        else:
+            temporary.write_text(
+                json.dumps(
+                    {"schema": _QUEUE_FILE_SCHEMA, "rows": rows},
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        os.replace(temporary, destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return destination
+
+
+def read_queue_file(path: Path | str) -> list[dict[str, str]]:
+    """Read and validate JSON/CSV queue rows without mutating the active table."""
+
+    source = Path(path)
+    fields = ("position", "sample_name", "sample_set", "treatment", "status")
+    if source.suffix.lower() == ".csv":
+        with source.open("r", encoding="utf-8-sig", newline="") as handle:
+            raw_rows: object = list(csv.DictReader(handle))
+    else:
+        payload = json.loads(source.read_text(encoding="utf-8-sig"))
+        if not isinstance(payload, dict) or payload.get("schema") != _QUEUE_FILE_SCHEMA:
+            raise ValueError(f"Unsupported queue file schema in {source.name}.")
+        raw_rows = payload.get("rows")
+    if not isinstance(raw_rows, list):
+        raise ValueError(f"Queue file {source.name} does not contain a row list.")
+
+    rows: list[dict[str, str]] = []
+    for index, raw in enumerate(raw_rows, start=1):
+        if not isinstance(raw, dict):
+            raise ValueError(f"Queue row {index} is not an object.")
+        row = {field: str(raw.get(field, "") or "").strip() for field in fields}
+        if not row["position"] or not row["sample_name"]:
+            raise ValueError(f"Queue row {index} requires position and sample_name.")
+        row["treatment"] = row["treatment"] or "NRM"
+        row["status"] = _normalize_status(row["status"])
+        rows.append(row)
+    return rows
 
 
 def _vline() -> QtWidgets.QFrame:

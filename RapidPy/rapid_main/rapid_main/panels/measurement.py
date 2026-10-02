@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from rapid_main.analysis import ReadingCycleStatistics, reading_cycle_statistics
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
@@ -14,11 +14,117 @@ from rapid_main.device_ownership import DeviceOwnershipError
 from rapid_main.dialogs.plots import build_quicklook_summary, write_quicklook_json
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
 from rapid_main.measurement_worker import MeasurementWorker, StepResult
+from rapid_main.printing import print_widget_snapshot
 
 try:
     import pyqtgraph as pg
 except ImportError:  # pragma: no cover - optional dependency on operator environment
     pg = None
+
+
+class MeasurementTraceWidget(QtWidgets.QWidget):
+    """Dependency-free quicklook used when pyqtgraph is unavailable."""
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("measurementTraceFallback")
+        self.setAccessibleName("Live measurement quicklook")
+        self.setMinimumHeight(310)
+        self._series: dict[str, list[float]] = {
+            "step": [],
+            "moment": [],
+            "dec": [],
+            "inc": [],
+        }
+
+    def set_series(
+        self,
+        steps: list[float],
+        moments: list[float],
+        declinations: list[float],
+        inclinations: list[float],
+    ) -> None:
+        self._series = {
+            "step": list(steps),
+            "moment": list(moments),
+            "dec": list(declinations),
+            "inc": list(inclinations),
+        }
+        self.update()
+
+    def clear(self) -> None:
+        self.set_series([], [], [], [])
+
+    @staticmethod
+    def _points(values: list[float], rect: QtCore.QRectF) -> list[QtCore.QPointF]:
+        if not values:
+            return []
+        low = min(values)
+        high = max(values)
+        span = high - low
+        if span <= 0.0:
+            span = 1.0
+            low -= 0.5
+        divisor = max(1, len(values) - 1)
+        return [
+            QtCore.QPointF(
+                rect.left() + (idx / divisor) * rect.width(),
+                rect.bottom() - ((value - low) / span) * rect.height(),
+            )
+            for idx, value in enumerate(values)
+        ]
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        super().paintEvent(event)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(QtGui.QColor(255, 255, 255, 150))
+        painter.drawRoundedRect(QtCore.QRectF(self.rect()).adjusted(1, 1, -1, -1), 14, 14)
+
+        bounds = QtCore.QRectF(self.rect()).adjusted(42, 28, -18, -32)
+        upper = QtCore.QRectF(bounds.left(), bounds.top(), bounds.width(), bounds.height() * 0.44)
+        lower = QtCore.QRectF(
+            bounds.left(),
+            bounds.top() + bounds.height() * 0.56,
+            bounds.width(),
+            bounds.height() * 0.44,
+        )
+        grid_pen = QtGui.QPen(QtGui.QColor(122, 2, 25, 34), 1)
+        painter.setPen(grid_pen)
+        for rect in (upper, lower):
+            painter.drawRect(rect)
+            for index in range(1, 4):
+                y = rect.top() + rect.height() * index / 4
+                painter.drawLine(QtCore.QPointF(rect.left(), y), QtCore.QPointF(rect.right(), y))
+
+        painter.setPen(QtGui.QColor("#6F6265"))
+        painter.drawText(QtCore.QRectF(8, upper.top(), 32, 24), QtCore.Qt.AlignmentFlag.AlignRight, "|M|")
+        painter.drawText(QtCore.QRectF(8, lower.top(), 32, 24), QtCore.Qt.AlignmentFlag.AlignRight, "°")
+        painter.drawText(
+            QtCore.QRectF(bounds.left(), bounds.bottom() + 5, bounds.width(), 22),
+            QtCore.Qt.AlignmentFlag.AlignCenter,
+            "Treatment step",
+        )
+
+        if not self._series["step"]:
+            painter.setPen(QtGui.QColor("#887A7D"))
+            painter.drawText(self.rect(), QtCore.Qt.AlignmentFlag.AlignCenter, "Waiting for accepted measurement steps")
+            painter.end()
+            return
+
+        for key, rect, color in (
+            ("moment", upper, "#7A0219"),
+            ("dec", lower, "#31566D"),
+            ("inc", lower, "#D69F00"),
+        ):
+            points = self._points(self._series[key], rect)
+            painter.setPen(QtGui.QPen(QtGui.QColor(color), 2.2))
+            if len(points) == 1:
+                painter.drawEllipse(points[0], 3.5, 3.5)
+            elif points:
+                painter.drawPolyline(QtGui.QPolygonF(points))
+        painter.end()
 
 
 class MeasurementPanel(QtWidgets.QWidget):
@@ -30,7 +136,7 @@ class MeasurementPanel(QtWidgets.QWidget):
         Top strip  — current sample, depth, step, coordinates selector
         Col A (22%) — flow controls, coordinate frame selector
         Col B (42%) — live SQUID readings card + measurement stats card
-        Col C (36%) — moment vs step plot placeholder
+        Col C (36%) — live moment and direction quicklook
         Bottom     — quality warning banners (hidden until data arrives)
     """
 
@@ -55,6 +161,7 @@ class MeasurementPanel(QtWidgets.QWidget):
         self._completed_steps: list[MeasurementStep] = []
         self._plot_curves: dict[str, object] = {}
         self._plot_graph: object | None = None
+        self._plot_fallback: MeasurementTraceWidget | None = None
         self._last_run_error = False
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -119,6 +226,7 @@ class MeasurementPanel(QtWidgets.QWidget):
             "QPushButton:hover { background: rgba(220,38,38,0.10); }"
         )
         self._print_btn = QtWidgets.QPushButton("🖨  Print")
+        self._print_btn.clicked.connect(self._print_current_view)
         self._plots_btn = QtWidgets.QPushButton("📈  Show Plots")
         self._plots_btn.clicked.connect(self._show_plots)
         self._start_btn.clicked.connect(self._on_start)
@@ -264,7 +372,7 @@ class MeasurementPanel(QtWidgets.QWidget):
         ov.addStretch()
         return outer
 
-    # ── Plot placeholder ──────────────────────────────────────────────────────
+    # ── Live plot ─────────────────────────────────────────────────────────────
     def _build_plot_card(self) -> QtWidgets.QFrame:
         card = QtWidgets.QFrame()
         card.setObjectName("card")
@@ -277,15 +385,11 @@ class MeasurementPanel(QtWidgets.QWidget):
         cl.addWidget(hdr)
 
         if pg is None:
-            placeholder = QtWidgets.QLabel(
-                "Live plotting requires pyqtgraph. Install the app requirements."
+            self._plot_fallback = MeasurementTraceWidget()
+            self._plot_fallback.setToolTip(
+                "Built-in live quicklook. Install pyqtgraph for interactive pan and zoom."
             )
-            placeholder.setAlignment(QtCore.Qt.AlignCenter)
-            placeholder.setStyleSheet(
-                "QLabel { border: 2px dashed rgba(122,2,25,0.18); "
-                "border-radius: 14px; color: #c4b7b3; font-size: 13px; }"
-            )
-            cl.addWidget(placeholder, 1)
+            cl.addWidget(self._plot_fallback, 1)
         else:
             self._plot_graph = pg.GraphicsLayoutWidget()
             self._plot_graph.setBackground("#fffdf8")
@@ -352,6 +456,14 @@ class MeasurementPanel(QtWidgets.QWidget):
         dialog = PlotsDialog(self)
         self._apply_completed_steps_to_plots(dialog)
         dialog.exec()
+
+    def _print_current_view(self) -> bool:
+        sample = self._current_sample or "UNKNOWN"
+        return print_widget_snapshot(
+            self,
+            self,
+            title=f"RAPID measurement — {sample}",
+        )
 
     def _apply_completed_steps_to_plots(self, dialog: object) -> bool:
         if not self._completed_steps or not hasattr(dialog, "set_data"):
@@ -664,9 +776,16 @@ class MeasurementPanel(QtWidgets.QWidget):
         self._refresh_measurement_plot()
 
     def _refresh_measurement_plot(self) -> None:
+        steps = list(self._plot_traces["step"])
+        if self._plot_fallback is not None:
+            self._plot_fallback.set_series(
+                steps,
+                list(self._plot_traces["moment"]),
+                list(self._plot_traces["dec"]),
+                list(self._plot_traces["inc"]),
+            )
         if not self._plot_curves:
             return
-        steps = list(self._plot_traces["step"])
         if not steps:
             for curve in self._plot_curves.values():
                 curve.setData([], [])
@@ -693,6 +812,8 @@ class MeasurementPanel(QtWidgets.QWidget):
             trace.clear()
         for curve in self._plot_curves.values():
             curve.setData([], [])
+        if self._plot_fallback is not None:
+            self._plot_fallback.clear()
 
     def _write_quicklook_sidecar(self) -> Path | None:
         if self._current_output_dir is None or not self._completed_steps:
