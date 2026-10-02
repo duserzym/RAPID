@@ -145,7 +145,6 @@ class TestMeasurementPanelHelpers(unittest.TestCase):
         self.assertEqual(payload["intensity"], [1.0])
         self.assertFalse(payload["provenance"]["simulated"])
         panel.deleteLater()
-        panel.deleteLater()
 
     def test_simulated_run_quicklook_is_marked_in_dialog_and_sidecar(self) -> None:
         panel = MeasurementPanel()
@@ -183,6 +182,57 @@ class TestMeasurementPanelHelpers(unittest.TestCase):
         finally:
             dialog.deleteLater()
             panel.deleteLater()
+
+    def test_quicklook_publish_reconciles_artifact_index(self) -> None:
+        panel = MeasurementPanel()
+        panel._completed_steps = [
+            MeasurementStep(
+                demag_label="NRM",
+                gdec=0.0,
+                ginc=0.0,
+                sdec=0.0,
+                sinc=0.0,
+                crdec=0.0,
+                crinc=0.0,
+                moment=1.0,
+                error_angle=0.0,
+                sdx=1.0,
+                sdy=0.0,
+                sdz=0.0,
+                timestamp=datetime(2026, 7, 15, 12, 0, 0),
+            )
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td)
+            panel._current_output_dir = output
+            (output / "artifact_index.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "rapidpy.measurement.artifact_index.v1",
+                        "artifacts": [
+                            {
+                                "name": "quicklook_summary",
+                                "relative_path": "quicklook.json",
+                                "exists": False,
+                                "size_bytes": 0,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            written = panel._write_quicklook_sidecar()
+            index = json.loads(
+                (output / "artifact_index.json").read_text(encoding="utf-8")
+            )
+
+        self.assertIsNotNone(written)
+        entry = index["artifacts"][0]
+        self.assertTrue(entry["exists"])
+        self.assertGreater(entry["size_bytes"], 0)
+        self.assertEqual(entry["relative_path"], "quicklook.json")
+        panel.deleteLater()
 
     def test_completed_cycle_populates_live_stats_grid(self) -> None:
         panel = MeasurementPanel()

@@ -2,6 +2,7 @@
 
 from collections import deque
 from datetime import datetime
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -858,7 +859,37 @@ class MeasurementPanel(QtWidgets.QWidget):
                 else "Measurement quicklook data."
             ),
         }
-        return write_quicklook_json(self._current_output_dir / "quicklook.json", summary)
+        written = write_quicklook_json(
+            self._current_output_dir / "quicklook.json",
+            summary,
+        )
+        self._refresh_quicklook_artifact_index(written)
+        return written
+
+    def _refresh_quicklook_artifact_index(self, quicklook_path: Path) -> None:
+        """Reconcile the worker index after the UI publishes its quicklook."""
+
+        index_path = quicklook_path.parent / "artifact_index.json"
+        if not index_path.exists():
+            return
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+        artifacts = payload.get("artifacts")
+        if not isinstance(artifacts, list):
+            raise ValueError("Artifact index does not contain an artifacts list.")
+        matching = [
+            entry
+            for entry in artifacts
+            if isinstance(entry, dict) and entry.get("name") == "quicklook_summary"
+        ]
+        if len(matching) != 1:
+            raise ValueError(
+                "Artifact index must contain exactly one quicklook_summary entry."
+            )
+        entry = matching[0]
+        entry["relative_path"] = quicklook_path.name
+        entry["exists"] = True
+        entry["size_bytes"] = quicklook_path.stat().st_size
+        write_quicklook_json(index_path, payload)
 
     @QtCore.Slot(bool)
     def _on_run_finished(self, aborted: bool) -> None:
