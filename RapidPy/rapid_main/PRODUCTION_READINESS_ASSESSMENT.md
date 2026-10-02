@@ -25,7 +25,7 @@ tests; none of it has been validated against the physical RAPID system.
 | Motion and interlock behavior | Verified in software only | **No** | Every motion is verified and a failure aborts the block |
 | Output parity against VB6 | Fixtures only | **No** | VB6 now compiles; side-by-side comparison still requires the no-communication smoke test and a physical reference run |
 
-Full suite: **447 tests passing** (`python -m unittest discover -s tests -p
+Full suite: **454 tests passing** (`python -m unittest discover -s tests -p
 'test_*.py'` from `RapidPy/rapid_main`), up from a 261-test baseline. The
 October 2 shell slice adds truthful Dashboard backend snapshots, responsive
 glass-card reflow, workflow/session menu wiring, shutdown ordering, atomic
@@ -38,6 +38,10 @@ The current distribution checkpoint also builds an installable
 `berkeley-rapidpy` wheel, excludes checkout bytecode, packages application
 icons, exposes seven console entry points, diagnoses dependencies/configuration
 headlessly, and constructs the main window from an isolated install target.
+The first reachable-dialog completion slice also moves Vacuum, IRM/ARM, and
+SQUID onto the shared glass/semantic-status contract, adds named accessibility
+metadata, verifies compact 360x520 geometry, and keeps unavailable hardware
+fail-closed rather than presenting it as ready.
 
 ### Behavior changes an operator will notice
 
@@ -67,6 +71,11 @@ headlessly, and constructs the main window from an isolated install target.
   visibly distinguishes live, disconnected, unavailable, faulted, and
   **SIMULATED** devices. It refreshes on demand, every ten seconds, and after a
   communication-mode change.
+- Vacuum, IRM/ARM, and SQUID diagnostics now use shared dialog surfaces and
+  textual `READY`, `SIMULATED`, `WARNING`, `ERROR`, and `UNAVAILABLE` state
+  prefixes rather than color-only communication. Unavailable IRM/ARM actuation
+  controls are disabled, and the Vacuum diagnostic remains open to explain an
+  unavailable backend instead of failing during construction.
 - Imported sequences remain the active executable/saveable document; writes
   are atomic, malformed files report actionable errors, unsaved edits prompt
   on replacement/exit, and the Hawaiian preset emits its documented AF25–AF800
@@ -166,10 +175,10 @@ Focused software acceptance completed with 121 passing tests across measurement 
 | Domain | Status | Evidence | Notes |
 |---|---|---|---|
 | AF workflows | **Integrated + explicit AF treatment contract** | `MainWindow._prepare_af_workflow`, `Queue options`, AF labels, `diagnostic_services.AfDemagBackend`, `plan_af_demag_command`, `QueueHardwareBackend.set_demag_step`, `tests/test_app_af_workflow.py`, `tests/test_diagnostic_services.py`, `tests/test_queue_and_bundle.py` | AF labels route through an AF demagnetizer planner/backend instead of the IRM path. Synthetic AF examples are unmistakably named, disabled and refused in hardware mode, and never auto-start live hardware. Live AF rig pass/fail, transport telemetry, and hardware fault evidence remain acceptance gates. |
-| SQUID communication/plots | **Partial (mixed HW + fallback + software readiness guard)** | `diagnostic_services.SquidBackendAdapter`, `diagnostic_services.SquidNoCommBackend`, `read_squid_snapshot`, `require_squid_ready`, `dialogs/squid_comm.py`, `measurement_worker.py`, `tests/test_diagnostic_services.py`, `tests/test_queue_orchestration.py` | SQUID live and treatment control can run with live transport when available; simulation fallback remains for no-comm/unavailable hardware. Hardware-mode queues now block or halt measurement transitions when SQUID communication is disconnected. Live serial timeout/retry validation remains open. |
+| SQUID communication/plots | **Partial (live + explicit no-comm + software readiness guard)** | `diagnostic_services.SquidBackendAdapter`, `diagnostic_services.SquidNoCommBackend`, `read_squid_snapshot`, `require_squid_ready`, `dialogs/squid_comm.py`, `measurement_worker.py`, `tests/test_diagnostic_services.py`, `tests/test_hardware_dialog_glass.py`, `tests/test_queue_orchestration.py` | SQUID live and treatment control can run with live transport when available; simulation is explicit no-communication mode only, while unavailable hardware mode is labelled and remains fail-closed. The dialog loads/saves the shared SQUID configuration and keeps compact settings scrollable. Hardware-mode queues block or halt measurement transitions when communication is disconnected. Live serial timeout/retry validation remains open. |
 | Magnetometer normalization (`modMagnetometer`) | **Integrated foundation** | `magnetometer.py`, `measurement_worker.py`, `tests/test_magnetometer.py`, `tests/test_measurement_worker.py` | Raw SQUID axis voltages can be background-corrected and converted to calibrated moment vectors with quality flags, and the measurement loop now accepts `MagnetometerReading` payloads while surfacing read-quality flags as operator warnings. Live SQUID adapter rollout plus timeout/retry evidence remains open. |
-| Vacuum | **Partial (sim + transport fallback + software fault guard)** | `diagnostic_services.VacuumBackendAdapter`, `VacuumNoCommBackend`, `dialogs/vacuum.py`, `tests/test_diagnostic_services.py`, `tests/test_queue_orchestration.py` | Real transport is used when `updown_control` dependency and port are available; otherwise pressure simulation is retained. Shared vacuum snapshots now report pressure, pump state, status, and high-pressure/readback faults, and queue automation blocks or halts through the existing safe-state path on vacuum faults. Live pressure fault-injection acceptance is still required. |
-| IRM/ARM calibration | **Partial** | `diagnostic_services.IrmArmBackendAdapter`, `IrmArmNoCommBackend`, `dialogs/irm_arm.py` | ADWIN-backed calibration path exists; fallback simulator remains if adapter unavailable. |
+| Vacuum | **Partial (live + explicit no-comm + software fault guard)** | `diagnostic_services.VacuumBackendAdapter`, `VacuumNoCommBackend`, `dialogs/vacuum.py`, `tests/test_diagnostic_services.py`, `tests/test_hardware_dialog_glass.py`, `tests/test_queue_orchestration.py` | Real transport is used when the dependency and port are available; simulation is explicit no-communication mode only. Shared snapshots report pressure, pump state, status, and high-pressure/readback faults. An unavailable backend opens as a labelled fail-closed diagnostic with pump control disabled, and queue automation blocks or halts through the safe-state path. Live pressure fault-injection acceptance is still required. |
+| IRM/ARM calibration | **Partial** | `diagnostic_services.IrmArmBackendAdapter`, `IrmArmNoCommBackend`, `dialogs/irm_arm.py`, `tests/test_hardware_dialog_glass.py` | ADWIN-backed calibration and explicit no-communication paths exist. The dialog labels simulation/unavailable state in words and disables field actuation when the live backend is unavailable. Live transport, interruption recovery, and physical execution acceptance remain open. |
 | DAC/MCC / AF ramping | **Partial** | `rapidpy_common/adwin_af.py`, `diagnostic_services.IrmArmBackendAdapter` | ADWIN ramp API is used when present. Full DAC coverage confidence still depends on lab hardware integration verification. |
 | DC motor control | **Integrated (live telemetry complete)** | `dialogs/dc_motors.py`, `diagnostic_services.DCMotorBackendAdapter`, `dc_motor_control/app.py` | Standalone dialog and standalone app include live command, output, velocity, and torque traces; torque extraction is alias-safe (`actual_torque`/`feedback_torque`/`torque`) and renders `% FS` on known scale. |
 | VRM logging | **Integrated via external launch + run manifest sidecar** | `MainWindow._launch_vrm`, `rapid_main/vrm.py`, `vrm_logger/main.py`, `vrm_logger/session_manifest.py`, `tests/test_app_bootstrap_window_contracts.py`, `tests/test_vrm_integration.py` | Functionality remains in the dedicated app module; rapid_main now writes a launch handoff manifest and passes it to `vrm_logger`, which writes a `.vrm.json` sidecar beside the selected CSV with session/output metadata. Live logged acquisition with physical run association remains an acceptance gate. |

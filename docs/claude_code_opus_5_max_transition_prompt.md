@@ -60,9 +60,10 @@ implementation baseline:
 - `4a271e7` — record calibration lifecycle readiness; and
 - `77f53c1` — package RapidPy for clean installation and startup diagnostics;
   and
-- `13bad6b` — record the isolated package verification evidence.
+- `13bad6b` — record the isolated package verification evidence; and
+- `dd2e057` — finish the first glass hardware-dialog and accessibility slice.
 
-The complete RapidPy suite now reports **447 passing tests** using
+The complete RapidPy suite now reports **454 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -77,9 +78,9 @@ shows a remaining gap.
 
 Work in this priority order:
 
-1. finish the reachable-dialog glass/accessibility audit described in the
-   immediate assignment below, starting with the live hardware-facing Vacuum,
-   IRM/ARM, and SQUID dialogs;
+1. continue the reachable-dialog glass/accessibility audit described in the
+   immediate assignment below. Vacuum, IRM/ARM, and SQUID are complete; proceed
+   through the remaining reachable dialogs without regressing their contracts;
 2. finish the remaining evidence-backed software parity rows, especially live
    thermal, AF, vacuum, IRM/ARM, susceptibility, VRM, rockmag, and transport
    robustness;
@@ -107,9 +108,12 @@ launch assumptions.
 
 The next concrete implementation pass is not another main-window redesign. It
 is a systematic audit and repair of every dialog reachable from `rapid_main`.
-Start with `dialogs/vacuum.py`, `dialogs/irm_arm.py`, and
-`dialogs/squid_comm.py`, then cover login, plots, debug console, step monitor,
-startup guide, about, sample selection, DC motors, webcam, and transition help.
+The first slice is complete in `dd2e057`: `dialogs/vacuum.py`,
+`dialogs/irm_arm.py`, and `dialogs/squid_comm.py` now use shared glass surfaces,
+semantic non-color-only states, accessible control metadata, compact form
+wrapping/scrolling, and explicit unavailable behavior. Continue with login,
+plots, debug console, step monitor, startup guide, about, sample selection, DC
+motors, webcam, and transition help.
 
 The first audit found numerous dialog-local `setStyleSheet(...)` calls, sparse
 accessible names/descriptions, status labels whose meaning is conveyed mainly
