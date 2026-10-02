@@ -20,7 +20,7 @@ TRANSITION_ENTRIES: tuple[TransitionEntry, ...] = (
     TransitionEntry("frmProgram / frmRockmagRoutine", "Create, import, and save treatment sequences", "Sequence", "sequence", "Software-ready; treatment hardware acceptance pending"),
     TransitionEntry("frmMeasure / frmStats / frmPlots", "Run measurements and review live statistics/plots", "Live Measurement", "measure", "Code-complete core; physical acceptance pending"),
     TransitionEntry("frmSettings* / frmOptions / frmINIConverter", "Configure ports, paths, timing, and import VB6 INI", "Settings", "settings", "Integrated with backup/restore"),
-    TransitionEntry("frm908AGaussmeter / calibration forms", "Record calibration evidence and plan thermal routines", "Calibration Center", "calibration", "Artifact foundation; lifecycle registry pending"),
+    TransitionEntry("frm908AGaussmeter / calibration forms", "Record calibration evidence and plan thermal routines", "Calibration Center", "calibration", "Approval/version/expiry/rollback integrated; hardware acceptance pending"),
     TransitionEntry("frmDCMotors", "Inspect and control changer/lift/turn motors", "Diagnostics → DC Motors", "dc_motors", "Integrated; live motion acceptance pending"),
     TransitionEntry("frmVacuum", "Read pressure and control the vacuum path", "Diagnostics → Vacuum", "vacuum", "Integrated; live fault acceptance pending"),
     TransitionEntry("frmSquid", "Inspect SQUID communication and readings", "Diagnostics → SQUID Comm", "squid", "Integrated; serial robustness acceptance pending"),

@@ -8,6 +8,7 @@ import unittest
 from PySide6 import QtWidgets
 
 from rapid_main.panels.calibration import CalibrationCenterPanel
+from rapid_main.calibration_registry import CalibrationRegistry
 
 
 class CalibrationCenterPanelTest(unittest.TestCase):
@@ -106,6 +107,40 @@ class CalibrationCenterPanelTest(unittest.TestCase):
             self.assertIn("artifact recorded", panel._status.text())
         finally:
             panel.deleteLater()
+
+    def test_passed_artifact_can_be_approved_and_invalidated_from_panel(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            registry = CalibrationRegistry(root / "registry")
+            panel = CalibrationCenterPanel(registry=registry)
+            try:
+                panel.set_procedure("gaussmeter_baseline")
+                panel.set_mode("manual")
+                panel._manual_value.setValue(1.0)
+                panel._expected.setValue(1.0)
+                panel._tolerance.setValue(0.02)
+                panel._baseline_operator.setText("operator-a")
+                panel._baseline_artifact_dir.setText(str(root / "artifacts"))
+                panel._run_manual()
+
+                self.assertTrue(panel._approve_artifact_btn.isEnabled())
+                panel._registry_valid_days.setValue(30)
+                panel._registry_reason.setText("Reference standard verified.")
+                panel._approve_last_artifact()
+
+                records = registry.records()
+                self.assertEqual(len(records), 1)
+                self.assertEqual(registry.state_for(records[0].record_id).status, "active")
+                self.assertEqual(panel._registry_table.rowCount(), 1)
+                self.assertIn("Approved and activated", panel._registry_status.text())
+
+                panel._registry_table.selectRow(0)
+                panel._registry_reason.setText("Post-check failed.")
+                panel._invalidate_selected_record()
+                self.assertEqual(registry.state_for(records[0].record_id).status, "invalidated")
+                self.assertIn("Invalidated", panel._registry_status.text())
+            finally:
+                panel.deleteLater()
 
 
 if __name__ == "__main__":

@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import time
 import math
-from typing import Optional, Callable, TypeVar
+from typing import Any, Mapping, Optional, Callable, Sequence, TypeVar
 
 from PySide6 import QtCore
 
@@ -138,6 +138,7 @@ class MeasurementWorker(QtCore.QThread):
         run_id: str = "",
         resume: bool = False,
         allow_simulated_production_output: bool = False,
+        calibration_records: Sequence[Mapping[str, Any]] | None = None,
         parent: Optional[QtCore.QObject] = None,
     ) -> None:
         super().__init__(parent)
@@ -150,6 +151,7 @@ class MeasurementWorker(QtCore.QThread):
         self._run_id = str(run_id)
         self._resume = bool(resume)
         self._allow_simulated_production_output = bool(allow_simulated_production_output)
+        self._calibration_records = [dict(record) for record in (calibration_records or ())]
         # A backend that declares itself simulated taints every artifact it
         # produces: the run is labelled and kept out of the production path.
         self._simulated = bool(getattr(self._backend, "simulated", False))
@@ -682,6 +684,12 @@ class MeasurementWorker(QtCore.QThread):
             "resumed": self._resume,
             "simulated": self._simulated,
             "software_version": software_version(),
+            "calibration_record_ids": [
+                str(record.get("record_id", ""))
+                for record in self._calibration_records
+                if record.get("record_id")
+            ],
+            "calibration_records": list(self._calibration_records),
         }
 
     def _run_provenance(self) -> dict[str, object]:
@@ -739,6 +747,11 @@ class MeasurementWorker(QtCore.QThread):
             "flux_recoveries": self._recovery_count,
             "skipped_duplicate_labels": list(self._skipped_labels),
             "holder_record_id": self._holder_record_id,
+            "calibration_record_ids": [
+                str(record.get("record_id", ""))
+                for record in self._calibration_records
+                if record.get("record_id")
+            ],
             "phase_count": len(self._phase_history),
             "final_phase": self._phase_history[-1]["phase"] if self._phase_history else "",
             "phases": list(self._phase_history),
@@ -805,6 +818,11 @@ class MeasurementWorker(QtCore.QThread):
                 SIMULATION_STATEMENT.strip() if self._simulated else ""
             ),
             "published_paths": dict(self._published_paths),
+            "calibration_record_ids": [
+                str(record.get("record_id", ""))
+                for record in self._calibration_records
+                if record.get("record_id")
+            ],
             "generated_at_iso": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
             "artifacts": [
                 entry(

@@ -159,12 +159,19 @@ class SimulationIsolationTests(unittest.TestCase):
         self.assertIn("SIMULATED RUN", (self.tmp / SIMULATION_MARKER_FILE).read_text(encoding="utf-8"))
 
     def test_worker_labels_a_simulated_run_everywhere(self) -> None:
+        calibration_ref = {
+            "record_id": "calibration-squid-v003-example",
+            "procedure_id": "calibration/squid",
+            "version": 3,
+            "artifact_sha256": "a" * 64,
+        }
         worker = MeasurementWorker(
             meta=_meta("SIM01"),
             labels=["NRM"],
             output_dir=self.tmp,
             backend=NoCommBackend(),
             operator="opr",
+            calibration_records=[calibration_ref],
         )
         warnings: list[str] = []
         worker.preflight_warning.connect(warnings.append)
@@ -176,8 +183,24 @@ class SimulationIsolationTests(unittest.TestCase):
         self.assertIn("SIMULATED RUN", summary["simulation_statement"])
         index = json.loads((self.tmp / "artifact_index.json").read_text(encoding="utf-8"))
         self.assertTrue(index["simulated"])
+        self.assertEqual(
+            index["calibration_record_ids"],
+            ["calibration-squid-v003-example"],
+        )
         self.assertTrue((self.tmp / SIMULATED_SUBDIR / "SIM01").exists())
         self.assertFalse((self.tmp / "SIM01").exists())
+        provenance = json.loads(
+            (self.tmp / SIMULATED_SUBDIR / "provenance.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            provenance["calibration_record_ids"],
+            ["calibration-squid-v003-example"],
+        )
+        self.assertEqual(provenance["calibration_records"], [calibration_ref])
+        self.assertEqual(
+            summary["calibration_record_ids"],
+            ["calibration-squid-v003-example"],
+        )
 
 
 class _RejectingBackend:

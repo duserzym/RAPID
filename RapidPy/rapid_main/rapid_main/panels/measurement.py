@@ -8,6 +8,7 @@ from typing import Optional
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from rapid_main.analysis import ReadingCycleStatistics, reading_cycle_statistics
+from rapid_main.calibration_registry import CalibrationRegistry, CalibrationRegistryError
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.specimen_metadata import resolve_specimen_meta
 from rapid_main.device_ownership import DeviceOwnershipError
@@ -556,6 +557,19 @@ class MeasurementPanel(QtWidgets.QWidget):
         run_output_dir = out / meta.name
         self._current_output_dir = run_output_dir
         run_id = f"{meta.name}-{datetime.now().strftime('%Y%m%dT%H%M%S')}"
+        try:
+            calibration_records = CalibrationRegistry.default().provenance_refs()
+        except CalibrationRegistryError as exc:
+            calibration_records = []
+            self._on_preflight_warning(
+                f"Calibration registry could not be verified: {exc}. "
+                "The measurement bundle will contain no approved calibration record IDs."
+            )
+        if not calibration_records:
+            self._on_preflight_warning(
+                "No active, unexpired calibration records are registered. The measurement "
+                "bundle will preserve this as an empty calibration-record list."
+            )
 
         self._worker = MeasurementWorker(
             meta=meta,
@@ -568,6 +582,7 @@ class MeasurementPanel(QtWidgets.QWidget):
                 int(getattr(getattr(cfg, "squid", None), "samples_per_pos", 1)),
             ),
             run_id=run_id,
+            calibration_records=calibration_records,
             parent=self,
         )
         self._worker.step_started.connect(self._on_step_started)

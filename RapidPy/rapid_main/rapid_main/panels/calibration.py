@@ -16,6 +16,10 @@ from rapid_main.calibration import (
     write_calibration_result_artifact,
     write_irm_voltage_calibration_artifact,
 )
+from rapid_main.calibration_registry import (
+    CalibrationRegistry,
+    CalibrationRegistryError,
+)
 from rapid_main.hardware_contracts import MeasurementBackend
 from rapid_main.thermal import (
     ThermalSafetyLimits,
@@ -55,14 +59,24 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         parent: QtWidgets.QWidget | None = None,
         *,
         backend_provider: Callable[[], MeasurementBackend] | None = None,
+        registry: CalibrationRegistry | None = None,
     ) -> None:
         super().__init__(parent)
         self._backend_provider = backend_provider
+        self._registry = registry or CalibrationRegistry.default()
+        self._last_calibration_artifact: Path | None = None
         self._history: deque[str] = deque(maxlen=8)
         self._build_ui()
 
     def _build_ui(self) -> None:
-        root = QtWidgets.QVBoxLayout(self)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setObjectName("calibrationScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        body = QtWidgets.QWidget()
+        root = QtWidgets.QVBoxLayout(body)
         root.setContentsMargins(16, 12, 16, 16)
         root.setSpacing(10)
 
@@ -76,6 +90,7 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         fl.setContentsMargins(16, 12, 16, 12)
         fl.setSpacing(10)
         fl.setLabelAlignment(QtCore.Qt.AlignRight)
+        fl.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
 
         self._procedure = QtWidgets.QComboBox()
         self._procedure.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
@@ -132,6 +147,7 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         irm_form.setContentsMargins(12, 10, 12, 10)
         irm_form.setSpacing(8)
         irm_form.setLabelAlignment(QtCore.Qt.AlignRight)
+        irm_form.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
         self._irm_field_1 = self._spin(0.0, 5000.0, 0.0, " mT")
         self._irm_voltage_1 = self._spin(0.0, 10.0, 0.0, " V")
         self._irm_field_2 = self._spin(0.0, 5000.0, 1000.0, " mT")
@@ -162,6 +178,7 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         thermal_form.setContentsMargins(12, 10, 12, 10)
         thermal_form.setSpacing(8)
         thermal_form.setLabelAlignment(QtCore.Qt.AlignRight)
+        thermal_form.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
         self._thermal_name = QtWidgets.QLineEdit("Thermal routine")
         self._thermal_targets = QtWidgets.QLineEdit("100, 150, 200")
         self._thermal_prefix = QtWidgets.QComboBox()
@@ -206,7 +223,6 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         fl.addRow("", button_row)
 
         self._status = QtWidgets.QLabel("Ready")
-        self._status.setStyleSheet("color: #475569;")
         fl.addRow("Status:", self._status)
         root.addWidget(card)
 
@@ -215,6 +231,8 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         self._result.setMinimumHeight(180)
         self._result.setPlaceholderText("Run a calibration to see a result...")
         root.addWidget(self._result)
+
+        self._build_registry_ui(root)
 
         history_label = QtWidgets.QLabel("Recent results")
         history_label.setObjectName("sectionHdr")
@@ -227,7 +245,73 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         root.addWidget(self._history_view)
 
         root.addStretch()
+        scroll.setWidget(body)
+        outer.addWidget(scroll)
         self._on_procedure_changed()
+        self._refresh_registry()
+
+    def _build_registry_ui(self, root: QtWidgets.QVBoxLayout) -> None:
+        lifecycle = QtWidgets.QGroupBox("Approval, validity, and rollback")
+        layout = QtWidgets.QVBoxLayout(lifecycle)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(8)
+
+        fields = QtWidgets.QFormLayout()
+        fields.setLabelAlignment(QtCore.Qt.AlignRight)
+        fields.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
+        self._registry_operator = QtWidgets.QLineEdit()
+        self._registry_operator.setPlaceholderText("Required for every lifecycle event")
+        self._registry_valid_days = QtWidgets.QSpinBox()
+        self._registry_valid_days.setRange(0, 3650)
+        self._registry_valid_days.setValue(365)
+        self._registry_valid_days.setSpecialValueText("No expiry")
+        self._registry_reason = QtWidgets.QLineEdit()
+        self._registry_reason.setPlaceholderText("Approval note or required change reason")
+        fields.addRow("Operator / approver:", self._registry_operator)
+        fields.addRow("Validity:", self._registry_valid_days)
+        fields.addRow("Reason / notes:", self._registry_reason)
+        layout.addLayout(fields)
+
+        actions = QtWidgets.QVBoxLayout()
+        self._approve_artifact_btn = QtWidgets.QPushButton("Approve Last Artifact")
+        self._approve_artifact_btn.setEnabled(False)
+        self._approve_artifact_btn.clicked.connect(self._approve_last_artifact)
+        self._activate_record_btn = QtWidgets.QPushButton("Activate Selected / Roll Back")
+        self._activate_record_btn.clicked.connect(self._activate_selected_record)
+        self._invalidate_record_btn = QtWidgets.QPushButton("Invalidate Selected")
+        self._invalidate_record_btn.setProperty("danger", True)
+        self._invalidate_record_btn.clicked.connect(self._invalidate_selected_record)
+        actions.addWidget(self._approve_artifact_btn)
+        actions.addWidget(self._activate_record_btn)
+        actions.addWidget(self._invalidate_record_btn)
+        layout.addLayout(actions)
+
+        self._registry_table = QtWidgets.QTableWidget(0, 7)
+        self._registry_table.setHorizontalHeaderLabels(
+            ["Current", "Procedure", "Version", "Status", "Approved", "Expires", "Record ID"]
+        )
+        self._registry_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self._registry_table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self._registry_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self._registry_table.verticalHeader().setVisible(False)
+        self._registry_table.setMinimumWidth(0)
+        self._registry_table.setSizePolicy(
+            QtWidgets.QSizePolicy.Ignored,
+            QtWidgets.QSizePolicy.Preferred,
+        )
+        header = self._registry_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        for column in range(6):
+            header.setSectionResizeMode(column, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(6, QtWidgets.QHeaderView.Stretch)
+        self._registry_table.setMinimumHeight(170)
+        self._registry_table.itemSelectionChanged.connect(self._sync_registry_actions)
+        layout.addWidget(self._registry_table)
+
+        self._registry_status = QtWidgets.QLabel("No approved calibration records.")
+        self._registry_status.setWordWrap(True)
+        layout.addWidget(self._registry_status)
+        root.addWidget(lifecycle)
 
     @staticmethod
     def _spin(
@@ -318,6 +402,122 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
                 self._mode.setCurrentIndex(idx)
                 return
 
+    def _set_last_calibration_artifact(
+        self,
+        path: Path | None,
+        *,
+        suggested_operator: str = "",
+    ) -> None:
+        self._last_calibration_artifact = path
+        self._approve_artifact_btn.setEnabled(path is not None)
+        if suggested_operator.strip() and not self._registry_operator.text().strip():
+            self._registry_operator.setText(suggested_operator.strip())
+
+    def _selected_record_id(self) -> str:
+        row = self._registry_table.currentRow()
+        if row < 0:
+            return ""
+        item = self._registry_table.item(row, 0)
+        return str(item.data(QtCore.Qt.UserRole)) if item is not None else ""
+
+    def _sync_registry_actions(self) -> None:
+        selected = bool(self._selected_record_id())
+        self._activate_record_btn.setEnabled(selected)
+        self._invalidate_record_btn.setEnabled(selected)
+
+    def _refresh_registry(self) -> None:
+        try:
+            states = self._registry.states()
+        except CalibrationRegistryError as exc:
+            self._registry_table.setRowCount(0)
+            self._registry_status.setText(f"Registry error: {exc}")
+            self._sync_registry_actions()
+            return
+        self._registry_table.setRowCount(len(states))
+        for row, state in enumerate(states):
+            record = state.record
+            values = (
+                "ACTIVE" if state.active else "",
+                record.procedure_name,
+                str(record.version),
+                state.status.upper(),
+                f"{record.approved_at_iso} · {record.approved_by}",
+                record.expires_at_iso or "No expiry",
+                record.record_id,
+            )
+            for column, value in enumerate(values):
+                item = QtWidgets.QTableWidgetItem(value)
+                item.setData(QtCore.Qt.UserRole, record.record_id)
+                self._registry_table.setItem(row, column, item)
+        active_count = sum(1 for state in states if state.active)
+        self._registry_status.setText(
+            f"{len(states)} approved record(s); {active_count} active and eligible "
+            "for measurement provenance. Records and events are append-only."
+            if states
+            else "No approved calibration records. Measurement bundles will report an empty registry."
+        )
+        self._sync_registry_actions()
+
+    def _approve_last_artifact(self) -> None:
+        if self._last_calibration_artifact is None:
+            self._registry_status.setText("Run and pass a calibration before approval.")
+            return
+        valid_days = self._registry_valid_days.value() or None
+        try:
+            record = self._registry.approve(
+                self._last_calibration_artifact,
+                approved_by=self._registry_operator.text(),
+                valid_days=valid_days,
+                notes=self._registry_reason.text(),
+            )
+        except CalibrationRegistryError as exc:
+            self._registry_status.setText(f"Approval failed: {exc}")
+            return
+        self._set_last_calibration_artifact(None)
+        self._refresh_registry()
+        self._registry_status.setText(
+            f"Approved and activated {record.record_id}. The artifact snapshot and "
+            "lifecycle events are immutable."
+        )
+
+    def _activate_selected_record(self) -> None:
+        record_id = self._selected_record_id()
+        if not record_id:
+            self._registry_status.setText("Select a calibration record to activate.")
+            return
+        try:
+            record = self._registry.activate(
+                record_id,
+                operator=self._registry_operator.text(),
+                reason=self._registry_reason.text(),
+            )
+        except CalibrationRegistryError as exc:
+            self._registry_status.setText(f"Activation failed: {exc}")
+            return
+        self._refresh_registry()
+        self._registry_status.setText(
+            f"Activated {record.record_id}. This rollback added an event; no history was overwritten."
+        )
+
+    def _invalidate_selected_record(self) -> None:
+        record_id = self._selected_record_id()
+        if not record_id:
+            self._registry_status.setText("Select a calibration record to invalidate.")
+            return
+        try:
+            record = self._registry.invalidate(
+                record_id,
+                operator=self._registry_operator.text(),
+                reason=self._registry_reason.text(),
+            )
+        except CalibrationRegistryError as exc:
+            self._registry_status.setText(f"Invalidation failed: {exc}")
+            return
+        self._refresh_registry()
+        self._registry_status.setText(
+            f"Invalidated {record.record_id}. It will not appear in new measurement provenance."
+        )
+
     def _run_automated(self) -> None:
         if self._backend_provider is None:
             self._status.setText("No backend available for automated calibration.")
@@ -380,6 +580,11 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
             self._status.setText(f"IRM voltage calibration failed: {exc}")
             return
 
+        self._set_last_calibration_artifact(
+            written,
+            suggested_operator=self._irm_operator.text(),
+        )
+
         text = (
             "IRM Voltage Calibration [RECORDED]\n"
             f"Slope: {fit.slope_v_per_mT:.9g} V/mT\n"
@@ -410,6 +615,7 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         return values
 
     def _run_thermal_routine(self) -> None:
+        self._set_last_calibration_artifact(None)
         try:
             limits = ThermalSafetyLimits(
                 max_temperature_c=self._thermal_max_temp.value(),
@@ -479,8 +685,13 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
             )
             artifact_line = f"\nArtifact: {written}"
             artifact_written = True
+            self._set_last_calibration_artifact(
+                written if result.passed else None,
+                suggested_operator=self._baseline_operator.text(),
+            )
         except Exception as exc:
             artifact_line = f"\nArtifact write failed: {exc}"
+            self._set_last_calibration_artifact(None)
         self._status.setText(
             f"{result.procedure_name} {result.status}: "
             f"{'accepted' if result.passed else 'rejected'}; "
