@@ -228,7 +228,11 @@ class VacuumDialog(QtWidgets.QDialog):
         )
         self._set_pump_state(snapshot.pump_on)
         if snapshot.pressure_mtorr is None:
-            self._set_status(snapshot.fault_reason or "Pressure reading unavailable", "error")
+            self._pressure_lbl.setText("—")
+            self._set_status(
+                snapshot.fault_reason or snapshot.status or "Pressure reading unavailable",
+                "error" if snapshot.fault else "warning",
+            )
             return
 
         self.set_pressure(snapshot.pressure_mtorr)

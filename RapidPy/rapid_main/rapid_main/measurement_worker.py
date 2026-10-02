@@ -44,7 +44,7 @@ from typing import Any, Mapping, Optional, Callable, Sequence, TypeVar
 from PySide6 import QtCore
 
 from rapid_main.analysis import ReadingCycleStatistics, reading_cycle_statistics
-from rapid_main.communication_log import CommunicationLogger
+from rapid_main.communication_log import CommunicationEvent, CommunicationLogger
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
 from rapid_main.geometry import Cartesian3D, cartesian3d_to_angular3d
@@ -140,6 +140,7 @@ class MeasurementWorker(QtCore.QThread):
         resume: bool = False,
         allow_simulated_production_output: bool = False,
         calibration_records: Sequence[Mapping[str, Any]] | None = None,
+        communication_sources: Sequence[object] | None = None,
         parent: Optional[QtCore.QObject] = None,
     ) -> None:
         super().__init__(parent)
@@ -147,6 +148,11 @@ class MeasurementWorker(QtCore.QThread):
         self._labels = list(labels)
         self._output_dir = Path(output_dir)
         self._backend = backend or NoCommBackend()
+        sources: list[object] = [self._backend]
+        for source in tuple(communication_sources or ()):
+            if source is not None and all(source is not item for item in sources):
+                sources.append(source)
+        self._communication_sources = tuple(sources)
         self._operator = operator
         self._samples_per_position = max(1, int(samples_per_position))
         self._run_id = str(run_id)
@@ -176,7 +182,10 @@ class MeasurementWorker(QtCore.QThread):
         self._timeout_epsilon = 0.05
         self._state = WorkflowStateMachine()
         self._comm_logger: CommunicationLogger | None = None
-        self._backend_comm_event_count = 0
+        self._communication_event_counts = {
+            id(source): len(self._communication_events(source))
+            for source in self._communication_sources
+        }
         self._transport_recovery_start_count = len(
             self._backend_transport_recovery_records()
         )
@@ -840,17 +849,29 @@ class MeasurementWorker(QtCore.QThread):
         if self._comm_logger is None:
             return
         try:
-            provider = getattr(self._backend, "communication_events", None)
-            if callable(provider):
-                backend_events = tuple(provider())
-                if len(backend_events) >= self._backend_comm_event_count:
-                    self._comm_logger.transcript.extend(
-                        backend_events[self._backend_comm_event_count :]
-                    )
-                    self._backend_comm_event_count = len(backend_events)
+            for source in self._communication_sources:
+                if bool(getattr(source, "simulated", False)):
+                    continue
+                events = self._communication_events(source)
+                previous = self._communication_event_counts.get(id(source), 0)
+                if len(events) >= previous:
+                    self._comm_logger.transcript.extend(events[previous:])
+                    self._communication_event_counts[id(source)] = len(events)
             self._comm_logger.write_text(self._publish_dir / "communication.tsv")
         except Exception as exc:
             self.error_occurred.emit(f"Failed to write communication transcript: {exc}")
+
+    @staticmethod
+    def _communication_events(source: object) -> tuple[CommunicationEvent, ...]:
+        provider = getattr(source, "communication_events", None)
+        if not callable(provider):
+            return ()
+        try:
+            return tuple(
+                event for event in provider() if isinstance(event, CommunicationEvent)
+            )
+        except Exception:
+            return ()
 
     def _finish_run(self, *, aborted: bool) -> None:
         self._write_workflow_summary(aborted=aborted)

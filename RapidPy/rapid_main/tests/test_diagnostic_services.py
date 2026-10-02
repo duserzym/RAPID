@@ -13,6 +13,7 @@ from rapid_main.diagnostic_services import (
     build_dcmotor_backend,
     collect_diagnostic_status,
     VacuumNoCommBackend,
+    VacuumBackendAdapter,
     IrmArmNoCommBackend,
     SquidNoCommBackend,
     read_vacuum_snapshot,
@@ -31,6 +32,109 @@ from rapid_main.diagnostic_services import (
 
 
 class TestDiagnosticServices(unittest.TestCase):
+    def test_disconnected_vacuum_snapshot_fails_without_reading_fake_pressure(self) -> None:
+        class _Disconnected:
+            simulated = False
+
+            def is_connected(self) -> bool:
+                return False
+
+            def is_pump_on(self) -> bool:
+                return False
+
+            def status(self) -> str:
+                return "serial unavailable"
+
+            def read_pressure(self) -> float:
+                raise AssertionError("disconnected backend must not be sampled")
+
+        snapshot = read_vacuum_snapshot(_Disconnected(), warn_threshold=20.0)
+
+        self.assertTrue(snapshot.fault)
+        self.assertIsNone(snapshot.pressure_mtorr)
+        self.assertIn("not connected", snapshot.fault_reason.lower())
+
+    def test_command_only_vacuum_requires_explicit_threshold_opt_out(self) -> None:
+        class _CommandOnly:
+            simulated = False
+            pressure_telemetry_available = False
+
+            def is_connected(self) -> bool:
+                return True
+
+            def is_pump_on(self) -> bool:
+                return True
+
+            def status(self) -> str:
+                return "legacy controller connected"
+
+            def read_pressure(self) -> float:
+                raise AssertionError("command-only controller has no pressure value")
+
+        blocked = read_vacuum_snapshot(_CommandOnly(), warn_threshold=20.0)
+        accepted = read_vacuum_snapshot(_CommandOnly(), warn_threshold=0.0)
+
+        self.assertTrue(blocked.fault)
+        self.assertIn("no pressure telemetry", blocked.fault_reason)
+        self.assertFalse(accepted.fault)
+        self.assertIsNone(accepted.pressure_mtorr)
+        self.assertIn("command-only mode explicitly enabled", accepted.status)
+
+    def test_live_vacuum_adapter_is_acknowledged_and_never_models_pressure(self) -> None:
+        class _Controller:
+            def __init__(self, *, trace=None) -> None:
+                self._trace = trace
+                self.is_connected = False
+                self.is_enabled = False
+
+            def connect(self, port: str, baudrate: int) -> None:
+                self.is_connected = bool(port and baudrate)
+
+            def set_enabled(self, enabled: bool) -> None:
+                commands = ("E", "10MFF", "O", "10VFF") if enabled else (
+                    "C", "10V00", "D", "10M00"
+                )
+                for command in commands:
+                    self._trace("TX", command, "vacuum command")
+                self._trace("RX", "ACK", "vacuum response")
+                self.is_enabled = bool(enabled)
+
+        with mock.patch.object(diagnostic_services, "VacuumController", _Controller):
+            backend = VacuumBackendAdapter(VacuumConfig(port="COM8", baud=9600))
+
+        backend.set_pump(True)
+        events = backend.communication_events()
+
+        self.assertTrue(backend.is_connected())
+        self.assertTrue(backend.is_pump_on())
+        self.assertEqual(
+            [(event.direction.value, event.payload) for event in events],
+            [
+                ("TX", "E"),
+                ("TX", "10MFF"),
+                ("TX", "O"),
+                ("TX", "10VFF"),
+                ("RX", "ACK"),
+            ],
+        )
+        with self.assertRaisesRegex(HardwareUnavailableError, "no pressure telemetry"):
+            backend.read_pressure()
+
+    def test_live_vacuum_adapter_connection_failure_does_not_become_simulation(self) -> None:
+        class _BrokenController:
+            def __init__(self, *, trace=None) -> None:
+                del trace
+
+            def connect(self, port: str, baudrate: int) -> None:
+                raise OSError(f"{port}:{baudrate} refused")
+
+        with mock.patch.object(diagnostic_services, "VacuumController", _BrokenController):
+            with self.assertRaisesRegex(HardwareUnavailableError, "COM9:9600 refused"):
+                build_vacuum_backend(
+                    VacuumConfig(port="COM9", baud=9600),
+                    nocomm=False,
+                )
+
     def test_af_demag_command_planning_and_no_comm_recording(self) -> None:
         cfg = AfDemagConfig(peak=200.0, ramp_speed="Slow (3 Hz)", settle=2.5, tumble=True)
         command = plan_af_demag_command("AF50", cfg)

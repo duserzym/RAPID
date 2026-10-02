@@ -594,6 +594,7 @@ class MeasurementPanel(QtWidgets.QWidget):
             ),
             run_id=run_id,
             calibration_records=calibration_records,
+            communication_sources=(getattr(mw, "_vacuum_backend", None),),
             parent=self,
         )
         self._worker.step_started.connect(self._on_step_started)

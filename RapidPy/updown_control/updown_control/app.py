@@ -9,6 +9,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Callable
 
 import serial
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -1101,11 +1102,30 @@ class SquidMomentReader:
         return x_emu, y_emu, z_emu, _moment_magnitude(x_emu, y_emu, z_emu)
 
 
+class VacuumCommunicationError(RuntimeError):
+    """Raised when the legacy vacuum serial controller does not acknowledge."""
+
+
 class VacuumController:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        trace: Callable[[str, str, str], None] | None = None,
+    ) -> None:
         self._serial: serial.Serial | None = None
         self._valve_connected = False
         self._motor_powered = False
+        self._trace = trace
+        self._last_command = ""
+
+    def _emit_trace(self, direction: str, payload: str = "", detail: str = "") -> None:
+        if self._trace is None:
+            return
+        try:
+            self._trace(str(direction), str(payload), str(detail))
+        except Exception:
+            # Evidence collection must never change the hardware command path.
+            return
 
     @property
     def is_connected(self) -> bool:
@@ -1148,33 +1168,54 @@ class VacuumController:
 
     def _send_command(self, command: str) -> None:
         port = self._require_serial()
-        port.rts = True
-        port.reset_input_buffer()
-        port.reset_output_buffer()
-        port.write(b"\r")
-        port.flush()
-        time.sleep(0.10)
-        port.write(command.encode("ascii", errors="ignore"))
-        port.flush()
-        time.sleep(0.10)
-        port.write(b"\r")
-        port.flush()
-        time.sleep(0.10)
+        try:
+            port.rts = True
+            port.reset_input_buffer()
+            port.reset_output_buffer()
+            port.write(b"\r")
+            port.flush()
+            time.sleep(0.10)
+            port.write(command.encode("ascii", errors="ignore"))
+            port.flush()
+            time.sleep(0.10)
+            port.write(b"\r")
+            port.flush()
+            time.sleep(0.10)
+        except Exception as exc:
+            self._emit_trace("ERROR", command, f"vacuum write failed: {exc}")
+            raise
+        self._last_command = str(command)
+        self._emit_trace("TX", command, "vacuum command")
 
     def _read_response(self, timeout_s: float = 0.35) -> str:
         port = self._require_serial()
         deadline = time.monotonic() + timeout_s
         chunks = bytearray()
+        terminated = False
         while time.monotonic() < deadline:
             byte = port.read(1)
             if not byte:
                 continue
             if byte == b"\r":
                 if chunks:
+                    terminated = True
                     break
                 continue
             chunks.extend(byte)
-        return chunks.decode("ascii", errors="ignore").strip()
+        response = chunks.decode("ascii", errors="ignore").strip()
+        if not terminated or not response:
+            detail = f"partial reply {response!r}" if response else "no reply"
+            error = VacuumCommunicationError(
+                f"Timed out waiting for a terminated vacuum response ({detail})."
+            )
+            self._emit_trace(
+                "ERROR", response, f"response to {self._last_command or 'unknown'}: {error}"
+            )
+            raise error
+        self._emit_trace(
+            "RX", response, f"vacuum response to {self._last_command or 'unknown'}"
+        )
+        return response
 
     def reset(self) -> None:
         self._send_command("10R00")

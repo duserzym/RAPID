@@ -23,6 +23,7 @@ from rapidpy_common.hardware import (
     convert_position_to_hole,
 )
 from rapid_main.config import AfDemagConfig, IrmArmConfig, SquidConfig, VacuumConfig
+from rapid_main.communication_log import CommunicationEvent, CommunicationLogger
 from rapid_main.dac import DacChannelConfig, DacCommandPlanner, DacVoltageCommand
 
 try:
@@ -370,6 +371,52 @@ def read_vacuum_snapshot(
     except Exception as exc:
         status = f"{status}; backend status unavailable: {exc}".strip("; ")
 
+    if not connected:
+        return VacuumSnapshot(
+            pressure_mtorr=None,
+            pump_on=pump_on,
+            connected=False,
+            status=status or "Vacuum backend is disconnected",
+            fault=True,
+            fault_reason="Vacuum controller is not connected.",
+        )
+
+    threshold = max(0.0, float(warn_threshold))
+    pressure_telemetry_available = bool(
+        getattr(backend, "pressure_telemetry_available", True)
+    )
+    if not pressure_telemetry_available:
+        if not pump_on:
+            return VacuumSnapshot(
+                pressure_mtorr=None,
+                pump_on=False,
+                connected=True,
+                status=status or "Vacuum pump is off",
+                fault=True,
+                fault_reason="Vacuum pump is off and pressure telemetry is unavailable.",
+            )
+        if threshold > 0.0:
+            return VacuumSnapshot(
+                pressure_mtorr=None,
+                pump_on=True,
+                connected=True,
+                status=status or "Command-only vacuum controller",
+                fault=True,
+                fault_reason=(
+                    "The connected legacy vacuum controller has no pressure telemetry. "
+                    "Configure a live pressure adapter, or explicitly set the warning "
+                    "threshold to 0 mTorr for accepted command-only operation."
+                ),
+            )
+        return VacuumSnapshot(
+            pressure_mtorr=None,
+            pump_on=True,
+            connected=True,
+            status=(status + "; command-only mode explicitly enabled").strip("; "),
+            fault=False,
+            fault_reason="",
+        )
+
     try:
         pressure = float(backend.read_pressure())
     except Exception as exc:
@@ -382,7 +429,6 @@ def read_vacuum_snapshot(
             fault_reason=f"Vacuum pressure read failed: {exc}",
         )
 
-    threshold = max(0.0, float(warn_threshold))
     if threshold > 0.0 and pressure > threshold:
         return VacuumSnapshot(
             pressure_mtorr=pressure,
@@ -1384,69 +1430,73 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
     def __init__(self, cfg: VacuumConfig | None = None) -> None:
         super().__init__(simulated=False)
         self._cfg = cfg or VacuumConfig()
-        self._state = _VacuumPhysicsState(
-            pump_on=bool(self._cfg.auto_pump),
-            pressure_mtorr=self._cfg.target_pressure if self._cfg.target_pressure > 0 else 5.0,
-            ambient_pressure_mtorr=max(self._cfg.warn_threshold, 20.0),
-            last_update=time.monotonic(),
+        self.pressure_telemetry_available = False
+        self._communication_logger = CommunicationLogger(
+            "VACUUM", port=str(self._cfg.port)
         )
         self._pump_only_controller: VacuumController | None
         self._pump_only_controller = None
         self._status = "Vacuum transport not connected"
-        if VacuumController is not None and self._cfg.port:
-            self._connect_if_possible()
-
-    def _connect_if_possible(self) -> None:
         if VacuumController is None:
-            return
-        controller = VacuumController()
-        try:
-            controller.connect(self._cfg.port, baudrate=int(self._cfg.baud or 9600))
-            self._pump_only_controller = controller
-            self._status = f"Connected to vacuum serial ({self._cfg.port}:{self._cfg.baud})"
-        except Exception:
-            self._pump_only_controller = None
-            self._status = (
-                f"Vacuum transport not connected on {self._cfg.port}:{self._cfg.baud}; "
-                f"using pressure simulation."
+            raise HardwareUnavailableError("Vacuum controller dependency is unavailable.")
+        if not str(self._cfg.port).strip():
+            raise HardwareUnavailableError("Vacuum serial port is not configured.")
+        self._connect()
+        if bool(self._cfg.auto_pump):
+            self.set_pump(True)
+
+    def _trace(self, direction: str, payload: str, detail: str) -> None:
+        if direction == "TX":
+            self._communication_logger.sent(payload, detail=detail)
+        elif direction == "RX":
+            self._communication_logger.received(payload, detail=detail)
+        elif direction == "ERROR":
+            self._communication_logger.error(detail, payload=payload)
+        else:
+            self._communication_logger.info(detail or payload)
+
+    def _connect(self) -> None:
+        controller = VacuumController(trace=self._trace)
+        controller.connect(self._cfg.port, baudrate=int(self._cfg.baud or 9600))
+        if not controller.is_connected:
+            raise HardwareUnavailableError(
+                f"Vacuum controller did not connect on {self._cfg.port}:{self._cfg.baud}."
             )
+        self._pump_only_controller = controller
+        self._status = f"Connected to vacuum serial ({self._cfg.port}:{self._cfg.baud})"
+
+    def communication_events(self) -> tuple[CommunicationEvent, ...]:
+        return tuple(self._communication_logger.transcript.events)
+
+    def _require_controller(self) -> VacuumController:
+        controller = self._pump_only_controller
+        if controller is None or not controller.is_connected:
+            raise HardwareUnavailableError("Vacuum controller is not connected.")
+        return controller
 
     def is_connected(self) -> bool:
         return bool(self._pump_only_controller and self._pump_only_controller.is_connected)
 
     def status(self) -> str:
-        return (
-            "No-comm vacuum fallback"
-            if self._pump_only_controller is None
-            else self._status
-        )
+        return self._status
 
     def set_pump(self, on: bool) -> None:
-        self._state.pump_on = bool(on)
-        if self._pump_only_controller is not None:
-            self._pump_only_controller.set_enabled(on)
+        controller = self._require_controller()
+        controller.set_enabled(on)
+        if bool(controller.is_enabled) != bool(on):
+            raise HardwareError(
+                f"Vacuum controller did not confirm pump {'on' if on else 'off'} state."
+            )
 
     def is_pump_on(self) -> bool:
-        if self._pump_only_controller is not None:
-            return self._pump_only_controller.is_enabled
-        return self._state.pump_on
+        return bool(self._require_controller().is_enabled)
 
     def read_pressure(self) -> float:
-        now = time.monotonic()
-        elapsed = max(0.0, now - self._state.last_update)
-        self._state.last_update = now
-
-        target = self._cfg.target_pressure if self._state.pump_on else self._state.ambient_pressure_mtorr
-        if not self._simulated:
-            # Keep deterministic but deterministic when transport lacks pressure telemetry.
-            target = float(target)
-        delta = target - self._state.pressure_mtorr
-        if abs(delta) > 0.0001:
-            tau = max(self._cfg.poll_interval, 1.0)
-            blend = min(1.0, elapsed / (tau * 1.5))
-            self._state.pressure_mtorr += delta * blend
-        self._state.pressure_mtorr = max(0.001, self._state.pressure_mtorr)
-        return float(self._state.pressure_mtorr)
+        self._require_controller()
+        raise HardwareUnavailableError(
+            "The legacy vacuum serial controller provides motor/valve acknowledgements "
+            "but no pressure telemetry."
+        )
 
 
 def build_vacuum_backend(

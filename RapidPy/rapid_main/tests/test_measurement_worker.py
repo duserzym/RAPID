@@ -598,7 +598,10 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
         class TranscriptBackend(DeterministicBackend):
             def __init__(self) -> None:
                 super().__init__([("NRM", 1.0, 2.0, 3.0)])
-                self._events = (
+                self._events: list[CommunicationEvent] = []
+
+            def read_squid(self):
+                self._events.extend((
                     CommunicationEvent(
                         timestamp=datetime(2026, 10, 2, tzinfo=timezone.utc),
                         channel="SQUID-2G",
@@ -615,12 +618,23 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
                         payload="12",
                         detail="counter axis=X latch_id=A-000001",
                     ),
-                )
+                ))
+                return super().read_squid()
 
             def communication_events(self):
-                return self._events
+                return tuple(self._events)
+
+        class VacuumSource:
+            simulated = False
+
+            def __init__(self) -> None:
+                self.events: list[CommunicationEvent] = []
+
+            def communication_events(self):
+                return tuple(self.events)
 
         backend = TranscriptBackend()
+        vacuum = VacuumSource()
 
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "out"
@@ -629,7 +643,26 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
                 labels=["NRM"],
                 output_dir=out / "TRANSCRIPT",
                 backend=backend,
+                communication_sources=(vacuum,),
             )
+            vacuum.events.extend((
+                CommunicationEvent(
+                    timestamp=datetime(2026, 10, 2, tzinfo=timezone.utc),
+                    channel="VACUUM",
+                    direction=CommunicationDirection.TX,
+                    port="COM8",
+                    payload="10MFF",
+                    detail="vacuum command",
+                ),
+                CommunicationEvent(
+                    timestamp=datetime(2026, 10, 2, tzinfo=timezone.utc),
+                    channel="VACUUM",
+                    direction=CommunicationDirection.RX,
+                    port="COM8",
+                    payload="MOTOR-ON",
+                    detail="vacuum response",
+                ),
+            ))
             worker.run()
             worker._write_communication_transcript()
 
@@ -639,6 +672,8 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
 
         self.assertEqual(transcript.count("\tSQUID-2G\tTX\tCOM7\tXSC\t"), 1)
         self.assertEqual(transcript.count("\tSQUID-2G\tRX\tCOM7\t12\t"), 1)
+        self.assertEqual(transcript.count("\tVACUUM\tTX\tCOM8\t10MFF\t"), 1)
+        self.assertEqual(transcript.count("\tVACUUM\tRX\tCOM8\tMOTOR-ON\t"), 1)
         self.assertIn("\tmeasurement-worker\tINFO\tTRANSCRIPT\t\tbundle initialized", transcript)
 
     def test_transport_recovery_records_are_retained_in_workflow_summary(self) -> None:
