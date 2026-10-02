@@ -25,7 +25,7 @@ tests; none of it has been validated against the physical RAPID system.
 | Motion and interlock behavior | Verified in software only | **No** | Every motion is verified and a failure aborts the block |
 | Output parity against VB6 | Fixtures only | **No** | VB6 now compiles; side-by-side comparison still requires the no-communication smoke test and a physical reference run |
 
-Full suite: **454 tests passing** (`python -m unittest discover -s tests -p
+Full suite: **459 tests passing** (`python -m unittest discover -s tests -p
 'test_*.py'` from `RapidPy/rapid_main`), up from a 261-test baseline. The
 October 2 shell slice adds truthful Dashboard backend snapshots, responsive
 glass-card reflow, workflow/session menu wiring, shutdown ordering, atomic
@@ -42,6 +42,9 @@ The first reachable-dialog completion slice also moves Vacuum, IRM/ARM, and
 SQUID onto the shared glass/semantic-status contract, adds named accessibility
 metadata, verifies compact 360x520 geometry, and keeps unavailable hardware
 fail-closed rather than presenting it as ready.
+The second slice moves Login, About, Quick Start, and Transition Help onto the
+same shared dialog system, removes rigid widths/heights, verifies compact action
+visibility, and adds useful accessible names to every primary control.
 
 ### Behavior changes an operator will notice
 
@@ -76,6 +79,10 @@ fail-closed rather than presenting it as ready.
   prefixes rather than color-only communication. Unavailable IRM/ARM actuation
   controls are disabled, and the Vacuum diagnostic remains open to explain an
   unavailable backend instead of failing during construction.
+- Login, About, Quick Start, and VB6 transition help use the same responsive
+  glass surfaces. Operator identity remains mandatory, No-Comm explains its
+  simulation-only meaning to assistive technology, and an empty transition-help
+  search disables its otherwise inapplicable Open Destination action.
 - Imported sequences remain the active executable/saveable document; writes
   are atomic, malformed files report actionable errors, unsaved edits prompt
   on replacement/exit, and the Hawaiian preset emits its documented AF25–AF800

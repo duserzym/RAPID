@@ -283,7 +283,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **454 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **459 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
@@ -306,6 +306,10 @@ summary:
   accessible control names, compact 360x520 geometry, a scrollable SQUID
   settings surface, config-backed SQUID values, and explicit fail-closed
   unavailable states. Live hardware behavior is still an acceptance gate.
+- The second dialog slice covers Login, About, Quick Start, and Transition Help
+  with shared glass styling, adaptive forms/headers/actions, accessible primary
+  controls, mandatory operator identity coverage, and truthful empty-search
+  action state.
 - `python -m compileall` is clean across `rapid_main`, its tests,
   `updown_control`, and `rapidpy_common`. The repository configures no linter
   or type checker (no ruff/flake8/mypy config and no lint CI job), so none was

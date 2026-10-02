@@ -65,9 +65,9 @@ Phase-1 inventory closure.
 | VB6 item | Type | Migration status | RapidPy location / notes |
 |---|---|---|---|
 | `frmMagnetometerControl` | Form | Mapped | `rapid_main` shell + dashboard + flow scaffolding |
-| `frmAbout` | Form | Integrated | `rapid_main/dialogs/about.py`, `MainWindow` Help menu |
-| `frmLogin` | Form | Mapped | `rapid_main` main menu + `dialogs/login.py` launcher; session handling remains a refinement target |
-| `frmSplash` | Form | Integrated | `rapid_main/dialogs/startup_guide.py`, non-modal first-run display after main-window fit, and `tests/test_startup_guide.py` |
+| `frmAbout` | Form | Integrated | `rapid_main/dialogs/about.py`, `MainWindow` Help menu, `tests/test_general_dialog_glass.py`; responsive shared glass surface with runtime-derived version details and accessible actions |
+| `frmLogin` | Form | Mapped | `rapid_main` main menu + `dialogs/login.py` launcher, `tests/test_general_dialog_glass.py`; required identity, explicit No-Comm semantics, responsive form, and accessible session actions are covered |
+| `frmSplash` | Form | Integrated | `rapid_main/dialogs/startup_guide.py`, non-modal first-run display after main-window fit, `tests/test_startup_guide.py`, and `tests/test_general_dialog_glass.py`; responsive glass guidance and routing actions are covered |
 | `frmTip` | Form | Integrated | `StartupGuideDialog` is available from Help > Quick Start, persists its startup preference, and routes to Settings or Sample Queue; the adjacent searchable `TransitionHelpDialog` answers “Where did this VB6 control go?” and routes to real destinations; covered by `tests/test_startup_guide.py` and `tests/test_transition_help.py`. |
 | `modProg` | Module | Mapped | flow/runtime scaffolding in shell |
 | `modMeasure` | Module | Mapped | `measurement_worker` + `panels.measurement` |
