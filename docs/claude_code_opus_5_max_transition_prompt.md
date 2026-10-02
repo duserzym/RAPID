@@ -92,12 +92,22 @@ implementation baseline:
 - `e324937` — record rockmag run-bundle readiness;
 - `887a30a` — refine this handoff around the truthful thermal boundary; and
 - `a389315` — make thermal planning auditable and fail closed; and
-- `f8afef1` — record auditable thermal-boundary readiness.
+- `f8afef1` — record auditable thermal-boundary readiness; and
+- `84d6bfe` — add the auditable susceptibility acquisition state machine;
+- `977b2d8` — share susceptibility ownership without eager connection;
+- `3261e16` — route live SUSC through the audited bridge acquisition; and
+- the following readiness commit — record susceptibility acceptance
+  procedure, decision, and parity state.
 
-The complete RapidPy suite now reports **552 passing tests** using
+The complete RapidPy suite now reports **587 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
-`RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
-and current test discovery as authoritative if later commits add tests.
+`RapidPy/rapid_main` with `QT_QPA_PLATFORM=offscreen` and
+`PYTHONPATH="..;../updown_control;../vrm_logger"` (the repository `.venv`
+interpreter has the optional plotting dependencies). Without those paths ten
+tests fail to import `updown_control.app` / `vrm_logger.session_manifest`;
+that is an environment issue, not a regression. Preserve or increase the
+count, but treat the repository and current test discovery as authoritative
+if later commits add tests.
 
 The main shell, Dashboard, Sample Queue, Sequence editor, Live Measure panel,
 Settings, Calibration Center, and reachable dialogs already share the
@@ -109,13 +119,15 @@ shows a remaining gap.
 
 Work in this priority order:
 
-1. complete the next retained auxiliary boundary without touching hardware,
-   prioritizing automated susceptibility mechanics and evidence.
+1. complete the next retained auxiliary boundary without touching hardware.
    SQUID recovery, vacuum acknowledgment behavior, AF/IRM ADwin treatment
-   evidence, DC motor transport/state safety, treatment-route preflight, and
-   susceptibility bridge diagnostics are already complete. The thermal
-   manual/external decision and run-evidence boundary are also complete; do not
-   duplicate those implementations;
+   evidence, DC motor transport/state safety, treatment-route preflight,
+   susceptibility bridge diagnostics, automated susceptibility acquisition,
+   and the thermal manual/external boundary are complete; do not duplicate
+   them. Audit `docs/vb6_parity_inventory.md` for the next retained row that
+   is still neither software-verified nor explicitly blocked (for example
+   backfield/RRM treatment routes or DAC/MCC evidence) and close it only where
+   authoritative protocol evidence exists;
 2. finish the remaining evidence-backed software parity rows and testable
    protocol/replay boundaries for susceptibility and
    retained auxiliaries; keep physical VRM, SQUID, vacuum, AF/IRM, ADwin/DAC/MCC,
@@ -398,7 +410,32 @@ and full-suite tests cover schema/decision agreement, atomic publication,
 handoff/invalidation, UI wording, exact label identity, blocked-call ordering,
 and artifact linkage. No port, furnace, motion device, or SQUID was opened.
 
-### Immediate assignment: automated susceptibility mechanics and run evidence
+### Completed assignment: automated susceptibility mechanics and run evidence
+
+Commits `84d6bfe`, `977b2d8`, and `3261e16` complete the software slice below.
+`SusceptibilityAcquisitionService` runs verified home, bridge zero, slow move
+to `Int(SCoilPos + SampleHeight / 2)`, measure, holder subtraction and moment
+factor, then a verified home on every outcome. `QueueHardwareBackend` shares
+the dialog's bridge instance, connects it only inside an operator-started run
+that holds the `susceptibility` lease, stages the holder bridge value with the
+magnetic holder block (persisted under `<data_dir>/holder_susceptibility/`),
+and installs both atomically. Live `SUSC` plan/step validation blocks unless
+every input in `docs/susceptibility_integration_decision.json` is present.
+`MeasurementWorker` reads before treatment and SQUID, wires cooperative halt,
+rejects simulated records from live backends, writes every current-run
+acquisition to `susceptibility_acquisitions/<id>.json`, and indexes it with
+size and SHA-256. A safe-return failure raises `SusceptibilitySafeStateError`.
+The worker also no longer duplicates bridge traffic in `communication.tsv`.
+Intentional VB6 differences (always-home policy, configured rather than probed
+sample height, no `LagTime`, no zero/-1 values, atomic holder staging) and the
+open physical questions are in the decision record; the physical procedure is
+section 11a of `docs/rapid_hardware_acceptance_procedure_2026-08-29.md`. Do
+not recreate this path. Coverage: `tests/test_susceptibility_acquisition.py`
+and `tests/test_susceptibility_queue.py`.
+
+The original assignment text is retained below as the acceptance specification.
+
+#### Original specification
 
 Do not rebuild the completed susceptibility bridge diagnostic. The typed serial
 boundary already sends exact legacy `Z`/`M` + CRLF commands, requires strict

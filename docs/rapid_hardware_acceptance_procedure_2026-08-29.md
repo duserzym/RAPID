@@ -180,12 +180,37 @@ family still has a software preflight blocker.
 | # | Step | Expected |
 |---|---|---|
 | K1 | Run the compiled Hawaiian AF preset in No-Communication mode | Output stays under `SIMULATED/`; `rockmag_run.json` names the compiled routine and exact completed labels; the artifact index digest matches the file |
-| K2 | Attempt Rockmag the Works in hardware mode before backfield/SUSC routes exist | Plan blocks before ordinary hardware preflight or treatment dispatch and writes an `ABORTED` rockmag artifact naming the blocker |
+| K2 | Attempt Rockmag the Works in hardware mode before the backfield route exists (and before SUSC holder/bridge inputs are accepted) | Plan blocks before ordinary hardware preflight or treatment dispatch and writes an `ABORTED` rockmag artifact naming the blocker |
 | K3 | After AF acceptance, run Hawaiian AF on a reference specimen | Every requested label is treated and measured once in order; raw treatment/SQUID traffic, safe return, holder version, and rockmag artifact share one run ID |
 | K4 | Halt between two rockmag steps | No partial accepted bundle is published; abort artifact lists only the completed prefix and the halt/final phase |
 | K5 | Resume the interrupted specimen | Previously published labels are not duplicated; skipped duplicate labels and the remaining completed suffix are explicit |
 | K6 | Exercise each additional approved family separately before adding it to a mixed routine | Field/readback, interlock, failure, and safe-return evidence passes that family's acceptance procedure |
 | K7 | Run the approved mixed routine | `provenance.json`, `workflow_summary.json`, `rockmag_run.json`, scientific outputs, and `artifact_index.json` agree on routine, run, sample, operator, labels, outcome, and hashes |
+
+---
+
+## 11a. Susceptibility bridge and coil acceptance
+
+Software decision and open questions:
+`docs/susceptibility_integration_decision.json`. Every acquisition writes an
+immutable `rapidpy.susceptibility.acquisition.v1` record (holder records under
+`<data_dir>/holder_susceptibility/`, sample records under the run's
+`susceptibility_acquisitions/`, indexed in `artifact_index.json` with size and
+SHA-256). Attach those files to the evidence record.
+
+| # | Step | Expected |
+|---|---|---|
+| S1 | With the lift unpowered, open the Susceptibility Bridge dialog, press Connect, then Zero and Measure | Exact `Z`/`M` + CRLF in the transcript, CR-terminated numeric replies, scaled value shown; no axis moves |
+| S2 | Disconnect the bridge cable and repeat S1 | Connection or reply error is reported verbatim; no value, no zero |
+| S3 | Confirm `SCoilPos`, `SampleTop`, `SampleBottom` from the legacy INI and compute `Int(SCoilPos + (SampleTop - SampleBottom) / 2)` | Written expected target matches the record's `target_position`; target is on the coil side |
+| S4 | With an empty rod, jog the lift to the computed target at speed index 0 and inspect clearance | Rod is centred in the coil with no contact; record measured position and settle error |
+| S5 | Run a queue Holder command with the bridge enabled | Record order is home, zero, move, measure, home; holder `susceptibility_raw` equals the record's `bridge_scaled_value`; `susceptibility_evidence_id` resolves to the holder evidence file |
+| S6 | Measure the Bartington reference standard as a sample (`SUSC`) | Value `(scaled - holder) * SusceptibilityMomentFactorCGS` agrees with the standard within the lab's written tolerance; VB6 side-by-side value recorded |
+| S7 | Repeat S6 five times without re-measuring the holder | Spread and drift recorded; answers the holder re-measurement question in the decision record |
+| S8 | Halt during the move to the coil | Run aborts, lift returns home, record outcome `failed` with `cancelled`; no `.rmg`, specimen, or `susceptibility.json` output |
+| S9 | Unplug the bridge between zero and measure | Record shows the reply error, `safe_state_confirmed = true`, and no value; the prior holder (if a holder run) is unchanged |
+| S10 | Block the home limit switch (controlled fault) after a read | `SAFE-STATE NOT CONFIRMED` error names both the acquisition and safe-return failures; operator inspection is required before continuing |
+| S11 | Run the Bartington calibration scan (`frmCalRod.RunSusceSeq` equivalent) only as a separate calibration workflow | Never triggered by ordinary `SUSC` steps |
 
 ---
 
@@ -205,6 +230,7 @@ as a replacement rather than transition/testing software.
 | Restart behavior | Section 9 |
 | VRM acquisition | Section 10 |
 | Rockmag execution | Section 11 |
+| Susceptibility acquisition | Section 11a |
 | VB6 side-by-side | Requires readiness gates 2–4 closed |
 
 ---

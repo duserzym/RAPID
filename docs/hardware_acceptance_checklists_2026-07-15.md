@@ -86,7 +86,8 @@ Each workflow below must have:
 
 - [ ] Susceptibility workflow (`frmSusceptibilityMeter`, `modSusceptibility`)
   - [x] Software evidence: measurement runs persist susceptibility readings in `.rmg` and write `susceptibility.json` with per-step values, summary statistics, and hardware-validation caveat, covered by `RapidPy/rapid_main/tests/test_measurement_worker.py`.
-  - [ ] **Hardware-only evidence required:** calibrated susceptibility bridge reading captured from live hardware and reconciled against expected standard.
+  - [x] Software evidence: live SUSC acquisition (holder staging, coil target, verified safe return, VB6 ordering, indexed `rapidpy.susceptibility.acquisition.v1` artifacts) covered by `RapidPy/rapid_main/tests/test_susceptibility_queue.py` and `tests/test_susceptibility_acquisition.py`.
+  - [ ] **Hardware-only evidence required:** calibrated susceptibility bridge reading captured from live hardware and reconciled against expected standard (procedure section 11a, S1–S11).
   - [x] Software evidence: successful, non-aborted measurement runs with completed steps automatically write `quicklook.json` into the same output bundle path passed to `MeasurementWorker`, covered by `RapidPy/rapid_main/tests/test_measurement_panel.py`.
   - [ ] **Hardware-only evidence required:** real bundle with plotting review pass.
 
