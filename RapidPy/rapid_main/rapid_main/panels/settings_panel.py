@@ -4,7 +4,12 @@ from pathlib import Path
 
 from PySide6 import QtCore, QtWidgets
 
-from rapid_main.config import AppConfig, SequenceTimesConfig
+from rapid_main.config import (
+    AppConfig,
+    SequenceTimesConfig,
+    read_config_backup,
+    write_config_backup,
+)
 from rapid_main.legacy_ini import import_vb6_ini
 
 
@@ -35,6 +40,18 @@ class SettingsPanel(QtWidgets.QWidget):
         hdr.setObjectName("sectionHdr")
         root.addWidget(hdr)
 
+        self._restart_notice = QtWidgets.QLabel(
+            "Restart required: restored hardware settings are saved but are not active yet."
+        )
+        self._restart_notice.setWordWrap(True)
+        self._restart_notice.setStyleSheet(
+            "color: #92400e; background: rgba(245,158,11,0.13); "
+            "border: 1px solid rgba(217,119,6,0.38); border-radius: 8px; "
+            "padding: 7px 10px; font-weight: 650;"
+        )
+        self._restart_notice.hide()
+        root.addWidget(self._restart_notice)
+
         self._tabs = QtWidgets.QTabWidget()
         root.addWidget(self._tabs)
 
@@ -51,12 +68,18 @@ class SettingsPanel(QtWidgets.QWidget):
         bottom = QtWidgets.QHBoxLayout()
         import_btn = QtWidgets.QPushButton("⬆️  Import VB6 INI…")
         import_btn.clicked.connect(self._import_vb6_ini)
+        backup_btn = QtWidgets.QPushButton("Export Backup…")
+        backup_btn.clicked.connect(self._export_backup)
+        restore_btn = QtWidgets.QPushButton("Restore Backup…")
+        restore_btn.clicked.connect(self._restore_backup)
         save_btn = QtWidgets.QPushButton("💾  Save Settings")
         save_btn.setObjectName("accent")
         save_btn.clicked.connect(self._save)
         cancel_btn = QtWidgets.QPushButton("Cancel")
         cancel_btn.clicked.connect(self._revert)
         bottom.addWidget(import_btn)
+        bottom.addWidget(backup_btn)
+        bottom.addWidget(restore_btn)
         bottom.addStretch()
         bottom.addWidget(cancel_btn)
         bottom.addWidget(save_btn)
@@ -783,6 +806,8 @@ class SettingsPanel(QtWidgets.QWidget):
             # Propagate updated step times to the runtime estimator
             if hasattr(mw, "_estimator"):
                 mw._estimator.step_times = mw.config.sequence.as_estimator_dict()
+            self._restart_notice.hide()
+            setattr(mw, "_settings_restart_required", False)
         QtWidgets.QMessageBox.information(self, "Settings", "Settings saved.")
 
     def _revert(self) -> None:
@@ -844,3 +869,115 @@ class SettingsPanel(QtWidgets.QWidget):
                 summary_lines.append(f"… and {len(report.warnings) - 15} additional warnings.")
         message = "\n".join(summary_lines)
         QtWidgets.QMessageBox.information(self, "Import VB6 INI", message)
+
+    def _backup_start_directory(self, cfg: AppConfig) -> str:
+        return (
+            cfg.general.backup_dir.strip()
+            or cfg.general.data_dir.strip()
+            or str(AppConfig.default_path().parent)
+        )
+
+    def _export_backup(self) -> Path | None:
+        """Export the currently saved model, excluding unsaved widget edits."""
+
+        mw = self.window()
+        cfg = getattr(mw, "config", None)
+        if not isinstance(cfg, AppConfig):
+            QtWidgets.QMessageBox.warning(
+                self, "Export Settings Backup", "Unable to access application settings model."
+            )
+            return None
+        suggested = str(Path(self._backup_start_directory(cfg)) / "rapid-settings-backup.json")
+        selected, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Export Settings Backup",
+            suggested,
+            "RAPID settings backup (*.json)",
+        )
+        if not selected:
+            return None
+        target = Path(selected)
+        if target.suffix.lower() != ".json":
+            target = target.with_suffix(".json")
+        try:
+            write_config_backup(cfg, target)
+        except (OSError, ValueError) as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Export Settings Backup", f"Backup failed:\n{exc}"
+            )
+            return None
+        QtWidgets.QMessageBox.information(
+            self,
+            "Export Settings Backup",
+            f"Saved the current persisted settings to:\n{target}\n\n"
+            "Unsaved edits in this panel were not included.",
+        )
+        return target
+
+    def _restore_backup(self) -> bool:
+        """Validate and persist a backup while leaving live backends untouched."""
+
+        mw = self.window()
+        current = getattr(mw, "config", None)
+        if not isinstance(current, AppConfig):
+            QtWidgets.QMessageBox.warning(
+                self, "Restore Settings Backup", "Unable to access application settings model."
+            )
+            return False
+        active_check = getattr(mw, "_has_active_workflow", None)
+        if callable(active_check) and active_check():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Restore Settings Backup",
+                "Settings cannot be restored while a measurement or queue run is active.",
+            )
+            return False
+        selected, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Restore Settings Backup",
+            self._backup_start_directory(current),
+            "RAPID settings backup (*.json)",
+        )
+        if not selected:
+            return False
+        try:
+            restored = read_config_backup(selected)
+        except ValueError as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Restore Settings Backup", f"Restore refused:\n{exc}"
+            )
+            return False
+        if (
+            QtWidgets.QMessageBox.question(
+                self,
+                "Restore Settings Backup",
+                "Replace all saved RAPID settings with this validated backup?\n\n"
+                "The application must be restarted before restored hardware settings are used.",
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No,
+            )
+            != QtWidgets.QMessageBox.StandardButton.Yes
+        ):
+            return False
+        try:
+            restored.save()
+        except OSError as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Restore Settings Backup", f"Restore could not be saved:\n{exc}"
+            )
+            return False
+        mw.config = restored
+        self.load_from_config(restored)
+        if hasattr(mw, "_estimator"):
+            mw._estimator.step_times = restored.sequence.as_estimator_dict()
+        setattr(mw, "_settings_restart_required", True)
+        self._restart_notice.show()
+        if hasattr(mw, "set_status"):
+            mw.set_status("Settings backup restored. Restart required before hardware use.")
+        QtWidgets.QMessageBox.information(
+            self,
+            "Restore Settings Backup",
+            "Settings were restored and saved. Restart RAPID before connecting to or controlling hardware.",
+        )
+        return True

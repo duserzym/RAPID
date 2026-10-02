@@ -21,10 +21,44 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import tempfile
 from dataclasses import dataclass, field, asdict
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+CONFIG_BACKUP_SCHEMA = "rapidpy.config.backup.v1"
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Durably publish JSON without exposing a partially written config."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(payload, handle, indent=2, ensure_ascii=False, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -261,11 +295,7 @@ class AppConfig:
     def save(self, path: Path | str | None = None) -> None:
         """Save config to *path* (or ``default_path()``)."""
         p = Path(path) if path else self.default_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(
-            json.dumps(asdict(self), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        _atomic_write_json(p, asdict(self))
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -289,3 +319,43 @@ class AppConfig:
             motion=     _merge(MotionPositionsConfig, d.get("motion",    {})),
             sequence=   _merge(SequenceTimesConfig, d.get("sequence",    {})),
         )
+
+
+def write_config_backup(config: AppConfig, path: Path | str) -> Path:
+    """Write a versioned, human-readable snapshot of every application setting."""
+
+    target = Path(path)
+    payload: dict[str, Any] = {
+        "schema": CONFIG_BACKUP_SCHEMA,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "config": asdict(config),
+    }
+    _atomic_write_json(target, payload)
+    return target
+
+
+def read_config_backup(path: Path | str) -> AppConfig:
+    """Strictly validate and decode a settings backup before any live mutation."""
+
+    source = Path(path)
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not read settings backup: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Settings backup root must be a JSON object.")
+    if payload.get("schema") != CONFIG_BACKUP_SCHEMA:
+        raise ValueError(
+            f"Unsupported settings backup schema: {payload.get('schema')!r}."
+        )
+    config_payload = payload.get("config")
+    if not isinstance(config_payload, dict):
+        raise ValueError("Settings backup does not contain a configuration object.")
+    required_sections = {field.name for field in dataclasses.fields(AppConfig)}
+    missing = sorted(required_sections - set(config_payload))
+    if missing:
+        raise ValueError("Settings backup is missing sections: " + ", ".join(missing))
+    try:
+        return AppConfig._from_dict(config_payload)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError(f"Settings backup contains invalid values: {exc}") from exc
