@@ -39,6 +39,8 @@ class DataDialogGlassTests(unittest.TestCase):
 
         self.assertTrue(plots._tabs.accessibleName())
         self.assertTrue(plots._demo_btn.accessibleName())
+        self.assertTrue(plots._export_btn.accessibleName())
+        self.assertFalse(plots._export_btn.isEnabled())
         self.assertTrue(plots._close_btn.accessibleName())
         self.assertEqual(plots._demo_lbl.property("status"), "neutral")
         self.assertTrue(samples._search.accessibleName())
@@ -80,7 +82,7 @@ class DataDialogGlassTests(unittest.TestCase):
 
     def test_compact_plot_and_sample_actions_remain_visible(self) -> None:
         cases = [
-            (PlotsDialog(), (480, 420), ("_demo_btn", "_close_btn")),
+            (PlotsDialog(), (480, 420), ("_demo_btn", "_export_btn", "_close_btn")),
             (SampleSelectDialog(), (460, 360), ("_load_btn", "_select_btn", "_cancel_btn")),
         ]
 

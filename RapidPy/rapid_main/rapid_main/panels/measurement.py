@@ -14,6 +14,7 @@ from rapid_main.specimen_metadata import resolve_specimen_meta
 from rapid_main.device_ownership import DeviceOwnershipError
 from rapid_main.dialogs.plots import build_quicklook_summary, write_quicklook_json
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
+from rapid_main.io.measurement_bundle import SIMULATED_SUBDIR
 from rapid_main.measurement_worker import MeasurementWorker, StepResult
 from rapid_main.printing import print_widget_snapshot
 
@@ -152,6 +153,7 @@ class MeasurementPanel(QtWidgets.QWidget):
         self._current_depth = "—"
         self._current_treatment = "—"
         self._current_output_dir: Path | None = None
+        self._current_run_simulated = False
         self._plot_traces: dict[str, deque[float]] = {
             "step": deque(maxlen=self._TRACE_LIMIT),
             "moment": deque(maxlen=self._TRACE_LIMIT),
@@ -474,10 +476,13 @@ class MeasurementPanel(QtWidgets.QWidget):
             [step.sdy for step in self._completed_steps],
             [step.sdz for step in self._completed_steps],
             [step.demag_label for step in self._completed_steps],
+            simulated=self._current_run_simulated,
+            provenance_statement=(
+                "Current run used a simulated backend; not hardware evidence."
+                if self._current_run_simulated
+                else "Current measurement run."
+            ),
         )
-        label = getattr(dialog, "_demo_lbl", None)
-        if label is not None and hasattr(label, "setText"):
-            label.setText("Current measurement run")
         return True
 
     # ── Worker control ────────────────────────────────────────────────────────
@@ -536,6 +541,7 @@ class MeasurementPanel(QtWidgets.QWidget):
         backend = _resolve_measurement_backend(mw, NoCommBackend())
         if backend is None:
             backend = NoCommBackend()
+        self._current_run_simulated = bool(getattr(backend, "simulated", False))
         op = cfg.general.operator if cfg else ""
         out = Path(cfg.general.data_dir) if cfg and cfg.general.data_dir else Path.home() / "RAPID_data"
         # VB6 reads comment, orientation, volume, and the sample hierarchy from
@@ -555,7 +561,11 @@ class MeasurementPanel(QtWidgets.QWidget):
                 + ". Check the specimen header or sample index before archiving."
             )
         run_output_dir = out / meta.name
-        self._current_output_dir = run_output_dir
+        self._current_output_dir = (
+            run_output_dir / SIMULATED_SUBDIR
+            if self._current_run_simulated
+            else run_output_dir
+        )
         run_id = f"{meta.name}-{datetime.now().strftime('%Y%m%dT%H%M%S')}"
         try:
             calibration_records = CalibrationRegistry.default().provenance_refs()
@@ -839,6 +849,15 @@ class MeasurementPanel(QtWidgets.QWidget):
             [step.sdz for step in self._completed_steps],
             [step.demag_label for step in self._completed_steps],
         )
+        summary["provenance"] = {
+            "kind": "simulated" if self._current_run_simulated else "measurement",
+            "simulated": self._current_run_simulated,
+            "statement": (
+                "Current run used a simulated backend; not hardware evidence."
+                if self._current_run_simulated
+                else "Measurement quicklook data."
+            ),
+        }
         return write_quicklook_json(self._current_output_dir / "quicklook.json", summary)
 
     @QtCore.Slot(bool)

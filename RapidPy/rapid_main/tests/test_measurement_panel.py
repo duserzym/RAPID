@@ -108,7 +108,8 @@ class TestMeasurementPanelHelpers(unittest.TestCase):
         self.assertEqual(dialog._last_plot_data["north"], [1.0, 0.0])
         self.assertEqual(dialog._last_plot_data["east"], [0.0, 1.0])
         self.assertEqual(dialog._last_plot_data["up"], [0.0, -1.0])
-        self.assertEqual(dialog._demo_lbl.text(), "Current measurement run")
+        self.assertTrue(dialog._demo_lbl.text().startswith("READY —"))
+        self.assertIn("Current measurement run", dialog.quicklook_summary()["provenance"]["statement"])
         dialog.deleteLater()
 
     def test_successful_run_writes_quicklook_sidecar_to_output_bundle(self) -> None:
@@ -142,8 +143,46 @@ class TestMeasurementPanelHelpers(unittest.TestCase):
         self.assertEqual(payload["labels"], ["NRM"])
         self.assertEqual(payload["vectors"]["north"], [1.0])
         self.assertEqual(payload["intensity"], [1.0])
+        self.assertFalse(payload["provenance"]["simulated"])
         panel.deleteLater()
         panel.deleteLater()
+
+    def test_simulated_run_quicklook_is_marked_in_dialog_and_sidecar(self) -> None:
+        panel = MeasurementPanel()
+        panel._current_run_simulated = True
+        panel._completed_steps = [
+            MeasurementStep(
+                demag_label="NRM",
+                gdec=0.0,
+                ginc=0.0,
+                sdec=0.0,
+                sinc=0.0,
+                crdec=0.0,
+                crinc=0.0,
+                moment=1.0,
+                error_angle=0.0,
+                sdx=1.0,
+                sdy=0.0,
+                sdz=0.0,
+                timestamp=datetime(2026, 7, 15, 12, 0, 0),
+            )
+        ]
+        dialog = PlotsDialog(panel)
+        try:
+            self.assertTrue(panel._apply_completed_steps_to_plots(dialog))
+            self.assertEqual(dialog._demo_lbl.property("status"), "simulated")
+            self.assertIn("not hardware evidence", dialog._demo_lbl.text())
+
+            with tempfile.TemporaryDirectory() as td:
+                panel._current_output_dir = Path(td)
+                path = panel._write_quicklook_sidecar()
+                self.assertIsNotNone(path)
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertTrue(payload["provenance"]["simulated"])
+            self.assertIn("not hardware evidence", payload["provenance"]["statement"])
+        finally:
+            dialog.deleteLater()
+            panel.deleteLater()
 
     def test_completed_cycle_populates_live_stats_grid(self) -> None:
         panel = MeasurementPanel()

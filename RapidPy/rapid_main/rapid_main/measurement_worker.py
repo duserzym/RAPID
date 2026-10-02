@@ -63,6 +63,7 @@ from rapid_main.workflow import WorkflowPhase, WorkflowStateMachine
 from rapid_main import software_version
 from rapid_main.io.measurement_bundle import (
     SIMULATION_STATEMENT,
+    SIMULATED_SUBDIR,
     MeasurementBundleWriter,
 )
 
@@ -162,7 +163,11 @@ class MeasurementWorker(QtCore.QThread):
         self._skipped_labels: list[str] = []
         self._recovery_count = 0
         self._published_paths: dict[str, str] = {}
-        self._publish_dir = self._output_dir
+        self._publish_dir = (
+            self._output_dir
+            if not self._simulated or self._allow_simulated_production_output
+            else self._output_dir / SIMULATED_SUBDIR
+        )
 
         # Control flags (thread-safe via threading.Event)
         self._pause_event = threading.Event()
@@ -422,7 +427,7 @@ class MeasurementWorker(QtCore.QThread):
         if not aborted:
             try:
                 write_susceptibility_summary_json(
-                    self._output_dir / "susceptibility.json",
+                    self._publish_dir / "susceptibility.json",
                     susceptibility_records,
                     sample=self._meta.name,
                     operator=self._operator,
@@ -648,22 +653,20 @@ class MeasurementWorker(QtCore.QThread):
         result: BracketedMeasurementResult,
     ) -> None:
         """Keep the audit identifiers of the last accepted block."""
-        self._last_block_result = result
         audit = block.audit
         if audit is None:
+            self._last_block_result = result
             return
+        if audit.simulated and not self._simulated:
+            raise ObservationIntegrityError(
+                "A backend declared as live returned a simulated measurement block. "
+                "The block was rejected before accepted state or output could change."
+            )
+        self._last_block_result = result
         self._last_block_audit = audit
         if audit.holder_record_id:
             self._holder_record_id = audit.holder_record_id
             self._holder_recorded_iso = audit.holder_recorded_iso
-        if audit.simulated and not self._simulated:
-            # A backend that starts reporting simulated blocks mid-run must not
-            # keep writing into the production path.
-            self._simulated = True
-            self._emit_warning(
-                "SIMULATED BLOCK received from the measurement backend; the run is "
-                "no longer valid hardware evidence."
-            )
 
     def _backend_holder_status(self) -> object | None:
         """Holder identity/age/validity for the operator UI, when available."""
@@ -762,8 +765,8 @@ class MeasurementWorker(QtCore.QThread):
             ),
         }
         try:
-            self._output_dir.mkdir(parents=True, exist_ok=True)
-            (self._output_dir / "workflow_summary.json").write_text(
+            self._publish_dir.mkdir(parents=True, exist_ok=True)
+            (self._publish_dir / "workflow_summary.json").write_text(
                 json.dumps(payload, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
@@ -775,7 +778,7 @@ class MeasurementWorker(QtCore.QThread):
         if self._comm_logger is None:
             return
         try:
-            self._comm_logger.write_text(self._output_dir / "communication.tsv")
+            self._comm_logger.write_text(self._publish_dir / "communication.tsv")
         except Exception as exc:
             self.error_occurred.emit(f"Failed to write communication transcript: {exc}")
 
@@ -786,7 +789,7 @@ class MeasurementWorker(QtCore.QThread):
         self.run_finished.emit(aborted)
 
     def _write_artifact_index(self, *, aborted: bool) -> None:
-        artifact_path = self._output_dir / "artifact_index.json"
+        artifact_path = self._publish_dir / "artifact_index.json"
 
         def entry(
             name: str,
@@ -827,56 +830,56 @@ class MeasurementWorker(QtCore.QThread):
             "artifacts": [
                 entry(
                     "vb6_specimen_file",
-                    self._output_dir / self._meta.name,
+                    self._publish_dir / self._meta.name,
                     required=not aborted,
                     producer="MeasurementBundleWriter",
                     description="Legacy specimen output compatible with VB6/CIT review paths.",
                 ),
                 entry(
                     "rmg_file",
-                    self._output_dir / f"{self._meta.name}.rmg",
+                    self._publish_dir / f"{self._meta.name}.rmg",
                     required=not aborted,
                     producer="MeasurementBundleWriter",
                     description="RMG sidecar with per-step treatment and susceptibility values.",
                 ),
                 entry(
                     "magic_measurements",
-                    self._output_dir / "measurements.txt",
+                    self._publish_dir / "measurements.txt",
                     required=not aborted,
                     producer="MeasurementBundleWriter",
                     description="MagIC measurements table emitted in lockstep with specimen output.",
                 ),
                 entry(
                     "magic_specimens",
-                    self._output_dir / "specimens.txt",
+                    self._publish_dir / "specimens.txt",
                     required=not aborted,
                     producer="MeasurementBundleWriter",
                     description="MagIC specimen metadata table for the run bundle.",
                 ),
                 entry(
                     "susceptibility_summary",
-                    self._output_dir / "susceptibility.json",
+                    self._publish_dir / "susceptibility.json",
                     required=not aborted,
                     producer="MeasurementWorker",
                     description="Per-step susceptibility readings and summary statistics.",
                 ),
                 entry(
                     "workflow_summary",
-                    self._output_dir / "workflow_summary.json",
+                    self._publish_dir / "workflow_summary.json",
                     required=True,
                     producer="MeasurementWorker",
                     description="Phase/status trace for completion, abort, or preflight failure evidence.",
                 ),
                 entry(
                     "communication_transcript",
-                    self._output_dir / "communication.tsv",
+                    self._publish_dir / "communication.tsv",
                     required=False,
                     producer="CommunicationLogger",
                     description="Transport-neutral transcript emitted when bundle execution begins.",
                 ),
                 entry(
                     "quicklook_summary",
-                    self._output_dir / "quicklook.json",
+                    self._publish_dir / "quicklook.json",
                     required=False,
                     producer="MeasurementPanel",
                     description="Panel-level quicklook plot contract, written after completed UI runs.",
@@ -889,7 +892,7 @@ class MeasurementWorker(QtCore.QThread):
             ),
         }
         try:
-            self._output_dir.mkdir(parents=True, exist_ok=True)
+            self._publish_dir.mkdir(parents=True, exist_ok=True)
             artifact_path.write_text(
                 json.dumps(payload, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
@@ -900,7 +903,7 @@ class MeasurementWorker(QtCore.QThread):
 
     def _relative_artifact_path(self, path: Path) -> str:
         try:
-            return path.relative_to(self._output_dir).as_posix()
+            return path.relative_to(self._publish_dir).as_posix()
         except ValueError:
             return path.name
 

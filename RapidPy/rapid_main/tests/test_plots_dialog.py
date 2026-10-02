@@ -5,10 +5,16 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from PySide6 import QtWidgets
 
-from rapid_main.dialogs.plots import PlotsDialog, build_quicklook_summary, write_quicklook_json
+from rapid_main.dialogs.plots import (
+    PlotsDialog,
+    build_quicklook_summary,
+    write_quicklook_csv,
+    write_quicklook_json,
+)
 
 
 class PlotsDialogTests(unittest.TestCase):
@@ -51,6 +57,8 @@ class PlotsDialogTests(unittest.TestCase):
         self.assertEqual(dialog._demo_lbl.property("status"), "simulated")
         self.assertIn("SIMULATED", dialog._demo_lbl.text())
         self.assertIn("not hardware evidence", dialog._demo_lbl.text())
+        self.assertTrue(dialog.quicklook_summary()["provenance"]["simulated"])
+        self.assertTrue(dialog._export_btn.isEnabled())
         dialog.deleteLater()
 
     def test_real_data_replaces_simulated_example_marker(self) -> None:
@@ -62,6 +70,7 @@ class PlotsDialogTests(unittest.TestCase):
         self.assertEqual(dialog._demo_lbl.property("status"), "ready")
         self.assertIn("Measurement data: 1 step", dialog._demo_lbl.text())
         self.assertNotIn("SIMULATED", dialog._demo_lbl.text())
+        self.assertFalse(dialog.quicklook_summary()["provenance"]["simulated"])
         dialog.deleteLater()
 
     def test_quicklook_rejects_mismatched_vector_lengths(self) -> None:
@@ -89,7 +98,62 @@ class PlotsDialogTests(unittest.TestCase):
         self.assertEqual(payload["labels"], ["NRM"])
         self.assertEqual(payload["vectors"]["north"], [1.0])
         self.assertEqual(payload["intensity"], [1.0])
+        self.assertFalse(payload["provenance"]["simulated"])
         dialog.deleteLater()
+
+    def test_simulated_json_and_csv_exports_retain_provenance(self) -> None:
+        dialog = PlotsDialog()
+        dialog._load_demo()
+
+        with tempfile.TemporaryDirectory() as td:
+            json_path = dialog.write_quicklook_json(Path(td) / "quicklook.json")
+            csv_path = dialog.write_quicklook_csv(Path(td) / "quicklook.csv")
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+            csv_text = csv_path.read_text(encoding="utf-8")
+
+        self.assertTrue(payload["provenance"]["simulated"])
+        self.assertIn("not hardware evidence", payload["provenance"]["statement"])
+        self.assertIn("simulated,provenance_statement", csv_text.splitlines()[0])
+        self.assertIn(",true,Example plot data; not hardware evidence", csv_text)
+        dialog.deleteLater()
+
+    def test_csv_export_rejects_mismatched_fields(self) -> None:
+        summary = build_quicklook_summary([1.0], [0.0], [0.0], ["NRM"])
+        summary["intensity"] = []
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaisesRegex(ValueError, "equal lengths"):
+                write_quicklook_csv(Path(td) / "bad.csv", summary)
+
+    def test_operator_export_action_writes_selected_csv(self) -> None:
+        dialog = PlotsDialog()
+        dialog.set_data([1.0], [0.0], [0.0], ["NRM"])
+
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "operator-export"
+            with (
+                mock.patch.object(
+                    QtWidgets.QFileDialog,
+                    "getSaveFileName",
+                    return_value=(str(target), "CSV table (*.csv)"),
+                ),
+                mock.patch.object(QtWidgets.QMessageBox, "information") as info,
+            ):
+                dialog._export_data()
+            written = target.with_suffix(".csv")
+            self.assertTrue(written.exists())
+            self.assertIn("NRM", written.read_text(encoding="utf-8"))
+            info.assert_called_once()
+        dialog.deleteLater()
+
+    def test_atomic_export_cleans_temporary_file_on_publish_failure(self) -> None:
+        summary = build_quicklook_summary([1.0], [0.0], [0.0], ["NRM"])
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "quicklook.json"
+            with mock.patch("rapid_main.dialogs.plots.os.replace", side_effect=OSError("denied")):
+                with self.assertRaisesRegex(OSError, "denied"):
+                    write_quicklook_json(target, summary)
+            self.assertFalse(target.exists())
+            self.assertEqual(list(Path(td).glob("*.tmp")), [])
 
     def test_quicklook_summary_helper_does_not_require_dialog(self) -> None:
         summary = build_quicklook_summary(

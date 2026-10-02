@@ -179,8 +179,19 @@ class ReplayWorkerTests(unittest.TestCase):
         # A replay is not hardware evidence, so it must stay out of production.
         self.assertTrue((self.tmp / "SIMULATED" / "REPLAY01").exists())
         self.assertFalse((self.tmp / "REPLAY01").exists())
-        summary = json.loads((self.tmp / "workflow_summary.json").read_text(encoding="utf-8"))
+        summary = json.loads(
+            (self.tmp / "SIMULATED" / "workflow_summary.json").read_text(
+                encoding="utf-8"
+            )
+        )
         self.assertTrue(summary["simulated"])
+        for name in (
+            "workflow_summary.json",
+            "communication.tsv",
+            "susceptibility.json",
+            "artifact_index.json",
+        ):
+            self.assertFalse((self.tmp / name).exists(), name)
 
     def test_replay_backend_has_no_recovery_hook(self) -> None:
         backend = ReplaySquidBackend([load_replay_fixture(ARCHIVED)])

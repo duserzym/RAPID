@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import csv
 import json
 import math
+import os
 from pathlib import Path
+import tempfile
 from typing import Sequence
 
 try:
@@ -87,11 +90,94 @@ def write_quicklook_json(path: str | Path, summary: dict[str, object]) -> Path:
     """Write a quicklook summary as a deterministic JSON sidecar artifact."""
 
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
+    return _atomic_write_text(
+        target,
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
     )
+
+
+def write_quicklook_csv(path: str | Path, summary: dict[str, object]) -> Path:
+    """Write validated plot vectors and provenance as deterministic CSV."""
+
+    labels = list(summary.get("labels", []))
+    vectors = summary.get("vectors", {})
+    if not isinstance(vectors, dict):
+        raise ValueError("Quicklook vectors must be a mapping.")
+    fields = {
+        "north": list(vectors.get("north", [])),
+        "east": list(vectors.get("east", [])),
+        "up": list(vectors.get("up", [])),
+        "down": list(vectors.get("down", [])),
+        "intensity": list(summary.get("intensity", [])),
+        "declination": list(summary.get("declination", [])),
+        "inclination": list(summary.get("inclination", [])),
+    }
+    lengths = {len(labels), *(len(values) for values in fields.values())}
+    if len(lengths) != 1:
+        raise ValueError("Quicklook CSV fields must have equal lengths.")
+
+    provenance = summary.get("provenance", {})
+    provenance = provenance if isinstance(provenance, dict) else {}
+    simulated = bool(provenance.get("simulated", False))
+    statement = str(provenance.get("statement", ""))
+
+    from io import StringIO
+
+    output = StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(
+        [
+            "label",
+            "north",
+            "east",
+            "up",
+            "down",
+            "intensity",
+            "declination_deg",
+            "inclination_deg",
+            "simulated",
+            "provenance_statement",
+        ]
+    )
+    for index, label in enumerate(labels):
+        writer.writerow(
+            [
+                label,
+                fields["north"][index],
+                fields["east"][index],
+                fields["up"][index],
+                fields["down"][index],
+                fields["intensity"][index],
+                fields["declination"][index],
+                fields["inclination"][index],
+                "true" if simulated else "false",
+                statement,
+            ]
+        )
+    return _atomic_write_text(Path(path), output.getvalue())
+
+
+def _atomic_write_text(target: Path, text: str) -> Path:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            dir=target.parent,
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
     return target
 
 
@@ -279,6 +365,11 @@ class PlotsDialog(QtWidgets.QDialog):
             | QtCore.Qt.WindowMaximizeButtonHint
         )
         self._last_plot_data: dict[str, object] = {}
+        self._provenance: dict[str, object] = {
+            "kind": "empty",
+            "simulated": False,
+            "statement": "No plot data loaded.",
+        }
         self._build_ui()
 
     def showEvent(self, event: QtCore.QShowEvent) -> None:  # type: ignore[override]
@@ -333,6 +424,9 @@ class PlotsDialog(QtWidgets.QDialog):
         east: Sequence[float],
         up: Sequence[float],
         labels: Sequence[str],
+        *,
+        simulated: bool = False,
+        provenance_statement: str = "",
     ) -> None:
         """Update all three plots.  Coordinates in A/m (N, E, Up)."""
         summary = build_quicklook_summary(north, east, up, labels)
@@ -357,13 +451,36 @@ class PlotsDialog(QtWidgets.QDialog):
             "inclination": summary["inclination"],
             "declination": summary["declination"],
         }
-        set_semantic_status(
-            self._demo_lbl,
-            f"Measurement data: {len(summary['labels'])} step"
-            f"{'s' if len(summary['labels']) != 1 else ''}",
-            "ready",
-            accessible_name="Plot data provenance status",
-        )
+        if simulated:
+            statement = provenance_statement.strip() or (
+                "Example plot data; not hardware evidence"
+            )
+            self._provenance = {
+                "kind": "simulated",
+                "simulated": True,
+                "statement": statement,
+            }
+            set_semantic_status(
+                self._demo_lbl,
+                statement,
+                "simulated",
+                accessible_name="Plot data provenance status",
+            )
+        else:
+            statement = provenance_statement.strip() or "Measurement quicklook data."
+            self._provenance = {
+                "kind": "measurement",
+                "simulated": False,
+                "statement": statement,
+            }
+            set_semantic_status(
+                self._demo_lbl,
+                f"Measurement data: {len(summary['labels'])} step"
+                f"{'s' if len(summary['labels']) != 1 else ''}",
+                "ready",
+                accessible_name="Plot data provenance status",
+            )
+        self._export_btn.setEnabled(bool(summary["labels"]))
 
     def quicklook_summary(self) -> dict[str, object]:
         """Return a reproducible summary of the current quicklook data."""
@@ -382,12 +499,18 @@ class PlotsDialog(QtWidgets.QDialog):
             "intensity": list(data.get("intensity", [])),
             "inclination": list(data.get("inclination", [])),
             "declination": list(data.get("declination", [])),
+            "provenance": dict(self._provenance),
         }
 
     def write_quicklook_json(self, path: str | Path) -> Path:
         """Write the current quicklook summary as a JSON sidecar artifact."""
 
         return write_quicklook_json(path, self.quicklook_summary())
+
+    def write_quicklook_csv(self, path: str | Path) -> Path:
+        """Write the current quicklook data and provenance as CSV."""
+
+        return write_quicklook_csv(path, self.quicklook_summary())
 
     # ── UI ─────────────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
@@ -453,9 +576,17 @@ class PlotsDialog(QtWidgets.QDialog):
             "Load synthetic values for UI demonstration only; not hardware evidence"
         )
         self._demo_btn.clicked.connect(self._load_demo)
+        self._export_btn = QtWidgets.QPushButton("Export Data…")
+        self._export_btn.setAccessibleName("Export current plot data")
+        self._export_btn.setAccessibleDescription(
+            "Writes atomic JSON or CSV quicklook data with explicit provenance."
+        )
+        self._export_btn.setEnabled(False)
+        self._export_btn.clicked.connect(self._export_data)
         btn_row = QtWidgets.QHBoxLayout()
         btn_row.addWidget(self._demo_btn)
         btn_row.addStretch()
+        btn_row.addWidget(self._export_btn)
         btn_row.addWidget(self._close_btn)
         vl.addLayout(btn_row)
 
@@ -477,8 +608,9 @@ class PlotsDialog(QtWidgets.QDialog):
                 steps_arr[:, 1].tolist(),
                 steps_arr[:, 2].tolist(),
                 labels,
+                simulated=True,
+                provenance_statement="Example plot data; not hardware evidence",
             )
-            self._mark_simulated_example()
             return
 
         import random
@@ -497,13 +629,40 @@ class PlotsDialog(QtWidgets.QDialog):
             [row[1] for row in steps],
             [row[2] for row in steps],
             labels,
+            simulated=True,
+            provenance_statement="Example plot data; not hardware evidence",
         )
-        self._mark_simulated_example()
 
-    def _mark_simulated_example(self) -> None:
-        set_semantic_status(
-            self._demo_lbl,
-            "Example plot data; not hardware evidence",
-            "simulated",
-            accessible_name="Plot data provenance status",
+    def _export_data(self) -> None:
+        if not self.quicklook_summary()["step_count"]:
+            return
+        path, selected_filter = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Export Plot Data",
+            "quicklook.json",
+            "JSON quicklook (*.json);;CSV table (*.csv)",
+        )
+        if not path:
+            return
+        target = Path(path)
+        try:
+            if target.suffix.lower() == ".csv" or selected_filter.startswith("CSV"):
+                if target.suffix.lower() != ".csv":
+                    target = target.with_suffix(".csv")
+                written = self.write_quicklook_csv(target)
+            else:
+                if target.suffix.lower() != ".json":
+                    target = target.with_suffix(".json")
+                written = self.write_quicklook_json(target)
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Export Plot Data",
+                f"Could not export plot data:\n{exc}",
+            )
+            return
+        QtWidgets.QMessageBox.information(
+            self,
+            "Export Plot Data",
+            f"Plot data exported to:\n{written}",
         )

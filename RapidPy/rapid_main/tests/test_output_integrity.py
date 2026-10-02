@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 from rapid_main.data_model import MeasurementStep, SampleIndexRegistration, SampleIndexRegistrations, SpecimenMeta
@@ -15,7 +16,11 @@ from rapid_main.io.measurement_bundle import (
     BundleNotCommittedError,
     MeasurementBundleWriter,
 )
-from rapid_main.magnetometer import BlockAudit, BracketedMeasurementBlock
+from rapid_main.magnetometer import (
+    BlockAudit,
+    BracketedMeasurementBlock,
+    ObservationIntegrityError,
+)
 from rapid_main.measurement_worker import MeasurementWorker
 from rapid_main.specimen_metadata import resolve_specimen_meta
 
@@ -178,19 +183,24 @@ class SimulationIsolationTests(unittest.TestCase):
         worker.run()
 
         self.assertTrue(any("SIMULATED RUN" in message for message in warnings))
-        summary = json.loads((self.tmp / "workflow_summary.json").read_text(encoding="utf-8"))
+        published = self.tmp / SIMULATED_SUBDIR
+        summary = json.loads((published / "workflow_summary.json").read_text(encoding="utf-8"))
         self.assertTrue(summary["simulated"])
         self.assertIn("SIMULATED RUN", summary["simulation_statement"])
-        index = json.loads((self.tmp / "artifact_index.json").read_text(encoding="utf-8"))
+        index = json.loads((published / "artifact_index.json").read_text(encoding="utf-8"))
         self.assertTrue(index["simulated"])
         self.assertEqual(
             index["calibration_record_ids"],
             ["calibration-squid-v003-example"],
         )
-        self.assertTrue((self.tmp / SIMULATED_SUBDIR / "SIM01").exists())
+        self.assertTrue((published / "SIM01").exists())
         self.assertFalse((self.tmp / "SIM01").exists())
+        self.assertFalse((self.tmp / "workflow_summary.json").exists())
+        self.assertFalse((self.tmp / "communication.tsv").exists())
+        self.assertFalse((self.tmp / "susceptibility.json").exists())
+        self.assertFalse((self.tmp / "artifact_index.json").exists())
         provenance = json.loads(
-            (self.tmp / SIMULATED_SUBDIR / "provenance.json").read_text(encoding="utf-8")
+            (published / "provenance.json").read_text(encoding="utf-8")
         )
         self.assertEqual(
             provenance["calibration_record_ids"],
@@ -201,6 +211,22 @@ class SimulationIsolationTests(unittest.TestCase):
             summary["calibration_record_ids"],
             ["calibration-squid-v003-example"],
         )
+
+    def test_live_worker_rejects_mid_run_simulated_block_before_state_mutation(self) -> None:
+        worker = MeasurementWorker(
+            meta=_meta("LIVE01"),
+            labels=["NRM"],
+            output_dir=self.tmp,
+            backend=object(),
+        )
+        block = SimpleNamespace(audit=SimpleNamespace(simulated=True))
+        result = object()
+
+        with self.assertRaisesRegex(ObservationIntegrityError, "declared as live"):
+            worker._record_block_evidence(block, result)  # type: ignore[arg-type]
+
+        self.assertIsNone(worker._last_block_result)
+        self.assertIsNone(worker._last_block_audit)
 
 
 class _RejectingBackend:
