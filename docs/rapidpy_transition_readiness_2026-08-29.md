@@ -242,7 +242,9 @@ explicit hardware operation, never a silent accept.
 - susceptibility, VRM, and rock-magnetic acquisition with reproducible bundles;
 - interrupted-queue recovery and physical safe-state acceptance;
 - DC motor encoder, torque/current, stall, limit, and direction verification;
-- serial retry/backoff and stale-reply rejection. The production bracketed
+- coherent whole-block serial retry/backoff. Numeric SQUID queries now discard
+  uncorrelated buffered input before sending and reject unterminated partial
+  responses, so stale or partial numeric data cannot be accepted. The production bracketed
   SQUID adapter now carries exact raw TX/RX/error events into each run's
   `communication.tsv` exactly once, with simulated evidence excluded from the
   live adapter stream; equivalent integration for other retained adapters and
@@ -289,7 +291,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **484 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **486 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
@@ -339,6 +341,11 @@ summary:
   `communication.tsv`; simulated adapters cannot publish this stream as live
   evidence. Five focused tests cover ordering, propagation, immutability,
   idempotence, and simulation isolation without opening a hardware port.
+- Raw SQUID numeric queries now flush pre-command buffered input and require a
+  CR terminator. Focused fake-serial tests prove a stale numeric line is
+  discarded and an unterminated partial numeric response fails closed. No
+  automatic in-place read retry was added because the 2G protocol has no reply
+  correlation token; retry must restart a newly latched coherent block.
 - `python -m compileall` is clean across `rapid_main`, its tests,
   `updown_control`, and `rapidpy_common`. The repository configures no linter
   or type checker (no ruff/flake8/mypy config and no lint CI job), so none was

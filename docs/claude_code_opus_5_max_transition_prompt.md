@@ -75,9 +75,11 @@ implementation baseline:
 - `be275be` — record quicklook artifact reconciliation; and
 - `af2eee0` — integrate principal-axis and moment-decay review into Plots; and
 - `27bd276` — record integrated analysis readiness; and
-- `42edead` — carry exact production SQUID transport evidence into run bundles.
+- `42edead` — carry exact production SQUID transport evidence into run bundles;
+  and
+- `6b40b81` — reject stale buffered and unterminated partial SQUID replies.
 
-The complete RapidPy suite now reports **484 passing tests** using
+The complete RapidPy suite now reports **486 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -92,9 +94,10 @@ shows a remaining gap.
 
 Work in this priority order:
 
-1. harden serial timeout/retry/backoff and stale-reply rejection at testable
-   protocol boundaries, then extend raw communication evidence to each other
-   retained live adapter without touching hardware;
+1. implement safe coherent-block timeout retry/backoff at a testable protocol
+   boundary, then extend raw communication evidence to each other retained live
+   adapter without touching hardware. Stale buffered and unterminated partial
+   SQUID replies are already rejected; do not add an unsafe per-query retry;
 2. finish the remaining evidence-backed software parity rows and testable
    protocol/replay boundaries for thermal, AF, vacuum, IRM/ARM, susceptibility,
    VRM, rockmag, and transport robustness; keep physical acceptance named and
@@ -151,9 +154,12 @@ Focused tests prove:
 
 Coverage lives in `tests/test_squid_transport.py`,
 `tests/test_communication_log.py`, and `tests/test_measurement_worker.py`. The
-next transport work is deterministic timeout/retry/backoff and stale-response
-rejection, followed by equivalent raw evidence for other retained live
-adapters. Keep physical transcript collection explicitly pending.
+next transport work is deterministic whole-block timeout retry/backoff, followed
+by equivalent raw evidence for other retained live adapters. `RawSquidClient`
+already flushes uncorrelated pre-command input and requires CR-terminated
+replies. Because the 2G protocol has no reply correlation token, do not retry an
+individual `SC`/`SD` query in place; discard and reacquire a newly latched whole
+block instead. Keep physical transcript collection explicitly pending.
 
 The truthful empty Plots/Sample Selection/Queue states, real `.sam`/`.csv`
 sample-index-to-queue workflow, No-Communication-only AF examples, atomic
