@@ -69,9 +69,10 @@ implementation baseline:
 - `d170a93` — finish the glass data/review-dialog slice; and
 - `1536b5b` — finish the remaining glass dialogs and runtime fixes; and
 - `dfa70ae` — add transactional plot exports and complete simulation-artifact isolation; and
-- `c0047ac` — reconcile quicklook publication with the run artifact index.
+- `c0047ac` — reconcile quicklook publication with the run artifact index; and
+- `af2eee0` — integrate principal-axis and moment-decay review into Plots.
 
-The complete RapidPy suite now reports **475 passing tests** using
+The complete RapidPy suite now reports **479 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -118,6 +119,11 @@ and explicit real/simulated provenance. All simulated/replay core and auxiliary
 artifacts publish under `SIMULATED`, and a live-declared backend returning a
 simulated block is rejected before accepted state or output mutation. Preserve
 this boundary; do not move sidecars back beside production output.
+The Plots Analysis tab and exports now reuse `rapid_main.analysis` for
+North/East/Down PCA direction, explained variance, RMS perpendicular residual,
+moment statistics, decay ratios, monotonicity, and log-decay slope. Do not build
+a parallel analysis implementation; remaining plot work must be tied to a
+specific missing legacy surface or real-bundle acceptance evidence.
 
 ### Completed assignment: reachable dialogs
 

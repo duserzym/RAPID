@@ -247,9 +247,10 @@ explicit hardware operation, never a silent accept.
 
 ### P2 — operator and analysis parity
 
-- complete advanced plot/analysis surfaces and validate them against real run
-  bundles. Operator JSON/CSV quicklook exports are now schema-checked, atomic,
-  and provenance-marked in software;
+- validate the integrated Zijderveld/equal-area/intensity/PCA/decay review
+  surfaces against real run bundles and identify any remaining legacy-specific
+  plot types. Operator JSON/CSV exports are schema-checked, atomic, and
+  provenance-marked in software;
 - all dialogs, status displays, hardware monitor states, and operator messages
   verified at production resolution;
 - dependency-clean installation and configuration migration exercised under
@@ -285,7 +286,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **475 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **479 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
@@ -325,6 +326,10 @@ summary:
   output mutation.
 - After the panel publishes `quicklook.json`, it atomically reconciles the
   worker's `artifact_index.json` entry with the file's actual presence and size.
+- Plot review now exposes the shared PCA and moment-decay evidence in an
+  accessible Analysis tab and in JSON/CSV: North/East/Down principal direction,
+  explained variance, RMS perpendicular residual, moment statistics, decay
+  ratios, monotonicity, and log-decay slope.
 - `python -m compileall` is clean across `rapid_main`, its tests,
   `updown_control`, and `rapidpy_common`. The repository configures no linter
   or type checker (no ruff/flake8/mypy config and no lint CI job), so none was
