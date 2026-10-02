@@ -4,7 +4,37 @@ Copy everything below into Claude Code Opus 5 Max while it is opened at the root
 
 ---
 
-You are working in the RAPID instrument-control repository on the current branch. Your goal is to close the remaining safety and functional gaps required for RapidPy to replace the legacy VB6 Paleomag application, beginning with the P0 live-measurement path. Treat this as laboratory instrument software: do not fabricate hardware evidence, do not silently fall back to simulation, and do not allow a rejected measurement block to update holder state or production output.
+You are working in the RAPID instrument-control repository on the current
+branch. Take ownership of completing and polishing the main
+`RapidPy/rapid_main` application so it can become the practical replacement for
+the legacy VB6 Paleomag application. The immediate goal has two equal parts:
+
+1. redesign the main application with a coherent, production-quality
+   glassmorphism interface; and
+2. finish the remaining software functionality required for VB6 parity while
+   keeping hardware-only validation gates explicit.
+
+Treat this as laboratory instrument software. Do not fabricate hardware
+evidence, silently fall back to simulation, actuate hardware without explicit
+operator authorization, or allow a rejected measurement block to update holder
+state or production output.
+
+## Current-state rule
+
+The detailed P0 phases later in this prompt describe safety requirements that
+must remain true, but much of that implementation is now already present. The
+current readiness assessment reports bracketed acquisition, coherent SQUID
+evidence, X/Y/Z discontinuity rejection, recovery and retry exhaustion,
+measured holder correction, holder-gated sample measurement, fail-closed
+hardware mode, simulation isolation, transactional output, duplicate-free
+resume, metadata resolution, and replay fixtures as code-complete. Verify those
+claims against code and tests before changing them; do not blindly reimplement
+working services.
+
+Treat the repository and current tests as the source of truth. Correct stale
+documentation and inherited test counts. Classify every finding as implemented,
+intentionally retired, hardware-gated, or a real software gap. “Complete” does
+not mean inventing physical-system acceptance evidence.
 
 Read these files first:
 
@@ -21,12 +51,116 @@ Read these files first:
 - `RapidPy/rapid_main/rapid_main/queue_compiler.py`
 - `RapidPy/rapid_main/rapid_main/panels/measurement.py`
 - `RapidPy/updown_control/updown_control/app.py`
+- `RapidPy/rapidpy_common/ui.py`
+- every module under `RapidPy/rapid_main/rapid_main/panels/` and every dialog
+  reachable from the main application
+- the main-app UI, layout, bootstrap, workflow, orchestration,
+  output-integrity, acquisition, holder, and parity tests
 
 Preserve all current user changes and existing commits. Inspect `git status`, `git diff`, and recent history before editing. Never use destructive Git commands. Split your work into focused commits and list every commit in your handoff.
 
+## Primary workstream: glassmorphism and operator usability
+
+The current UI contains scattered translucent stylesheet rules, but it is not
+yet a unified glassmorphism product. Build one centralized, testable design
+system rather than layering more page-local CSS onto it.
+
+Use the existing Berkeley/RAPID identity as the anchor: deep maroon, restrained
+gold, warm neutral foregrounds, and high-contrast semantic colors. The result
+must feel like a serious scientific control surface, not a generic consumer
+dashboard.
+
+Implement:
+
+- a subtle layered background with restrained gradients or aurora treatment;
+- translucent glass surfaces for the header, navigation, cards, dialogs,
+  tables, plots, and grouped controls;
+- consistent surface opacity, borders, radii, elevation/shadows, spacing,
+  typography, focus rings, and hover/pressed/checked/disabled states;
+- reusable design tokens and helpers in the shared or main-app UI layer;
+- a reliable opaque/translucent fallback where platform effects are unavailable;
+- clear hierarchy for live values, units, warnings, queue state,
+  hardware/simulation state, and destructive actions;
+- responsive layouts with scroll behavior where content cannot fit;
+- keyboard navigation, visible focus, reasonable hit targets, accessible
+  contrast, and no color-only status communication;
+- reduced-motion or non-animated presentation for safety-critical state changes.
+
+Qt stylesheets do not provide true cross-platform backdrop blur. Do not claim
+that they do. If native blur is added, isolate it behind a best-effort Windows
+helper and keep a deterministic fallback. Prefer reliable layered painting,
+alpha surfaces, and restrained shadows over fragile platform tricks.
+
+Review the current compact-window constants critically. Keep every window
+on-screen, including on small and mixed-DPI displays, but do not force the main
+scientific workspace into a tiny phone-like width merely because an old test
+encodes the current value. Update stale layout tests when the intended desktop
+behavior changes. Navigation labels, charts, tables, and primary actions must
+not clip.
+
+Apply the design consistently to the application shell, Dashboard, Sample
+Queue, Sequence, Live Measure, Settings, Calibration Center, and every dialog
+reachable from the main application. Do not redesign unrelated standalone apps
+unless a shared-theme change requires a compatibility fix; keep shared-theme
+changes backward-compatible or create an explicit main-app variant.
+
+Render representative offscreen screenshots at more than one window size and
+inspect them. If native Windows capture is available, also inspect the real
+rendered application. Do not approve the design only because the stylesheet
+parses. Check contrast, clipping, scrolling, alignment, plot legibility,
+keyboard focus, disabled states, and unmistakable safety/simulation status.
+
+## Primary workstream: close real main-app functionality gaps
+
+Build a traceability table from every visible action/control to the service it
+invokes, the state it changes, its persistence/output, and its test. Search for
+placeholders, disconnected or permanently disabled controls, `pass`, `TODO`,
+`NotImplementedError`, broad exception-to-simulator fallbacks, and actions that
+only update a label without invoking a real service. Then close the genuine
+software gaps.
+
+At minimum, verify and finish:
+
+1. Dashboard diagnostics, truthful live/no-communication/simulation state,
+   refresh evidence, errors, and recovery/configuration routes.
+2. Queue add/edit/remove/reorder/import, preflight, holder commands, treatment
+   and measurement orchestration, pause/resume/halt, interrupted-run choices,
+   safe return, persistence, progress, and actionable failures.
+3. Sequence validation, treatment-specific parameters, import/edit/save-as,
+   dirty-state prompts, compilation, and mapping into queue commands.
+4. Live readings and quality evidence, complete step history, retained
+   scientific plots, exports/quicklook artifacts, and truthful empty/error
+   states without dummy data outside explicit simulation.
+5. Settings validation and persistence, VB6 INI/calibration import,
+   unmapped-key reporting, backup/restore, and restart-required messaging.
+6. Auditable calibration versions, operator/context metadata,
+   validation/expiry/invalid state, import/export, non-destructive rollback,
+   and measurement linkage.
+7. Hardware-dialog control wiring, ownership/preflight, timeouts, telemetry,
+   safe failures, communication evidence, and visible unavailable/simulated
+   state.
+8. Searchable “Where did this VB6 control go?” help, first-run guidance, and
+   transition sheets for active workflows.
+9. Login/authorization where retained, controlled shutdown, unsaved-work
+   prompts, halt-before-exit, layout restore, logging, and useful diagnostics.
+10. Clean-environment startup and packaging, resources/icons, configuration
+    discovery, useful missing-dependency errors, and removal of source-tree-only
+    assumptions.
+
+Do not make fake implementations merely to make controls appear wired. When a
+feature requires unavailable physical hardware, complete its protocol boundary,
+preflight, state machine, replay/simulator fixture, failure behavior, evidence
+schema, and tests, then label live acceptance as pending.
+
+Use `docs/vb6_parity_inventory.md` as the controlling inventory and reconcile
+it with active items in `VB6/Paleomag v3.vbp`. Every item must end in one of
+four evidence-backed states: implemented and software-verified; implemented but
+pending named hardware acceptance; intentionally retired with an approved
+replacement; or blocked with the exact dependency and next safe action.
+
 ## Verified VB6 environment state on this computer
 
-The VB6 launch section in `docs/rapidpy_transition_readiness_2026-08-29.md` is stale. Update that document as part of this handoff; do not repeat its claim that the IDE and Microsoft controls are absent.
+Re-verify the VB6 launch section in `docs/rapidpy_transition_readiness_2026-08-29.md` before changing it. It now records the English IDE repair; preserve that evidence and update only facts that you directly verify.
 
 The following was verified directly on this computer without rebooting:
 
@@ -58,11 +192,13 @@ The repository already contains:
 - worker logic that invokes `recover_flux_count_discontinuity` only when a backend explicitly implements it;
 - unit tests for the archived X step, valid reduction, monotonic staircase rejection, and recovery-hook ordering.
 
-Do not weaken those rules or reintroduce “accept after N retries.” A discontinuous block must always be discarded. Review the implementation and add tests for Y and Z steps, down-orientation transforms, holder subtraction, retry exhaustion, no recovery hook, and proof that output/holder state is unchanged after rejection.
+Do not weaken those rules or reintroduce “accept after N retries.” A discontinuous block must always be discarded. Verify that tests cover X, Y, and Z steps, down-orientation transforms, holder subtraction, retry exhaustion, no recovery hook, and proof that output/holder state is unchanged after rejection; add tests only for coverage that is genuinely missing.
 
-## Phase 1: implement the production bracketed SQUID path
+## Existing P0 specification: preserve and verify the production bracketed SQUID path
 
-Replace the current single-startup-baseline/live-single-read design with an explicit, testable acquisition state machine. The production measurement backend must acquire:
+Use the requirements below as an acceptance specification. First inspect the current acquisition service, transport evidence, recovery path, and tests. Preserve working implementations and implement only requirements that evidence shows are missing.
+
+The production measurement backend must use an explicit, testable acquisition state machine that acquires:
 
 1. verified up/down motion to zero position;
 2. zero-before as a coherent three-axis latch/count/DVM observation;
@@ -84,13 +220,13 @@ Verify the exact VB6 semantics rather than guessing:
 - confirm range and per-axis calibration application order;
 - preserve the last accepted holder until a new holder block passes every check.
 
-The current `RawSquidClient.read_xyz_raw` returns combined values. Extend the transport/evidence model to retain the atomic latch sequence, separate counter and DVM readings, raw replies, timestamps, and range. Reject partial, stale, malformed, mismatched, timed-out, or non-finite observations. Ensure all three axes belong to one documented latch/read cycle.
+Verify that the live transport/evidence model retains the atomic latch sequence, separate counter and DVM readings, raw replies, timestamps, and range. Reject partial, stale, malformed, mismatched, timed-out, or non-finite observations. Ensure all three axes belong to one documented latch/read cycle.
 
-Implement `recover_flux_count_discontinuity` for the live backend. It must move to a safe zero state, clear/re-latch/reset the relevant 2G path using the verified hardware commands, wait for stabilization, record the recovery, and restart the entire block. On retry exhaustion or recovery failure, halt through the shared safe-state path and produce a clear operator error. Never synthesize a successful result.
+Verify the live backend implements `recover_flux_count_discontinuity`. It must move to a safe zero state, clear/re-latch/reset the relevant 2G path using the verified hardware commands, wait for stabilization, record the recovery, and restart the entire block. On retry exhaustion or recovery failure, halt through the shared safe-state path and produce a clear operator error. Never synthesize a successful result.
 
-## Phase 2: make holder correction a real measured state
+## Existing P0 specification: preserve and verify measured holder state
 
-The queue currently treats `Holder` mostly as changer motion. Implement a complete holder-measurement command:
+Verify that the queue implements `Holder` as a complete measured-state command, not merely changer motion. Where evidence is missing, complete the path so it can:
 
 - acquire and validate a full bracketed block;
 - persist holder ID/location, direction, four raw and adjusted vectors, zeros, range/calibration, timestamps, software version, and validation evidence;
@@ -102,7 +238,7 @@ The queue currently treats `Holder` mostly as changer motion. Implement a comple
 
 Add replay fixtures representing stable holders and the archived failure. Test queue-level behavior, not just math helpers.
 
-## Phase 3: make hardware mode fail closed
+## Existing P0 specification: preserve and verify fail-closed hardware mode
 
 Audit every backend factory and `QueueHardwareBackend`. In explicit simulation/no-communication mode, simulated backends are allowed and must be visibly labeled. In hardware mode, any missing package, driver, port, calibration, adapter, or connection must fail preflight and prevent queue start. Remove broad exception-to-simulator fallback in hardware mode. Preserve diagnostic details and a safe operator message.
 
@@ -114,7 +250,7 @@ Guarantee that simulated results:
 
 Add tests for missing imports, unavailable ports, constructor errors, failed identity checks, and mixed live/sim configurations.
 
-## Phase 4: metadata, persistence, and parity evidence
+## Existing P0 specification: preserve and verify metadata and persistence
 
 Trace the complete metadata path from sample selection and queue compilation to `SpecimenMeta` and every output. Remove blank placeholder fields where VB6 has real values. Preserve sample, site, location, volume, orientation, holder association, treatment, comments, run ID, calibration version, and raw evidence references.
 
@@ -131,7 +267,7 @@ Create deterministic VB6 parity fixtures for:
 
 Document every intentional difference from VB6 and why it is safer or required.
 
-## Phase 5: remaining live acceptance work
+## Remaining live acceptance work
 
 After the P0 path is complete in software, work through the P1/P2 inventory in `docs/rapidpy_transition_readiness_2026-08-29.md`: AF, vacuum, IRM/ARM, ADWIN/DAC/MCC, thermal, susceptibility, VRM, rockmag, motors, serial robustness, plots/exports, installer/config migration, backup/restore, and rollback.
 
