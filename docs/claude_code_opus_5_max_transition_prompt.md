@@ -54,9 +54,11 @@ implementation baseline:
 - `df8c3ce` — isolate AF examples from live hardware; and
 - `abebb65` — add atomic settings backup and restore;
 - `a861d46` — refresh readiness and Claude handoff evidence; and
-- `dcb402d` — add searchable VB6 transition help.
+- `dcb402d` — add searchable VB6 transition help;
+- `d784bdb` — update this handoff after transition help; and
+- `0fd469b` — add the auditable calibration lifecycle and measurement linkage.
 
-The complete RapidPy suite now reports **435 passing tests** using
+The complete RapidPy suite now reports **440 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -71,25 +73,24 @@ shows a remaining gap.
 
 Work in this priority order:
 
-1. complete the Calibration approval/version/expiry/invalidity/rollback
-   registry and link the selected calibration record ID into every measurement
-   bundle; timestamped artifacts and config hashes exist, but that lifecycle is
-   not complete;
-2. complete clean-environment packaging/startup verification, including
+1. complete clean-environment packaging/startup verification, including
    resources, icons, dependency diagnostics, configuration discovery, and
    removal of source-tree-only assumptions;
-3. finish the remaining evidence-backed parity rows, especially live thermal,
+2. finish the remaining evidence-backed parity rows, especially live thermal,
    AF, vacuum, IRM/ARM, susceptibility, VRM, rockmag, and transport robustness;
-4. render and inspect the remaining reachable dialogs at small and normal
+3. render and inspect the remaining reachable dialogs at small and normal
    desktop sizes, fixing any glass-theme or keyboard/accessibility omissions;
-5. reconcile the parity/readiness documents only after the corresponding code
+4. reconcile the parity/readiness documents only after the corresponding code
    and tests exist.
 
 The truthful empty Plots/Sample Selection/Queue states, real `.sam`/`.csv`
 sample-index-to-queue workflow, No-Communication-only AF examples, atomic
 settings backup/validated restore/restart messaging, and searchable
 “Where did this VB6 control go?” transition help are already implemented and
-tested. Do not recreate them.
+tested. The Calibration Center now also has immutable artifact snapshots,
+versioned approvals, expiry and invalidation state, event-based rollback, hash
+integrity checks, and active record IDs in measurement provenance. Do not
+recreate these paths; hardware/reference-standard acceptance remains pending.
 
 Do not represent placeholder thermal estimates, simulated plots, demo samples,
 or No-Communication results as hardware evidence. An explicit simulation tool
@@ -198,7 +199,9 @@ At minimum, verify and finish:
    unmapped-key reporting, backup/restore, and restart-required messaging.
 6. Auditable calibration versions, operator/context metadata,
    validation/expiry/invalid state, import/export, non-destructive rollback,
-   and measurement linkage.
+   and measurement linkage. The append-only registry, UI lifecycle controls,
+   artifact integrity checks, and measurement linkage are complete; verify
+   them and add only evidence-backed gaps or required import/export formats.
 7. Hardware-dialog control wiring, ownership/preflight, timeouts, telemetry,
    safe failures, communication evidence, and visible unavailable/simulated
    state.

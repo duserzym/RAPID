@@ -251,9 +251,10 @@ explicit hardware operation, never a silent accept.
 - all dialogs, status displays, hardware monitor states, and operator messages
   verified at production resolution;
 - installation and configuration migration exercised on the RAPID computer;
-- calibration approval/version/expiry/invalidity/rollback lifecycle completed
-  and exercised (settings backup/restore is software-complete, but this is not
-  a substitute for a calibration-record registry).
+- calibration approvals exercised against real reference standards and signed
+  by the operating lab. The append-only version/expiry/invalidity/rollback
+  registry and measurement-record linkage are software-complete; that does not
+  constitute physical calibration acceptance.
 
 ## Safe connection and acceptance sequence
 
@@ -279,7 +280,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **435 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **440 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
