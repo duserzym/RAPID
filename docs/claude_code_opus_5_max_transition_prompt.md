@@ -63,9 +63,12 @@ implementation baseline:
 - `13bad6b` — record the isolated package verification evidence; and
 - `dd2e057` — finish the first glass hardware-dialog and accessibility slice;
   and
-- `153fb63` — finish the glass guidance and transition-dialog slice.
+- `3a6ac66` — record the first glass-dialog readiness evidence; and
+- `153fb63` — finish the glass guidance and transition-dialog slice;
+- `786c36a` — record the guidance-dialog readiness evidence; and
+- `d170a93` — finish the glass data/review-dialog slice.
 
-The complete RapidPy suite now reports **459 passing tests** using
+The complete RapidPy suite now reports **463 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -80,10 +83,10 @@ shows a remaining gap.
 
 Work in this priority order:
 
-1. continue the reachable-dialog glass/accessibility audit described in the
+1. finish the reachable-dialog glass/accessibility audit described in the
    immediate assignment below. Vacuum, IRM/ARM, SQUID, Login, About, Quick
-   Start, and Transition Help are complete; proceed through the remaining
-   reachable dialogs without regressing their contracts;
+   Start, Transition Help, Plots, Sample Selection, and Webcam are complete;
+   the remaining named dialogs are Debug Console, Step Monitor, and DC Motors;
 2. finish the remaining evidence-backed software parity rows, especially live
    thermal, AF, vacuum, IRM/ARM, susceptibility, VRM, rockmag, and transport
    robustness;
@@ -99,7 +102,11 @@ The truthful empty Plots/Sample Selection/Queue states, real `.sam`/`.csv`
 sample-index-to-queue workflow, No-Communication-only AF examples, atomic
 settings backup/validated restore/restart messaging, and searchable
 “Where did this VB6 control go?” transition help are already implemented and
-tested. The Calibration Center now also has immutable artifact snapshots,
+tested. Plots now distinguishes real measurement data from visibly labeled
+example data, Sample Selection disables selection until a visible row is
+chosen, and Webcam uses the correct `QtGui.QScreen` geometry contract while
+remaining explicit when its optional dependency is unavailable. The
+Calibration Center now also has immutable artifact snapshots,
 versioned approvals, expiry and invalidation state, event-based rollback, hash
 integrity checks, and active record IDs in measurement provenance. Do not
 recreate these paths; hardware/reference-standard acceptance remains pending.
@@ -117,21 +124,26 @@ semantic non-color-only states, accessible control metadata, compact form
 wrapping/scrolling, and explicit unavailable behavior. The second slice is
 complete in `153fb63`: Login, About, Quick Start, and Transition Help now use
 the shared system with compact action visibility and accessibility coverage.
-Continue with plots, debug console, step monitor, sample selection, DC motors,
-and webcam.
+The third slice is complete in `d170a93`: Plots, Sample Selection, and Webcam
+now use the shared dialog contract, expose accessible controls, retain compact
+actions, communicate real versus simulated data in words and semantic state,
+and fix Webcam's screen-type handling. Continue with Debug Console, Step
+Monitor, and DC Motors. Audit each dialog's real service wiring while touching
+it, but keep protocol or hardware acceptance gaps separate from visual work.
 
 The first audit found numerous dialog-local `setStyleSheet(...)` calls, sparse
 accessible names/descriptions, status labels whose meaning is conveyed mainly
 by color, and several fixed/minimum-width assumptions. Treat these as findings
-to verify in the current tree, not as permission to mechanically delete styles
-or shrink safety-critical controls.
+to verify in the three remaining dialogs, not as permission to mechanically
+delete styles or shrink safety-critical controls.
 
 For this pass:
 
-- extend the centralized design system in `rapid_main/glass_theme.py` with
-  reusable dialog title/subtitle, readout-card, and semantic-status contracts;
-- provide one helper for semantic state that sets visible text, a stable Qt
-  property, accessibility metadata, and repolishes the widget;
+- reuse the centralized dialog title/subtitle, readout-card, and
+  semantic-status contracts in `rapid_main/glass_theme.py`; extend them only
+  when a remaining dialog demonstrates a reusable gap;
+- use the existing semantic-state helper so visible text, the stable Qt
+  property, accessibility metadata, and widget repolishing stay consistent;
 - ensure states such as ready, warning, error, unavailable, and simulated are
   understandable without color alone;
 - replace conflicting page-local styling in the audited dialogs with shared
