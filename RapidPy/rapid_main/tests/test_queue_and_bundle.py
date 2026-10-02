@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime
 from pathlib import Path
 
@@ -324,6 +325,23 @@ class TestHardwareContracts(unittest.TestCase):
 
         backend = build_measurement_backend(cfg)
         self.assertIsInstance(backend, NoCommBackend)
+
+    def test_hardware_backend_reuses_injected_susceptibility_owner(self) -> None:
+        cfg = AppConfig()
+        cfg.general.nocomm = False
+        shared = object()
+        from rapid_main.hardware_contracts import build_measurement_backend
+
+        with mock.patch("rapid_main.hardware_contracts.MotorSerialClient"):
+            with mock.patch("rapid_main.diagnostic_services.build_squid_backend", return_value=object()):
+                with mock.patch("rapid_main.diagnostic_services.build_irm_arm_backend", return_value=object()):
+                    with mock.patch("rapid_main.diagnostic_services.build_af_demag_backend", return_value=object()):
+                        backend = build_measurement_backend(
+                            cfg,
+                            susceptibility_backend=shared,
+                        )
+
+        self.assertIs(backend.susceptibility_backend, shared)
 
     def test_queue_backend_preflight_blocks_without_configured_lift_positions(self) -> None:
         cfg = AppConfig()

@@ -661,6 +661,12 @@ class SusceptibilityBackend(Protocol):
     def is_connected(self) -> bool:
         ...
 
+    def test_connection(self) -> bool:
+        ...
+
+    def disconnect(self) -> None:
+        ...
+
     def status(self) -> str:
         ...
 
@@ -1178,6 +1184,12 @@ class SusceptibilityNoCommBackend(_BaseBackend, SusceptibilityBackend):
     def is_connected(self) -> bool:
         return True
 
+    def test_connection(self) -> bool:
+        return True
+
+    def disconnect(self) -> None:
+        self._status = "No-comm susceptibility bridge simulator"
+
     def status(self) -> str:
         return self._status
 
@@ -1321,13 +1333,8 @@ class SusceptibilityBackendAdapter(_BaseBackend, SusceptibilityBackend):
             scale_factor=float(self._cfg.scale_factor),
         )
         self._client = client or SusceptibilitySerialClient(transport_cfg)
-        self._client.connect()
-        if not self._client.is_connected:
-            raise HardwareUnavailableError(
-                f"Susceptibility bridge did not connect on {self._cfg.port}:{self._cfg.baud}."
-            )
         self._status = (
-            f"Connected to susceptibility bridge ({self._cfg.port}:{self._cfg.baud})"
+            f"Susceptibility bridge ready ({self._cfg.port}:{self._cfg.baud}); disconnected"
         )
 
     def is_connected(self) -> bool:
@@ -1336,12 +1343,34 @@ class SusceptibilityBackendAdapter(_BaseBackend, SusceptibilityBackend):
     def status(self) -> str:
         return self._status
 
+    def test_connection(self) -> bool:
+        """Open the bridge only after an operator-owned workflow requests it."""
+
+        if not self._client.is_connected:
+            self._client.connect()
+        if not self._client.is_connected:
+            raise HardwareUnavailableError(
+                f"Susceptibility bridge did not connect on {self._cfg.port}:{self._cfg.baud}."
+            )
+        self._status = (
+            f"Connected to susceptibility bridge ({self._cfg.port}:{self._cfg.baud})"
+        )
+        return True
+
+    def _require_connected(self) -> None:
+        if not self.is_connected():
+            raise DiagnosticContractError(
+                "Susceptibility bridge is disconnected. Connect it before sending commands."
+            )
+
     def zero(self) -> str:
+        self._require_connected()
         reply = self._client.zero()
         self._status = "Susceptibility bridge zero confirmed."
         return reply
 
     def measure(self) -> float:
+        self._require_connected()
         value = self._client.measure()
         self._status = f"Susceptibility bridge reading: {value:.9g}"
         return value

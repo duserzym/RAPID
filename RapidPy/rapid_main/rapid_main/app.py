@@ -408,11 +408,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.config: AppConfig = AppConfig.load()
         self._current_sample = "UNKNOWN"
         self.sample_registrations = None
-        self._measurement_backend: MeasurementAutomationBackend = build_measurement_backend(self.config)
-        self._rebuild_diagnostic_backends(nocomm=bool(self.config.general.nocomm))
         self._ownership = DeviceOwnershipManager()
         self._owned_dialog_leases: dict[str, object] = {}
         self._external_process_leases: dict[int, tuple[object, list[object], QtCore.QTimer]] = {}
+        self._rebuild_diagnostic_backends(nocomm=bool(self.config.general.nocomm))
+        self._measurement_backend: MeasurementAutomationBackend = build_measurement_backend(
+            self.config,
+            susceptibility_backend=self._susceptibility_backend,
+        )
 
         # Runtime estimator — initialised from config step times
         self._estimator = RuntimeEstimator(self.config.sequence.as_estimator_dict())
@@ -1151,10 +1154,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self.set_flow_state("paused")
             return
         self._queue_current_sample = None
-        lease: object | None = None
+        leases: list[object] = []
         command_type = command.command_type
         try:
-            lease = self.acquire_device("changer", "queue_workflow")
+            leases.append(self.acquire_device("changer", "queue_workflow"))
+            if command_type == "Holder" and bool(self.config.susceptibility.enabled):
+                leases.append(
+                    self.acquire_device("susceptibility", "queue_workflow")
+                )
 
             method_name: str
             arg: str | int | None
@@ -1194,7 +1201,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 return_to_safe=True,
             )
         finally:
-            if lease is not None:
+            for lease in reversed(leases):
                 try:
                     lease.release()
                 except Exception:
@@ -1523,6 +1530,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._squid_backend = build_backend_or_unavailable(
             "SQUID", build_squid_backend, self.config.squid, nocomm=nocomm
         )
+        previous_susceptibility = getattr(self, "_susceptibility_backend", None)
+        if previous_susceptibility is not None:
+            disconnect = getattr(previous_susceptibility, "disconnect", None)
+            if callable(disconnect):
+                try:
+                    disconnect()
+                except Exception:
+                    pass
         self._susceptibility_backend = build_backend_or_unavailable(
             "Susceptibility bridge",
             build_susceptibility_backend,
@@ -1541,8 +1556,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_nocomm_toggled(self, on: bool) -> None:
         self.config.general.nocomm = bool(on)
         self.config.save()
-        self._measurement_backend = build_measurement_backend(self.config)
         self._rebuild_diagnostic_backends(nocomm=bool(on))
+        self._measurement_backend = build_measurement_backend(
+            self.config,
+            susceptibility_backend=self._susceptibility_backend,
+        )
         self.set_flow_state(self._workflow_state)
         mode = "No-Comm simulation" if on else "hardware"
         self.set_status(f"Operating mode changed to {mode}.")

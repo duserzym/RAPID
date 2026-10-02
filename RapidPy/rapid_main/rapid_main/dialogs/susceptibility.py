@@ -70,6 +70,14 @@ class SusceptibilityDialog(QtWidgets.QDialog):
         layout.addWidget(card)
 
         actions = QtWidgets.QHBoxLayout()
+        self._connect_btn = QtWidgets.QPushButton("Connect")
+        self._connect_btn.setAccessibleName("Connect susceptibility bridge")
+        self._connect_btn.setAccessibleDescription(
+            "Opens the configured Bartington bridge while this diagnostic owns the device."
+        )
+        self._connect_btn.clicked.connect(self._connect)
+        actions.addWidget(self._connect_btn)
+
         self._zero_btn = QtWidgets.QPushButton("Zero Bridge")
         self._zero_btn.setAccessibleName("Zero susceptibility bridge")
         self._zero_btn.setAccessibleDescription(
@@ -122,7 +130,17 @@ class SusceptibilityDialog(QtWidgets.QDialog):
             status = f"Susceptibility backend status failed: {exc}"
         self._zero_btn.setEnabled(connected)
         self._measure_btn.setEnabled(connected)
+        self._connect_btn.setEnabled(not connected)
         self._set_status(status, "ready" if connected else "unavailable")
+
+    @QtCore.Slot()
+    def _connect(self) -> None:
+        try:
+            self._backend.test_connection()
+        except Exception as exc:
+            self._set_status(f"Bridge connection failed: {exc}", "error")
+            return
+        self._refresh_status()
 
     @QtCore.Slot()
     def _zero(self) -> None:

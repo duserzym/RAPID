@@ -531,7 +531,14 @@ class MeasurementPanel(QtWidgets.QWidget):
         try:
             self._last_run_error = False
             self._clear_measurement_plot()
-            self._acquire_ownerships(mw, owner=owner, queue_run=queue_run)
+            self._acquire_ownerships(
+                mw,
+                owner=owner,
+                queue_run=queue_run,
+                needs_susceptibility=any(
+                    str(label).strip().upper() == "SUSC" for label in labels
+                ),
+            )
         except DeviceOwnershipError as exc:
             QtWidgets.QMessageBox.warning(self, "Device Busy", str(exc))
             return False
@@ -972,7 +979,14 @@ class MeasurementPanel(QtWidgets.QWidget):
             }:
                 mw.set_flow_state(phase)
 
-    def _acquire_ownerships(self, window: object, *, owner: str, queue_run: bool) -> None:
+    def _acquire_ownerships(
+        self,
+        window: object,
+        *,
+        owner: str,
+        queue_run: bool,
+        needs_susceptibility: bool = False,
+    ) -> None:
         """Acquire runtime ownership for sample measurement and queue movement."""
         try:
             if hasattr(window, "acquire_measurement_device"):
@@ -981,6 +995,10 @@ class MeasurementPanel(QtWidgets.QWidget):
 
             if queue_run and hasattr(window, "acquire_device"):
                 lease = window.acquire_device("changer", owner)  # type: ignore[arg-type]
+                self._leases.append(lease)
+
+            if needs_susceptibility and hasattr(window, "acquire_device"):
+                lease = window.acquire_device("susceptibility", owner)  # type: ignore[arg-type]
                 self._leases.append(lease)
         except Exception:
             self._release_measurement_ownership()

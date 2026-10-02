@@ -479,12 +479,37 @@ class TestDiagnosticServices(unittest.TestCase):
         cfg = SusceptibilityConfig(enabled=True, port="COM7")
         backend = diagnostic_services.SusceptibilityBackendAdapter(cfg, client=client)
 
+        self.assertFalse(backend.is_connected())
+        self.assertEqual(client.calls, [])
+        self.assertTrue(backend.test_connection())
         self.assertEqual(backend.zero(), "OK\r")
         self.assertAlmostEqual(backend.measure(), 0.0123)
         self.assertEqual(backend.communication_events(), ())
         backend.disconnect()
         self.assertEqual(client.calls, ["connect", "zero", "measure", "close"])
         self.assertFalse(backend.is_connected())
+
+    def test_susceptibility_adapter_refuses_commands_until_explicit_connect(self) -> None:
+        class _Client:
+            is_connected = False
+
+            def zero(self):
+                raise AssertionError("zero must not be called while disconnected")
+
+            def measure(self):
+                raise AssertionError("measure must not be called while disconnected")
+
+            def communication_events(self):
+                return ()
+
+        backend = diagnostic_services.SusceptibilityBackendAdapter(
+            SusceptibilityConfig(enabled=True, port="COM7"), client=_Client()
+        )
+
+        with self.assertRaisesRegex(
+            diagnostic_services.DiagnosticContractError, "disconnected"
+        ):
+            backend.zero()
 
     def test_susceptibility_factory_fails_closed_when_disabled(self) -> None:
         cfg = SusceptibilityConfig(enabled=False, port="COM7")

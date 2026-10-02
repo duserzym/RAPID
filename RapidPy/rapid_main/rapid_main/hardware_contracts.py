@@ -298,6 +298,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         config: AppConfig,
         *,
         holder_store: "HolderStateStore | None" = None,
+        susceptibility_backend=None,
         clock=None,
     ) -> None:
         self._config = config
@@ -331,6 +332,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._af_demag = self._build_component(
             "AF demagnetizer", build_af_demag_backend, config.af_demag, nocomm=nocomm
         )
+        self._susceptibility = susceptibility_backend
 
         self._connected = False
         self._last_hole = 1
@@ -408,6 +410,12 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         return self._holder_store
 
     @property
+    def susceptibility_backend(self):
+        """Shared bridge instance used by diagnostics and queued acquisition."""
+
+        return self._susceptibility
+
+    @property
     def last_holder_outcome(self) -> "HolderMeasurementOutcome | None":
         return self._last_holder_outcome
 
@@ -422,7 +430,12 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         motor_logger = getattr(self, "_motor_communication_logger", None)
         if motor_logger is not None:
             events.extend(motor_logger.transcript.events)
-        for source in (self._bracketed, self._af_demag, self._irm_arm):
+        for source in (
+            self._bracketed,
+            self._af_demag,
+            self._irm_arm,
+            getattr(self, "_susceptibility", None),
+        ):
             if source is None or bool(getattr(source, "simulated", False)):
                 continue
             provider = getattr(source, "communication_events", None)
@@ -952,7 +965,11 @@ def config_fingerprint(config: AppConfig) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def build_measurement_backend(config: AppConfig) -> MeasurementAutomationBackend:
+def build_measurement_backend(
+    config: AppConfig,
+    *,
+    susceptibility_backend=None,
+) -> MeasurementAutomationBackend:
     """Construct the active measurement backend from configuration.
 
     ``NO_COMM`` mode returns the labelled simulator. Hardware mode returns the
@@ -961,4 +978,7 @@ def build_measurement_backend(config: AppConfig) -> MeasurementAutomationBackend
     """
     if config.general.nocomm:
         return NoCommBackend()
-    return QueueHardwareBackend(config)
+    return QueueHardwareBackend(
+        config,
+        susceptibility_backend=susceptibility_backend,
+    )

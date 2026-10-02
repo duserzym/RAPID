@@ -164,6 +164,7 @@ class QueueBackendFailClosedTests(unittest.TestCase):
         backend._bracketed = None
         backend._af_demag = _CommunicationSource(early)
         backend._irm_arm = _CommunicationSource(middle)
+        backend._susceptibility = None
 
         self.assertEqual(backend.communication_events(), (motor, early, middle))
 
