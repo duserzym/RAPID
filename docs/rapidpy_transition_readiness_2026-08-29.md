@@ -167,7 +167,9 @@ orientation transforms, produces false holder vectors separated by roughly
 - halts after the configured retry limit instead of recording the bad block;
 - retains the last accepted global holder until a replacement block succeeds.
 
-Reviewed statically only. Not compiled — see gates 3 and 4.
+The updated VB6 project compiled successfully with `-NoFixups` on 2026-09-03.
+The rejection behavior still requires the pending no-communication runtime
+smoke test and physical-system replay before it is operationally accepted.
 
 ### RapidPy
 
@@ -191,7 +193,7 @@ explicit hardware operation, never a silent accept.
 | 3. Real, persistent holder | **Code-complete.** `HolderCorrection` + `HolderStateStore` + `HolderMeasurementService`; atomic install, previous correction retained on any failure, UI shows identity/magnitude/age/validity, blocks samples when absent or stale. | Not validated |
 | 4. Fail closed in hardware mode | **Code-complete.** Factories raise `HardwareUnavailableError`; `UnavailableBackend` replaces silent simulators in UI surfaces; simulated output is labelled and redirected. | Not validated |
 | 5. Motion and interlocks | **Not software-closable.** Every motion is verified in software and a failed motion aborts the block. | **Requires the physical system** |
-| 6. Output and metadata parity | **Code-complete.** Transactional publish, duplicate-free resume, full provenance, resolved specimen metadata, deterministic VB6 parity fixtures. | Side-by-side comparison with VB6 output still blocked by gates 2–4 |
+| 6. Output and metadata parity | **Code-complete.** Transactional publish, duplicate-free resume, full provenance, resolved specimen metadata, deterministic VB6 parity fixtures. | VB6 builds successfully; side-by-side physical comparison has not been run |
 
 ### What "code-complete" means here
 
@@ -257,7 +259,8 @@ The detailed, executable version — with the evidence schema every record must
 carry — is in `docs/rapid_hardware_acceptance_procedure_2026-08-29.md`. In
 summary:
 
-1. Close VB6 gates 2–4 without connecting hardware.
+1. Reconfirm the verified VB6 IDE/project/build gates, then complete the
+   no-communication runtime smoke test against a copy of `VB6/Defaults.ini`.
 2. Launch VB6 and RapidPy separately in no-communication mode; load all primary
    forms and confirm configuration/output paths.
 3. Inventory COM ports and map each physical device. Keep outputs and port
@@ -274,13 +277,18 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **390 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **411 passed** (`python -m unittest discover -s
   tests -t .` from `RapidPy/rapid_main`); the pre-existing baseline was 261.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
   and faults (22), live transport and backend facade (21), holder state and
   holder command (19), queue-level fail-closed and holder behavior (13),
   transactional output and simulation isolation (15), VB6 parity fixtures (18),
   replay fixtures (13), and holder UI (4, inside `test_measurement_panel`).
+- October 2 main-shell coverage adds truthful live/simulated/unavailable/fault
+  Dashboard snapshots, responsive glass-card reflow without horizontal
+  overflow, synchronized workflow/sample/step state, wired Flow/session
+  actions, halt-after-confirm shutdown ordering, atomic sequence documents,
+  malformed-file reporting, and executable/saveable imported sequences.
 - `python -m compileall` is clean across `rapid_main`, its tests,
   `updown_control`, and `rapidpy_common`. The repository configures no linter
   or type checker (no ruff/flake8/mypy config and no lint CI job), so none was
@@ -289,5 +297,6 @@ summary:
   `modMotor.bas` have balanced `If`/`With`/`For`/`Select`/`Do`/procedure blocks
   with continuations joined and single-line `If` forms excluded. No VB6 source
   was changed in this pass.
-- VB6 source: static review and launch preflight only. No compile or runtime
-  verification is possible on this computer until gates 2–4 are closed.
+- VB6 source: the full project compiled successfully with `-NoFixups` on
+  2026-09-03. Runtime verification of the measurement change is still pending
+  the no-communication smoke test and physical-system replay.

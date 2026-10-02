@@ -1,6 +1,6 @@
 # RapidPy production-readiness assessment
 
-> **August 29, 2026 update — read this first.** The July 16 material below is
+> **October 2, 2026 update — read this first.** The July 16 material below is
 > retained for history. Where the two disagree, this section wins.
 
 ## Code-complete versus hardware-validated (August 29, 2026)
@@ -23,10 +23,12 @@ tests; none of it has been validated against the physical RAPID system.
 | Specimen metadata resolution | Yes | **No** | `rapid_main/specimen_metadata.py`, `tests/test_output_integrity.py` |
 | Replay of recorded blocks (acceptance step D1) | Yes | n/a | `rapid_main/replay.py`, `tests/fixtures/`, `tests/test_replay_fixtures.py` |
 | Motion and interlock behavior | Verified in software only | **No** | Every motion is verified and a failure aborts the block |
-| Output parity against VB6 | Fixtures only | **No** | Side-by-side blocked by the VB6 build gates |
+| Output parity against VB6 | Fixtures only | **No** | VB6 now compiles; side-by-side comparison still requires the no-communication smoke test and a physical reference run |
 
-Full suite: **390 tests passing** (`python -m unittest discover -s tests -t .`
-from `RapidPy/rapid_main`), up from a 261-test baseline.
+Full suite: **411 tests passing** (`python -m unittest discover -s tests -t .`
+from `RapidPy/rapid_main`), up from a 261-test baseline. The October 2 shell
+slice adds truthful Dashboard backend snapshots, responsive glass-card reflow,
+workflow/session menu wiring, shutdown ordering, and sequence-document tests.
 
 ### Behavior changes an operator will notice
 
@@ -43,6 +45,17 @@ from `RapidPy/rapid_main`), up from a 261-test baseline.
 - Simulated runs publish into a `SIMULATED` subdirectory with a marker file.
 - Sig/Holder and Sig/Induced now show real values when a bracketed block is
   available, plus holder identity, magnitude, and age.
+- The main Dashboard reads the same backend snapshot as the debug console and
+  visibly distinguishes live, disconnected, unavailable, faulted, and
+  **SIMULATED** devices. It refreshes on demand, every ten seconds, and after a
+  communication-mode change.
+- Imported sequences remain the active executable/saveable document; writes
+  are atomic, malformed files report actionable errors, unsaved edits prompt
+  on replacement/exit, and the Hawaiian preset emits its documented AF25–AF800
+  steps.
+- Main-shell Flow and session actions invoke real pause/resume/halt/session
+  behavior. The legacy Code Grey equivalent is explicitly visual-only and
+  cannot bypass preflight or interlocks.
 
 ### Still open in software
 
@@ -101,20 +114,26 @@ This file tracks parity and hardening evidence for the active `rapid_main` workf
   [`_clamp_main_window_size`](rapid_main/app.py),
   and sidebar cap behavior in
   [`_build_central`](rapid_main/app.py).
-- The startup sizing pass keeps the left rail compact but readable with
-  `_DEFAULT_SIDEBAR_WIDTH = 64`, `_MIN_SIDEBAR_WIDTH = 48`, `_MAX_SIDEBAR_WIDTH = 72`,
-  and `_SIDEBAR_RESTORE_RATIO = 0.08`, while full-window startup width remains capped by
-  `_MAIN_MAX_WIDTH_RATIO = 0.12` and a 960 px large-display ceiling.
+- The current glass workspace keeps a readable text sidebar with
+  `_DEFAULT_SIDEBAR_WIDTH = 252`, `_MIN_SIDEBAR_WIDTH = 240`,
+  `_MAX_SIDEBAR_WIDTH = 288`, and `_SIDEBAR_RESTORE_RATIO = 0.25`. The main
+  workspace uses up to 94% of the monitor with explicit 1680×1100 caps rather
+  than the superseded 12%-width compact profile.
 - `rapidpy_common.ui._screen_area_for_widget` now prefers the nearest-screen candidate when a widget is
   positioned off-screen before falling back to the primary screen, reducing stale-geometry monitor
   selection risk after multi-monitor changes.
-- We replaced the oversized text sidebar with a compact icon rail in `rapid_main`; the rail stays
-  narrow enough to reduce front-face width but wide enough that navigation icons do not clip.
+- `rapid_main` now uses a translucent glass backdrop, elevated cards, explicit
+  focus/disabled states, readable icon-plus-text navigation, and responsive
+  Dashboard cards. The compact profile reflows readiness cards to two columns
+  and stacks Current Run/Quick Actions; the wide profile restores five columns
+  and a split run/action row.
 - New regression coverage added:
   - `rapid_main/tests/test_window_layout.py` (compact geometry, nearest-screen fallback, negative-origin/topology re-clamping, scaled-DPI, and screen-capped stack-hint checks).
   - `rapid_main/tests/test_sequence_ui_smoke.py` (icon rail readability, wrapped text surfaces, stacked-panel hint safety, and restore clamping tests).
   - `rapid_main/tests/test_app_bootstrap_window_contracts.py` (entrypoint bootstrap contracts include `app.py` and `main.py` launchers plus topology/DPI guard subscriptions).
   - `rapid_main/tests/test_startup_guide.py` (first-run startup guidance preference and Help-panel routing).
+  - `rapid_main/tests/test_dashboard_shell.py` (truthful live/simulated/fault states, responsive reflow, main run-state synchronization, and halt-after-confirm shutdown ordering).
+  - `rapid_main/tests/test_sequence_documents.py` (atomic sequence persistence, strict import errors, compiled preset behavior, and unsaved-state tracking).
 
 ## July 16 Focused Acceptance Evidence
 

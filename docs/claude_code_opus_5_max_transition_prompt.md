@@ -165,19 +165,31 @@ Re-verify the VB6 launch section in `docs/rapidpy_transition_readiness_2026-08-2
 The following was verified directly on this computer without rebooting:
 
 - English VB6 RTM `6.00.8176` is installed at `C:\Program Files (x86)\Microsoft Visual Studio\VB98\VB6.EXE`.
-- The IDE opens normally to the English New Project dialog and can load a small test project without a startup error.
+- The IDE opens normally to the English New Project dialog. The real `VB6/Paleomag v3.vbp` loads when VB6 is run elevated.
 - DAO 3.5, `VB6.OLB`, `VB6EXT.OLB`, `MSDERUN.DLL`, `MSO97RT.DLL`, `MRT7ENU.DLL`, and the required Microsoft OCX files were restored or registered.
 - Mixed Simplified Chinese VB6 templates, T-SQL components, wizards, Common Tools binaries, Designer satellites, and five system components were replaced with hash-matching English-media versions. The active VB6/Common/Designer trees had zero files reporting Chinese language metadata after repair.
 - Displaced files are preserved at `C:\VB6-English-Repair-Backup-20260829-2`. Do not delete that backup.
 - The Visual Studio setup front end that requested a reboot was terminated, and the machine was not rebooted.
 - The Paleomag project must currently be launched as administrator to avoid `Error accessing the system registry` during design-time component loading.
+- Visual Studio 6.0 Enterprise setup registered the product correctly, enabling
+  `VB6.EXE /make`; `LINK.EXE` and `C2.EXE` are present.
+- `C:\Windows\SysWOW64\MSCOMCTL.OCX` is the signed KB3096896 build
+  `6.01.9846` and provides the project's required type library `2.2`.
+- The authorized legacy archive supplied `vbSendMail_v3.0.dll` version
+  `3.06.0005`, whose registered type library `5.7` matches the project.
+- `VB6/Build-VB6Project.ps1 -NoFixups` successfully produced
+  `build/vb6/PALEOMAG2013.exe` (1,736,704 bytes, 32-bit i386, version
+  `3.01.0009`). Preserve `build/vb6/vb6-build-receipt.json` as evidence.
+- The IDE remains RTM `6.00.8176`; the runtime is SP6-era `6.00.9848`. Base
+  SP6 remains desirable for security fixes but is not a build blocker.
 
-Do not claim that the VB6 project is build-ready yet. These blockers remain:
+Do not regress or re-solve these closed gates. Re-run the repository preflight
+and build only to confirm current state. The remaining VB6 gates are:
 
-1. `VB6.EXE /make` reports `No make available in the Working Model Edition`. The English Enterprise edition/license registration is incomplete or inconsistent. Do not bypass licensing, invent a product key, or modify license-related registry data. Record this as an environment blocker requiring legitimate licensed media/registration.
-2. `VB6/Paleomag v3.vbp` requires `MSCOMCTL.OCX` type library `2.2`, while the installed English `C:\Windows\SysWOW64\MSCOMCTL.OCX` is file version `6.01.9782` and registers type library `2.0`. Registration succeeds but the real project reports that `MSCOMCTL.OCX` could not be loaded. A disposable copy of the project loaded completely when only that reference was changed from `2.2` to `2.0`; the repository project was deliberately left unchanged. Do not downgrade the committed reference or alias the type library without explicit user approval and cross-machine compatibility evidence.
-3. The base English Visual Studio/VB6 Service Pack 6 is not installed. Microsoft's signed `VB60SP6-KB2708437-x86-ENU.msi` refused with exit `1603` because SP6 was absent. Obtain the legitimate English base SP6 package first, then apply the current signed Microsoft common-controls/security rollup with restart disabled. Do not extract and overwrite OCXs to evade installer prerequisites.
-4. `vbSendMail_v3.0.dll` is still missing. It is referenced by the project and documented in `VB6/README.txt`, but it is not in this repository or its Git history. Obtain it from the authorized legacy RAPID archive or original licensed/source package, verify it, and register its 32-bit COM server. Do not use generic DLL-download sites.
+1. launch `PALEOMAG2013.exe` in no-communication mode against a copy of
+   `VB6/Defaults.ini`, exercise the primary forms, and retain a smoke-test log;
+2. run the signed physical RAPID-system procedure only after explicit operator
+   authorization and area-safety confirmation.
 
 Before changing VB6 source, re-run `VB6/Test-LaunchReadiness.ps1`, inspect the real project references, and distinguish IDE startup, project loading, and compilation as three separate gates. Do not install system software, edit registry permissions, actuate hardware, or reboot from Claude Code unless the user explicitly authorizes that action in the active session.
 
@@ -275,7 +287,7 @@ For work that requires the physical RAPID system, provide an executable acceptan
 
 ## Required verification
 
-Run the smallest relevant tests while iterating, then the full RapidPy suite. Add type/lint checks already supported by the repository. Perform static checks on VB6 changes. Attempt a VB6 compile and no-communication-mode smoke test only after the licensed-edition, SP6, `MSCOMCTL` `2.2`, and `vbSendMail_v3.0.dll` gates above are satisfied; until then, report those gates precisely instead of treating IDE startup as compile verification. Do not connect or actuate hardware unless the operator explicitly authorizes it and confirms the physical area is safe.
+Run the smallest relevant tests while iterating, then the full RapidPy suite. Add type/lint checks already supported by the repository. Perform static checks on VB6 changes and re-run the existing no-fixup build to detect regressions. The compile gate is closed; the no-communication runtime smoke test is not. Do not connect or actuate hardware unless the operator explicitly authorizes it and confirms the physical area is safe.
 
 Before finishing:
 
