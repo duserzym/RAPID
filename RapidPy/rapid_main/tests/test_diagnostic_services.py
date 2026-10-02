@@ -416,6 +416,28 @@ class TestDiagnosticServices(unittest.TestCase):
         self.assertTrue(backend.test_connection())
         self.assertTrue(backend.is_connected())
         self.assertIn("COM7", backend.status())
+        backend.disconnect()
+        self.assertFalse(backend.is_connected())
+
+    def test_live_squid_disconnect_closes_and_forgets_reader(self) -> None:
+        class _Reader:
+            def __init__(self) -> None:
+                self.disconnected = False
+
+            def disconnect(self) -> None:
+                self.disconnected = True
+
+        reader = _Reader()
+        backend = diagnostic_services.SquidBackendAdapter()
+        backend._reader = reader
+        backend._baseline_raw = (1.0, 2.0, 3.0)
+
+        backend.disconnect()
+
+        self.assertTrue(reader.disconnected)
+        self.assertIsNone(backend._reader)
+        self.assertIsNone(backend._baseline_raw)
+        self.assertFalse(backend.is_connected())
 
     def test_live_squid_adapter_does_not_substitute_moment_for_susceptibility(self) -> None:
         backend = diagnostic_services.SquidBackendAdapter.__new__(

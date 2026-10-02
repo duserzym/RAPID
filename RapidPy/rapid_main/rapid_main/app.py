@@ -18,10 +18,12 @@ from rapidpy_common.ui import (
     set_app_icon,
 )
 
+from . import software_version
 from .config import AppConfig
 from .hardware_contracts import (
     MeasurementAutomationBackend,
     build_measurement_backend,
+    config_fingerprint,
 )
 from .diagnostic_services import (
     build_af_demag_backend,
@@ -63,7 +65,12 @@ from .panels import (
 from .queue_compiler import QueueCommand, QueueOptions, QueueSample, compile_queue
 from .package_launch import ToolUnavailableError, resolve_tool_launch
 from .runtime_estimator import RuntimeEstimator
-from .vrm import VRM_CONTEXT_ENV, build_vrm_launch_context, write_vrm_launch_context
+from .vrm import (
+    VRM_CONTEXT_ENV,
+    build_vrm_launch_context,
+    vrm_launch_block_reason,
+    write_vrm_launch_context,
+)
 from .glass_theme import (
     GlassBackdrop,
     apply_main_glass_theme,
@@ -405,6 +412,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._rebuild_diagnostic_backends(nocomm=bool(self.config.general.nocomm))
         self._ownership = DeviceOwnershipManager()
         self._owned_dialog_leases: dict[str, object] = {}
+        self._external_process_leases: dict[int, tuple[object, list[object], QtCore.QTimer]] = {}
 
         # Runtime estimator — initialised from config step times
         self._estimator = RuntimeEstimator(self.config.sequence.as_estimator_dict())
@@ -1661,25 +1669,119 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def _launch_vrm(self) -> None:
-        context = build_vrm_launch_context(
+        reason = vrm_launch_block_reason(
             active_automation=self._has_active_automation(),
+            measurement_owner=self._ownership.owner_of("measurement"),
+            squid_owner=self._ownership.owner_of("squid"),
+        )
+        if reason:
+            self.set_status(reason)
+            QtWidgets.QMessageBox.warning(self, "VRM launcher", reason)
+            return
+
+        owner = "vrm_logger_process"
+        leases: list[object] = []
+        try:
+            leases.append(self.acquire_device("measurement", owner, allow_reentrant=False))
+            leases.append(self.acquire_device("squid", owner, allow_reentrant=False))
+        except DeviceOwnershipError as exc:
+            for lease in reversed(leases):
+                lease.release()
+            QtWidgets.QMessageBox.warning(self, "VRM launcher", str(exc))
+            return
+
+        try:
+            self._release_squid_connections_for_vrm()
+        except Exception as exc:
+            for lease in reversed(leases):
+                lease.release()
+            message = f"VRM cannot claim the SQUID serial port: {exc}"
+            self.set_status(message)
+            QtWidgets.QMessageBox.warning(self, "VRM launcher", message)
+            return
+
+        sample_id = self._current_sample if self._current_sample != "UNKNOWN" else ""
+        data_dir = Path(self.config.general.data_dir) if self.config.general.data_dir else None
+        intended_output_dir = data_dir / sample_id if data_dir and sample_id else data_dir
+        context = build_vrm_launch_context(
+            active_automation=False,
             nocomm=bool(getattr(self.config.general, "nocomm", False)),
+            sample_id=sample_id,
+            operator=self.config.general.operator,
+            intended_output_dir=intended_output_dir,
+            software_version=software_version(),
+            config_hash=config_fingerprint(self.config),
         )
         try:
             context_path = write_vrm_launch_context(context=context)
         except OSError as exc:
+            for lease in reversed(leases):
+                lease.release()
             QtWidgets.QMessageBox.warning(
                 self,
                 "VRM launcher",
                 f"Unable to prepare VRM run context: {exc}",
             )
             return
-        self._launch_external_tool(
+        process = self._launch_external_tool(
             target_path="vrm_logger/main.py",
             module="vrm_logger",
             app_name="VRM Logger",
             env={VRM_CONTEXT_ENV: str(context_path)},
         )
+        if process is None:
+            for lease in reversed(leases):
+                lease.release()
+            return
+        self._hold_external_process_leases(process, leases)
+
+    def _release_squid_connections_for_vrm(self) -> None:
+        """Close retained main-app SQUID clients before handing off the port."""
+
+        backends = (
+            ("measurement backend", self._measurement_backend),
+            ("diagnostic backend", self._squid_backend),
+        )
+        seen: set[int] = set()
+        for label, backend in backends:
+            if backend is None or id(backend) in seen:
+                continue
+            seen.add(id(backend))
+            release = getattr(backend, "release_squid_for_external_tool", None)
+            if callable(release):
+                release()
+                continue
+            connected_provider = getattr(backend, "is_connected", None)
+            connected = bool(connected_provider()) if callable(connected_provider) else False
+            if not connected:
+                continue
+            disconnect = getattr(backend, "disconnect", None)
+            if not callable(disconnect):
+                raise RuntimeError(f"{label} is connected and has no disconnect operation")
+            disconnect()
+            if callable(connected_provider) and bool(connected_provider()):
+                raise RuntimeError(f"{label} remained connected after disconnect")
+
+    def _hold_external_process_leases(self, process: object, leases: list[object]) -> None:
+        """Keep shared resources reserved until a launched helper exits."""
+
+        key = id(process)
+        timer = QtCore.QTimer(self)
+        timer.setInterval(500)
+
+        def release_if_finished() -> None:
+            poll = getattr(process, "poll", None)
+            if not callable(poll) or poll() is None:
+                return
+            timer.stop()
+            for lease in reversed(leases):
+                lease.release()
+            self._external_process_leases.pop(key, None)
+            self.set_status("VRM Logger closed; measurement and SQUID ownership released.")
+
+        timer.timeout.connect(release_if_finished)
+        self._external_process_leases[key] = (process, leases, timer)
+        timer.start()
 
     def _launch_susceptibility_bridge(self) -> None:
         self._run_owned_dialog(
@@ -1713,7 +1815,7 @@ class MainWindow(QtWidgets.QMainWindow):
         module: str,
         app_name: str,
         env: dict[str, str] | None = None,
-    ) -> None:
+    ) -> subprocess.Popen | None:
         """Launch a sibling package's main entry point as a helper process."""
         if self._has_active_automation():
             if (
@@ -1731,7 +1833,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
                 != QtWidgets.QMessageBox.StandardButton.Yes
             ):
-                return
+                return None
 
         base_root = Path(__file__).resolve().parents[2]
         try:
@@ -1746,24 +1848,26 @@ class MainWindow(QtWidgets.QMainWindow):
                 "Tool unavailable",
                 f"{app_name} is not installed correctly.\n\n{exc}",
             )
-            return
+            return None
 
         try:
             process_env = os.environ.copy()
             if env:
                 process_env.update(env)
-            subprocess.Popen(
+            process = subprocess.Popen(
                 list(launch.command),
                 cwd=str(launch.cwd) if launch.cwd is not None else None,
                 env=process_env,
             )
             self.set_status(f"Launched {app_name} from {launch.source}.")
+            return process
         except Exception as exc:  # pragma: no cover - platform/environment dependent
             QtWidgets.QMessageBox.warning(
                 self,
                 f"{app_name} launcher",
                 f"Unable to launch {app_name}: {exc}",
             )
+            return None
 
     def _run_owned_dialog(
         self,

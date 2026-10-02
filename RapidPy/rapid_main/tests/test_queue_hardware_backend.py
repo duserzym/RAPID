@@ -251,6 +251,28 @@ class QueueBackendFailClosedTests(unittest.TestCase):
         self.assertTrue(callable(getattr(backend, "recover_flux_count_discontinuity", None)))
         self.assertGreaterEqual(int(backend.flux_discontinuity_retries), 0)
 
+    def test_external_vrm_handoff_releases_squid_and_invalidates_bracketed_client(self) -> None:
+        class _ReleasableSquid(_StubSquidAdapter):
+            def __init__(self, raw_client) -> None:
+                super().__init__(raw_client)
+                self.connected = True
+
+            def is_connected(self) -> bool:
+                return self.connected
+
+            def disconnect(self) -> None:
+                self.connected = False
+
+        adapter = _ReleasableSquid(FakeRawSquidClient(_observations()))
+        backend = self._backend(_config(self.tmp), adapter=adapter)
+        backend._ensure_bracketed()
+        self.assertIsNotNone(backend._bracketed)
+
+        backend.release_squid_for_external_tool()
+
+        self.assertFalse(adapter.is_connected())
+        self.assertIsNone(backend._bracketed)
+
     # -- helpers -----------------------------------------------------------
 
     def _backend(

@@ -639,6 +639,9 @@ class SquidBackend(Protocol):
     def test_connection(self) -> bool:
         ...
 
+    def disconnect(self) -> None:
+        ...
+
     def status(self) -> str:
         ...
 
@@ -1143,6 +1146,10 @@ class SquidNoCommBackend(_BaseBackend, SquidBackend):
         )
         return True
 
+    def disconnect(self) -> None:
+        self._connected = False
+        self._status = "No-comm SQUID simulation disconnected"
+
     def read_squid(self) -> tuple[float, float, float]:
         self._squid_step_count += 1
         # Deterministic synthetic signal with decay + small phase drift.
@@ -1248,6 +1255,14 @@ class SquidBackendAdapter(_BaseBackend, SquidBackend):
         self._reader = reader
         self._status = f"Connected to SQUID serial ({self._cfg.port}:{self._cfg.baud})"
         return True
+
+    def disconnect(self) -> None:
+        reader = self._reader
+        self._reader = None
+        self._baseline_raw = None
+        if reader is not None:
+            reader.disconnect()
+        self._status = "SQUID transport disconnected"
 
     def set_demag_step(self, label: str) -> None:
         """Record a treatment label for compatibility with measurement worker calls."""

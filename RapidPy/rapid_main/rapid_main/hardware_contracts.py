@@ -683,6 +683,29 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             and _to_bool_connected(self._measurement.is_connected)
         )
 
+    def release_squid_for_external_tool(self) -> None:
+        """Close the retained SQUID port before a standalone owner is launched.
+
+        The next hardware preflight reconnects and rebuilds bracketed acquisition.
+        No automatic reconnect is attempted here because opening a laboratory
+        device is an operator-visible action.
+        """
+
+        measurement = self._measurement
+        if measurement is None:
+            self._bracketed = None
+            return
+        connected = _to_bool_connected(measurement.is_connected)
+        disconnect = getattr(measurement, "disconnect", None)
+        if connected and not callable(disconnect):
+            raise HardwareError(
+                "The active SQUID backend is connected but cannot release its serial port."
+            )
+        if connected:
+            disconnect()
+        self._bracketed = None
+        self._acquisition_error = ""
+
     def _require_measurement(self):
         if self._measurement is None:
             raise HardwareError(

@@ -4,6 +4,7 @@ import csv
 import sys
 import threading
 import time
+import uuid
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -155,6 +156,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._worker: AcquisitionWorker | None = None
         self._csv_handle = None
         self._csv_writer = None
+        self._session_record: dict[str, object] | None = None
 
         self._baseline_raw: tuple[float, float, float] | None = None
         self._session_start_epoch: float = 0.0
@@ -684,25 +686,41 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._session_start_epoch = time.time()
         self._abs_axis.set_session_start(self._session_start_epoch)
-        try:
-            manifest_path = write_vrm_output_manifest(
-                output_path,
-                session_start_epoch=self._session_start_epoch,
-                interval_s=self.interval_spin.value(),
-                spacing_mode=self.spacing_combo.currentText(),
-                display_unit=self.unit_combo.currentText(),
-                baseline_volts=self._baseline_raw,
-                calibration={
-                    "x": float(self.cal_x.value()),
-                    "y": float(self.cal_y.value()),
-                    "z": float(self.cal_z.value()),
-                    "range_factor": float(self.range_fact_spin.value()),
-                },
-                handoff_context=load_handoff_context(),
+        handoff_context = load_handoff_context()
+        run_association = str(
+            handoff_context.get("run_association_status", "unassociated")
+        )
+        if run_association != "associated":
+            self._append_console(
+                "VRM session is not associated with a validated main-app run: "
+                + str(
+                    handoff_context.get("error")
+                    or handoff_context.get("reason")
+                    or "the launch context contains no run_id"
+                )
             )
-            self._append_console(f"VRM session manifest: {manifest_path}")
-        except OSError as exc:
-            self._append_console(f"VRM session manifest could not be written: {exc}")
+        self._session_record = {
+            "session_id": str(uuid.uuid4()),
+            "output_path": output_path,
+            "write_mode": (
+                "overwrite" if overwrite else "append" if append_to_existing else "new"
+            ),
+            "row_count": 0,
+            "outcome": "operator_stopped",
+            "error": "",
+            "interval_s": float(self.interval_spin.value()),
+            "spacing_mode": self.spacing_combo.currentText(),
+            "display_unit": self.unit_combo.currentText(),
+            "baseline_volts": tuple(self._baseline_raw),
+            "calibration": {
+                "x": float(self.cal_x.value()),
+                "y": float(self.cal_y.value()),
+                "z": float(self.cal_z.value()),
+                "range_factor": float(self.range_fact_spin.value()),
+            },
+            "handoff_context": handoff_context,
+            "device_port": self.port_combo.currentText().strip(),
+        }
 
         self._time.clear()
         self._x_vals.clear()
@@ -739,6 +757,36 @@ class MainWindow(QtWidgets.QMainWindow):
             self._append_console("Stopping acquisition…")
             self._worker.stop()
 
+    def _finalize_session(self) -> None:
+        """Publish immutable session evidence only after the CSV is closed."""
+
+        record = self._session_record
+        if record is None:
+            return
+        self._session_record = None
+        try:
+            manifest_path = write_vrm_output_manifest(
+                record["output_path"],
+                session_start_epoch=self._session_start_epoch,
+                session_end_epoch=time.time(),
+                session_id=str(record["session_id"]),
+                outcome=str(record["outcome"]),
+                row_count=int(record["row_count"]),
+                write_mode=str(record["write_mode"]),
+                interval_s=float(record["interval_s"]),
+                spacing_mode=str(record["spacing_mode"]),
+                display_unit=str(record["display_unit"]),
+                baseline_volts=record["baseline_volts"],
+                calibration=record["calibration"],
+                handoff_context=record["handoff_context"],
+                device_port=str(record["device_port"]),
+                provenance="live_hardware",
+                error=str(record["error"]),
+            )
+            self._append_console(f"Finalized VRM session manifest: {manifest_path}")
+        except Exception as exc:
+            self._append_console(f"VRM session manifest could not be finalized: {exc}")
+
     def _worker_finished(self) -> None:
         # Baseline must be refreshed before the next logging run.
         self._baseline_raw = None
@@ -753,6 +801,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._csv_handle.close()
             self._csv_handle = None
             self._csv_writer = None
+        self._finalize_session()
 
         self._worker = None
         self._thread = None
@@ -797,27 +846,37 @@ class MainWindow(QtWidgets.QMainWindow):
         # autorange was enabled at startup and stays enabled — no need to re-call per sample
 
         if self._csv_writer is not None:
-            abs_dt = datetime.fromtimestamp(self._session_start_epoch + sample.time_s)
-            self._csv_writer.writerow(
-                [
-                    f"{sample.time_s:.6f}",
-                    abs_dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],  # ms precision
-                    f"{sample.x_volts:.9g}",
-                    f"{sample.y_volts:.9g}",
-                    f"{sample.z_volts:.9g}",
-                    f"{bx:.9g}",
-                    f"{by:.9g}",
-                    f"{bz:.9g}",
-                    f"{x_disp:.9g}",
-                    f"{y_disp:.9g}",
-                    f"{z_disp:.9g}",
-                    unit,
-                ]
-            )
-            self._csv_handle.flush()
+            try:
+                abs_dt = datetime.fromtimestamp(self._session_start_epoch + sample.time_s)
+                self._csv_writer.writerow(
+                    [
+                        f"{sample.time_s:.6f}",
+                        abs_dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],  # ms precision
+                        f"{sample.x_volts:.9g}",
+                        f"{sample.y_volts:.9g}",
+                        f"{sample.z_volts:.9g}",
+                        f"{bx:.9g}",
+                        f"{by:.9g}",
+                        f"{bz:.9g}",
+                        f"{x_disp:.9g}",
+                        f"{y_disp:.9g}",
+                        f"{z_disp:.9g}",
+                        unit,
+                    ]
+                )
+                self._csv_handle.flush()
+                if self._session_record is not None:
+                    self._session_record["row_count"] = int(
+                        self._session_record["row_count"]
+                    ) + 1
+            except OSError as exc:
+                self._handle_worker_error(f"CSV write failed: {exc}")
 
     @QtCore.Slot(str)
     def _handle_worker_error(self, message: str) -> None:
+        if self._session_record is not None:
+            self._session_record["outcome"] = "error"
+            self._session_record["error"] = str(message)
         self._set_status(f"Error: {message}")
         QtWidgets.QMessageBox.critical(self, "Acquisition Error", message)
         self._stop_logging()
@@ -885,6 +944,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
         if self._worker is not None:
+            if self._session_record is not None and self._session_record["outcome"] != "error":
+                self._session_record["outcome"] = "window_closed"
             self._worker.stop()
             while self._thread is not None and self._thread.isRunning():
                 QtWidgets.QApplication.processEvents()
@@ -892,6 +953,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if self._csv_handle is not None:
             self._csv_handle.close()
+            self._csv_handle = None
+            self._csv_writer = None
+            self._finalize_session()
 
         self._client.disconnect()
         self._save_from_widgets()
