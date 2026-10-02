@@ -298,6 +298,48 @@ def _meta(name: str = "MEASURE_WORKER") -> SpecimenMeta:
 
 
 class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
+    def test_treatment_plan_preflight_blocks_before_hardware_preflight(self) -> None:
+        class _PlanningOnlyBackend(DeterministicBackend):
+            def __init__(self) -> None:
+                super().__init__()
+                self.plan_labels: tuple[str, ...] = ()
+
+            def validate_treatment_plan(self, labels: tuple[str, ...]) -> PreflightResult:
+                self.plan_labels = labels
+                return PreflightResult.blocked(
+                    "Thermal treatment TT400 cannot run: no furnace adapter"
+                )
+
+        backend = _PlanningOnlyBackend()
+        errors: list[str] = []
+        finished: list[bool] = []
+
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out"
+            worker = MeasurementWorker(
+                meta=_meta("THERMAL_BLOCK"),
+                labels=["NRM", "TT400"],
+                output_dir=out,
+                backend=backend,
+            )
+            worker.error_occurred.connect(errors.append)
+            worker.run_finished.connect(finished.append)
+            worker.run()
+
+            workflow = json.loads(
+                (out / "workflow_summary.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(backend.plan_labels, ("NRM", "TT400"))
+        self.assertEqual(backend.preflight_calls, 0)
+        self.assertEqual(backend.step_calls, [])
+        self.assertEqual(finished, [True])
+        self.assertEqual(workflow["final_phase"], "error")
+        self.assertTrue(workflow["aborted"])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Treatment plan preflight failed", errors[0])
+        self.assertIn("no furnace adapter", errors[0])
+
     def test_preflight_timeout_causes_error(self) -> None:
         output_dir = Path("unused")
         backend = TimeoutBackend(preflight_delay=0.2)

@@ -212,6 +212,43 @@ class MeasurementWorker(QtCore.QThread):
             self._finish_run(aborted=True)
             return
 
+        plan_validator = getattr(self._backend, "validate_treatment_plan", None)
+        if callable(plan_validator):
+            try:
+                self._emit_phase(WorkflowPhase.PREFLIGHT)
+                plan_preflight = self._call_with_timeout(
+                    lambda: plan_validator(tuple(self._labels)),
+                    timeout=self._get_backend_timeout("preflight_timeout"),
+                    phase="treatment plan preflight",
+                )
+            except MeasurementHaltRequested:
+                self._emit_phase(WorkflowPhase.HALTED)
+                self._finish_run(aborted=True)
+                return
+            except Exception as exc:
+                self._emit_error(
+                    f"Treatment plan preflight failed: {exc}",
+                    phase=WorkflowPhase.PREFLIGHT,
+                )
+                self._emit_phase(WorkflowPhase.ERROR)
+                self._finish_run(aborted=True)
+                return
+            if not plan_preflight.ok:
+                reasons = (
+                    "; ".join(plan_preflight.blockers)
+                    if plan_preflight.blockers
+                    else "treatment plan preflight failed"
+                )
+                self._emit_error(
+                    f"Treatment plan preflight failed: {reasons}",
+                    phase=WorkflowPhase.PREFLIGHT,
+                )
+                self._emit_phase(WorkflowPhase.ERROR)
+                self._finish_run(aborted=True)
+                return
+            if plan_preflight.warnings:
+                self._emit_warning("; ".join(plan_preflight.warnings))
+
         try:
             self._emit_phase(WorkflowPhase.PREFLIGHT)
             preflight = self._call_with_timeout(

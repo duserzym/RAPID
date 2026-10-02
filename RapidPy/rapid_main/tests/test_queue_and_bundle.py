@@ -29,6 +29,7 @@ from rapid_main.queue_compiler import (
     validate_queue_samples,
 )
 from rapid_main.hardware_contracts import (
+    HardwareError,
     HardwareBackend,
     MeasurementBackend,
     NoCommBackend,
@@ -494,6 +495,7 @@ class TestHardwareContracts(unittest.TestCase):
         cfg = AppConfig()
         cfg.general.nocomm = True
         backend = QueueHardwareBackend(cfg)
+        cfg.general.nocomm = False
 
         class _ThermalMeasurement:
             def __init__(self) -> None:
@@ -524,8 +526,102 @@ class TestHardwareContracts(unittest.TestCase):
         backend.set_demag_step("TT400")
         backend.set_demag_step("NRM")
 
+        self.assertTrue(backend.validate_treatment_plan(("TT400", "NRM")).ok)
         self.assertEqual(meas.thermal_calls, [(400.0, "TT400")])
         self.assertEqual(meas.measurement_calls, ["NRM"])
+
+    def test_queue_backend_blocks_live_thermal_without_furnace_adapter(self) -> None:
+        cfg = AppConfig()
+        cfg.general.nocomm = True
+        backend = QueueHardwareBackend(cfg)
+        cfg.general.nocomm = False
+
+        class _PlanningOnlyMeasurement:
+            def __init__(self) -> None:
+                self.labels: list[str] = []
+
+            def set_demag_step(self, label: str) -> None:
+                self.labels.append(label)
+
+        measurement = _PlanningOnlyMeasurement()
+        backend._measurement = measurement
+
+        preflight = backend.validate_treatment_plan(("NRM", "TT400", "TH500"))
+
+        self.assertFalse(preflight.ok)
+        self.assertEqual(len(preflight.blockers), 2)
+        self.assertTrue(all("furnace/oven adapter" in item for item in preflight.blockers))
+        with self.assertRaisesRegex(HardwareError, "planning-only"):
+            backend.set_demag_step("TT400")
+        self.assertEqual(measurement.labels, [])
+
+    def test_queue_backend_validates_live_measurement_and_treatment_routes(self) -> None:
+        cfg = AppConfig()
+        cfg.general.nocomm = True
+        backend = QueueHardwareBackend(cfg)
+        cfg.general.nocomm = False
+
+        class _RecordingMeasurement:
+            def __init__(self) -> None:
+                self.labels: list[str] = []
+
+            def set_demag_step(self, label: str) -> None:
+                self.labels.append(label)
+
+        measurement = _RecordingMeasurement()
+        backend._measurement = measurement
+
+        measurement_only = ("NRM", "NRM-X", "NRM-Y", "NRM-Z", "SUSC", "REPEAT2")
+        self.assertTrue(backend.validate_treatment_plan(measurement_only).ok)
+        for label in measurement_only:
+            backend.set_demag_step(label)
+        self.assertEqual(measurement.labels, list(measurement_only))
+
+        unsupported = (
+            "IRM-BF",
+            "IRM",
+            "RRM-0.5",
+            "PTRM400",
+            "ZF400",
+            "IF400",
+            "CUSTOM",
+            "AFBOGUS",
+        )
+        preflight = backend.validate_treatment_plan(unsupported)
+
+        self.assertFalse(preflight.ok)
+        self.assertEqual(len(preflight.blockers), len(unsupported))
+        for label in unsupported:
+            self.assertTrue(any(repr(label) in item for item in preflight.blockers))
+        for label in unsupported:
+            if label == "IRM":
+                with self.assertRaisesRegex(ValueError, "requires numeric field"):
+                    backend.set_demag_step(label)
+            else:
+                with self.assertRaisesRegex(HardwareError, "no production actuator route"):
+                    backend.set_demag_step(label)
+        self.assertEqual(measurement.labels, list(measurement_only))
+        self.assertEqual(backend._treatment_label, "REPEAT2")
+
+    def test_queue_backend_allows_explicit_simulator_only_label(self) -> None:
+        cfg = AppConfig()
+        cfg.general.nocomm = True
+        backend = QueueHardwareBackend(cfg)
+
+        class _RecordingMeasurement:
+            def __init__(self) -> None:
+                self.labels: list[str] = []
+
+            def set_demag_step(self, label: str) -> None:
+                self.labels.append(label)
+
+        measurement = _RecordingMeasurement()
+        backend._measurement = measurement
+
+        self.assertTrue(backend.validate_treatment_plan(("CUSTOM-SIM",)).ok)
+        backend.set_demag_step("CUSTOM-SIM")
+
+        self.assertEqual(measurement.labels, ["CUSTOM-SIM"])
 
 
 if __name__ == "__main__":

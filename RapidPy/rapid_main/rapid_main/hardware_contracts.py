@@ -242,6 +242,7 @@ class NoCommBackend:
 
 _DEMAG_LABEL_RE = re.compile(r"^(AF(?:MAX|Z)?|IRM|ARM)\s*(\d+(?:\.\d+)?)?(?:_([0-9]+(?:\.[0-9]+)?))?$")
 _THERMAL_LABEL_RE = re.compile(r"^(TT|TH|TEMP)\s*(\d+(?:\.\d+)?)$")
+_MEASUREMENT_ONLY_LABEL_RE = re.compile(r"^(?:NRM(?:-[XYZ])?|SUSC|REPEAT\d+)$")
 
 
 def _parse_demag_label(label: str) -> tuple[str, float | None, float | None]:
@@ -269,6 +270,10 @@ def _parse_thermal_label(label: str) -> tuple[str, float | None]:
     if not match:
         return text, None
     return match.group(1), float(match.group(2))
+
+
+def _is_measurement_only_label(label: str) -> bool:
+    return bool(_MEASUREMENT_ONLY_LABEL_RE.fullmatch((label or "").strip().upper()))
 
 
 class QueueHardwareBackend(MeasurementAutomationBackend):
@@ -483,16 +488,16 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
 
         AF labels are routed through the AF demagnetizer backend; IRM/ARM
         labels are routed through the adapter-backed IRM/ARM backend.
-        Other labels still use the measurement backend contract.
+        Explicit measurement-only labels use the measurement backend contract.
         """
-        self._treatment_label = str(label)
         step_type, field_mT, bias_mT = _parse_demag_label(label)
-        if step_type.startswith("AF"):
+        if step_type in {"AF", "AFMAX", "AFZ"}:
             from .diagnostic_services import plan_af_demag_command
 
             method = getattr(self._af_demag, "apply_af", None)
             if callable(method):
                 method(plan_af_demag_command(label, self._config.af_demag))
+                self._treatment_label = str(label)
                 return
             raise HardwareError("AF demagnetizer adapter not available for AF treatment.")
 
@@ -507,6 +512,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                     ramp_label=self._config.irm_arm.irm_ramp,
                     steps=int(max(1, int(self._config.irm_arm.irm_steps))),
                 )
+                self._treatment_label = str(label)
                 return
             raise HardwareError("IRM/ARM adapter not available for IRM treatment.")
 
@@ -520,6 +526,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                     bias_mT=float(bias_mT if bias_mT is not None else self._config.irm_arm.arm_bias),
                     steps=int(max(1, int(self._config.irm_arm.irm_steps))),
                 )
+                self._treatment_label = str(label)
                 return
             raise HardwareError("IRM/ARM adapter not available for ARM treatment.")
 
@@ -528,15 +535,65 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             method = getattr(self._measurement, "apply_thermal", None)
             if callable(method):
                 method(temperature_c=float(temperature_c), label=f"{thermal_type}{temperature_c:g}")
+                self._treatment_label = str(label)
                 return
+            if self._config.general.nocomm:
+                simulated_step = getattr(self._measurement, "set_demag_step", None)
+                if callable(simulated_step):
+                    simulated_step(label)
+                self._treatment_label = str(label)
+                return
+            raise HardwareError(
+                f"Thermal treatment {label} is planning-only: no production furnace/oven "
+                "adapter with temperature readback and safety interlocks is configured."
+            )
+
+        if not self._config.general.nocomm and not _is_measurement_only_label(label):
+            raise HardwareError(
+                f"Treatment label {label!r} has no production actuator route. "
+                "Configure and validate a typed hardware adapter before running it live."
+            )
 
         method = getattr(self._measurement, "set_demag_step", None)
         if method is None or not callable(method):
-            # Measurement hardware is present but may still operate in a read-only
-            # or diagnostic-only mode. Queue-driven execution should continue and
-            # treat treatment labels as acknowledged.
+            # Measurement-only labels do not require an actuator command. The
+            # subsequent acquisition/read path remains the source of truth.
+            self._treatment_label = str(label)
             return
         method(label)
+        self._treatment_label = str(label)
+
+    def validate_treatment_plan(self, labels: tuple[str, ...]) -> PreflightResult:
+        """Reject live treatment families that have no production actuator."""
+
+        if self._config.general.nocomm:
+            return PreflightResult.pass_ok()
+        blockers: list[str] = []
+        apply_thermal = getattr(self._measurement, "apply_thermal", None)
+        for label in labels:
+            step_type, field_mT, _bias_mT = _parse_demag_label(label)
+            if step_type in {"AF", "AFMAX", "AFZ", "ARM"}:
+                continue
+            if step_type == "IRM" and field_mT is not None:
+                continue
+            _thermal_type, temperature_c = _parse_thermal_label(label)
+            if temperature_c is not None:
+                if not callable(apply_thermal):
+                    blockers.append(
+                        f"Thermal treatment {label} cannot run in hardware mode: no production "
+                        "furnace/oven adapter with temperature readback and safety interlocks "
+                        "is configured."
+                    )
+                continue
+            if _is_measurement_only_label(label):
+                continue
+            blockers.append(
+                f"Treatment label {label!r} cannot run in hardware mode: no production "
+                "actuator route is configured and validated."
+            )
+        if blockers:
+            return PreflightResult.blocked(*blockers)
+        return PreflightResult.pass_ok()
 
     # -- preflight ---------------------------------------------------------
 
