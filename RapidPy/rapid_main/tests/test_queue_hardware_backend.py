@@ -13,7 +13,11 @@ import unittest
 from unittest import mock
 
 from rapid_main.config import AppConfig
-from rapid_main.communication_log import CommunicationDirection, CommunicationEvent
+from rapid_main.communication_log import (
+    CommunicationDirection,
+    CommunicationEvent,
+    CommunicationLogger,
+)
 from rapid_main.diagnostic_services import HardwareUnavailableError
 from rapid_main.hardware_contracts import (
     QueueAutomationError,
@@ -130,6 +134,12 @@ class QueueBackendFailClosedTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_communication_events_merge_live_treatment_sources_in_time_order(self) -> None:
+        motor = CommunicationEvent(
+            timestamp=NOW - timedelta(seconds=1),
+            channel="DC_MOTOR",
+            direction=CommunicationDirection.TX,
+            payload="motor-request",
+        )
         early = CommunicationEvent(
             timestamp=NOW,
             channel="ADWIN_AF",
@@ -149,14 +159,16 @@ class QueueBackendFailClosedTests(unittest.TestCase):
             payload="must-not-publish",
         )
         backend = object.__new__(QueueHardwareBackend)
+        backend._motor_communication_logger = CommunicationLogger("DC_MOTOR")
+        backend._motor_communication_logger.transcript.append(motor)
         backend._bracketed = None
         backend._af_demag = _CommunicationSource(early)
         backend._irm_arm = _CommunicationSource(middle)
 
-        self.assertEqual(backend.communication_events(), (early, middle))
+        self.assertEqual(backend.communication_events(), (motor, early, middle))
 
         backend._af_demag = _CommunicationSource(simulated, simulated=True)
-        self.assertEqual(backend.communication_events(), (middle,))
+        self.assertEqual(backend.communication_events(), (motor, middle))
 
     def test_component_construction_failure_becomes_a_preflight_blocker(self) -> None:
         cfg = _config(self.tmp)
@@ -393,6 +405,64 @@ class QueueBackendHolderCommandTests(unittest.TestCase):
         self.assertFalse(backend._direction_up)
         backend.init_up("file-1")
         self.assertTrue(backend._direction_up)
+
+    def test_failed_flip_does_not_mutate_direction_or_flip_state(self) -> None:
+        backend = self._backend()
+        backend._client.turn_failure_angle = 180.0
+
+        with self.assertRaisesRegex(QueueAutomationError, "sample flip"):
+            backend.flip()
+
+        self.assertTrue(backend._direction_up)
+        self.assertFalse(backend._last_flip)
+        self.assertEqual(
+            backend.communication_events()[-1].direction,
+            CommunicationDirection.ERROR,
+        )
+
+    def test_failed_changer_move_does_not_update_last_hole(self) -> None:
+        backend = self._backend()
+        backend._client.changer_failure_hole = 12.0
+        previous_hole = backend._last_hole
+
+        with self.assertRaisesRegex(QueueAutomationError, "changer move to hole 12"):
+            backend.goto_hole(12)
+
+        self.assertEqual(backend._last_hole, previous_hole)
+
+    def test_failed_home_does_not_claim_up_direction(self) -> None:
+        backend = self._backend()
+        backend._direction_up = False
+        backend._client.home_failure = True
+
+        with self.assertRaisesRegex(QueueAutomationError, "home Up/Down"):
+            backend.init_up("file-1")
+
+        self.assertFalse(backend._direction_up)
+
+    def test_safe_return_attempts_every_halt_after_other_failures(self) -> None:
+        backend = self._backend()
+
+        class _BrokenReset:
+            simulated = False
+
+            def reset_field(self) -> None:
+                raise RuntimeError("relay reset unavailable")
+
+        backend._af_demag = _BrokenReset()
+        backend._sample_loaded = True
+        backend._client.dropoff_failure = True
+        backend._client.halt_fail_axes.add("Turning")
+
+        with self.assertRaisesRegex(QueueAutomationError, "Safe-state return incomplete") as ctx:
+            backend.return_to_safe_state()
+
+        self.assertIn("AF reset failed", str(ctx.exception))
+        self.assertIn("safe-state sample dropoff", str(ctx.exception))
+        self.assertIn("halt turning failed", str(ctx.exception))
+        halt_axes = [payload for name, payload in backend._client.calls if name == "halt"]
+        self.assertEqual(halt_axes, ["ChangerX", "ChangerY", "Turning", "UpDown"])
+        self.assertTrue(backend._sample_loaded)
 
 
 if __name__ == "__main__":

@@ -1429,7 +1429,10 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         baud: int,
     ) -> None:
         super().__init__(simulated=False)
-        self._client = MotorSerialClient()
+        self._communication_logger = CommunicationLogger(
+            "DC_MOTOR", port=str(port), max_payload_chars=2048
+        )
+        self._client = MotorSerialClient(trace=self._trace)
         self._axes = {
             "Changer (X)": MotorAxisConfig("ChangerX", 1, 1),
             "Turning": MotorAxisConfig("Turning", 2, 2),
@@ -1444,9 +1447,33 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
             self._port = str(port)
             self._baud = int(baud)
 
+    def _trace(self, direction: str, payload: str, detail: str) -> None:
+        if direction == "TX":
+            self._communication_logger.sent(payload, detail=detail)
+        elif direction == "RX":
+            self._communication_logger.received(payload, detail=detail)
+        elif direction == "ERROR":
+            self._communication_logger.error(detail, payload=payload)
+        else:
+            self._communication_logger.info(detail or payload)
+
+    def communication_events(self) -> tuple[CommunicationEvent, ...]:
+        return tuple(self._communication_logger.transcript.events)
+
+    def _require_move_success(self, action: str, result: object) -> None:
+        if bool(getattr(result, "success", False)):
+            return
+        detail = (
+            f"{action} failed: target={getattr(result, 'target', 'unknown')} "
+            f"final={getattr(result, 'final_position', 'unknown')}"
+        )
+        self._communication_logger.error(detail)
+        raise HardwareError(detail)
+
     def connect(self, port: str, baudrate: int) -> None:
         self._port = str(port)
         self._baud = int(baudrate)
+        self._communication_logger.port = self._port
         try:
             self._client.connect(self._port, baudrate=self._baud)
         except Exception as exc:  # pragma: no cover - hardware transport behavior
@@ -1475,6 +1502,7 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
             raise ValueError(f"Unknown axis '{axis}'.")
         self._require_connected()
         result = self._client.move_motor(axis_cfg, target, int(speed), wait_for_stop=bool(wait_for_stop))
+        self._require_move_success(f"move {axis}", result)
         return (result.target, result.final_position, result.success)
 
     def spin_turning(self, *, speed_rps: float, duration_s: float = 60.0) -> tuple[int, int, bool]:
@@ -1484,11 +1512,13 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
             speed_rps=float(speed_rps),
             duration_s=float(duration_s),
         )
+        self._require_move_success("spin Turning", result)
         return (result.target, result.final_position, result.success)
 
     def goto_hole(self, *, hole: float) -> float:
         self._require_connected()
         result = self._client.changer_motor_to_hole(self._axes["Changer (X)"], float(hole), wait_for_stop=True)
+        self._require_move_success(f"move changer to hole {hole}", result)
         return float(convert_position_to_hole(
             result.final_position,
             slot_min=1,
@@ -1510,7 +1540,8 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
 
     def home_to_top(self) -> None:
         self._require_connected()
-        self._client.home_to_top(self._axes["Up/Down"])
+        result = self._client.home_to_top(self._axes["Up/Down"])
+        self._require_move_success("home Up/Down to top", result)
 
     def home_xy_to_center(self) -> tuple[int, int]:
         self._require_connected()
@@ -1519,6 +1550,8 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
             self._axes["Changer (Y)"],
             self._axes["Up/Down"],
         )
+        self._require_move_success("home Changer (X) to center", x_res)
+        self._require_move_success("home Changer (Y) to center", y_res)
         return (int(x_res.final_position), int(y_res.final_position))
 
     def move_xy_to_corner(self) -> tuple[int, int]:
@@ -1528,16 +1561,20 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
             self._axes["Changer (Y)"],
             self._axes["Up/Down"],
         )
+        self._require_move_success("move Changer (X) to corner", x_res)
+        self._require_move_success("move Changer (Y) to corner", y_res)
         return (int(x_res.final_position), int(y_res.final_position))
 
     def sample_pickup(self) -> tuple[int, int, bool]:
         self._require_connected()
         result = self._client.sample_pickup(self._axes["Up/Down"])
+        self._require_move_success("sample pickup", result)
         return (result.target, result.final_position, result.success)
 
     def sample_dropoff(self, use_xy_table: bool = True) -> tuple[int, int, bool]:
         self._require_connected()
         result = self._client.sample_dropoff(self._axes["Up/Down"], use_xy_table=bool(use_xy_table))
+        self._require_move_success("sample dropoff", result)
         return (result.target, result.final_position, result.success)
 
     def read_telemetry(self, axis: str) -> MotorTelemetry:

@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from rapidpy_common.hardware import MotorAxisConfig, MotorTelemetry
+from rapidpy_common.hardware import HardwareError, MotorAxisConfig, MotorTelemetry
 
 from rapid_main.config import AfDemagConfig, IrmArmConfig, SquidConfig, VacuumConfig
 from rapid_main import diagnostic_services
@@ -640,8 +640,9 @@ class TestDiagnosticServices(unittest.TestCase):
 
     def test_dc_motor_adapter_telemetry_contract(self) -> None:
         class _FakeMotorSerialClient:
-            def __init__(self) -> None:
+            def __init__(self, *, trace=None) -> None:
                 self.connected = False
+                self.trace = trace
 
             def connect(self, port: str, baudrate: int = 9600) -> None:
                 self.connected = True
@@ -705,3 +706,34 @@ class TestDiagnosticServices(unittest.TestCase):
         self.assertEqual(sample.axis_name, "Turning")
         self.assertEqual(sample.actual_torque, 250)
         self.assertEqual(sample.velocity_1, 12)
+
+    def test_dc_motor_adapter_rejects_unsuccessful_motion_result(self) -> None:
+        class _FailedMotorSerialClient:
+            def __init__(self, *, trace=None) -> None:
+                self.connected = False
+                self.trace = trace
+
+            def connect(self, port: str, baudrate: int = 9600) -> None:
+                del port, baudrate
+                self.connected = True
+
+            @property
+            def is_connected(self) -> bool:
+                return self.connected
+
+            def move_motor(self, *args, **kwargs) -> object:
+                del args, kwargs
+                return mock.Mock(target=100, final_position=75, success=False)
+
+        with mock.patch(
+            "rapid_main.diagnostic_services.MotorSerialClient",
+            _FailedMotorSerialClient,
+        ):
+            backend = build_dcmotor_backend(port="COM3", baud=9600, nocomm=False)
+            backend.connect("COM3", 9600)
+            with self.assertRaisesRegex(HardwareError, "target=100 final=75"):
+                backend.move_motor("Changer (X)", target=100, speed=1200)
+
+        events = backend.communication_events()
+        self.assertEqual(events[-1].direction, CommunicationDirection.ERROR)
+        self.assertIn("move Changer (X) failed", events[-1].detail)

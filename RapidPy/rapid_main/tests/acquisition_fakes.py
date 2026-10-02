@@ -289,16 +289,22 @@ class FakeAxisSample:
 class FakeMotorSerialClient:
     """QuickSilver client stand-in for queue-backend composition tests."""
 
-    def __init__(self, config=None) -> None:
+    def __init__(self, config=None, *, trace=None) -> None:
         from rapidpy_common.hardware import MotorControllerConfig, MoveResult
 
         self.config = config or MotorControllerConfig()
+        self.trace = trace
         self._MoveResult = MoveResult
         self.is_connected = False
         self.positions: dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0}
         self.calls: list[tuple[str, object]] = []
         self.turn_failure_angle: float | None = None
         self.lift_failure_target: int | None = None
+        self.changer_failure_hole: float | None = None
+        self.pickup_failure = False
+        self.dropoff_failure = False
+        self.home_failure = False
+        self.halt_fail_axes: set[str] = set()
 
     def connect(self, port: str, baudrate: int = 57600, timeout: float = 0.35) -> None:
         self.calls.append(("connect", (port, baudrate)))
@@ -334,20 +340,30 @@ class FakeMotorSerialClient:
 
     def changer_motor_to_hole(self, axis, hole: float, wait_for_stop: bool = True):
         self.calls.append(("changer_motor_to_hole", float(hole)))
+        if self.changer_failure_hole is not None and float(hole) == self.changer_failure_hole:
+            return self._MoveResult(target=int(hole), final_position=int(hole) - 1, success=False)
         return self._MoveResult(target=int(hole), final_position=int(hole), success=True)
 
     def sample_pickup(self, axis):
         self.calls.append(("sample_pickup", axis.name))
+        if self.pickup_failure:
+            return self._MoveResult(target=0, final_position=-1, success=False)
         return self._MoveResult(target=0, final_position=0, success=True)
 
     def sample_dropoff(self, axis, use_xy_table: bool = True):
         self.calls.append(("sample_dropoff", axis.name))
+        if self.dropoff_failure:
+            return self._MoveResult(target=0, final_position=-1, success=False)
         return self._MoveResult(target=0, final_position=0, success=True)
 
     def home_to_top(self, axis):
         self.calls.append(("home_to_top", axis.name))
+        if self.home_failure:
+            return self._MoveResult(target=0, final_position=-1, success=False)
         return self._MoveResult(target=0, final_position=0, success=True)
 
     def halt(self, axis) -> str:
         self.calls.append(("halt", axis.name))
+        if axis.name in self.halt_fail_axes:
+            raise RuntimeError(f"halt failure {axis.name}")
         return "halted"

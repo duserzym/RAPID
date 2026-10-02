@@ -15,6 +15,7 @@ import re
 from typing import Protocol, TYPE_CHECKING
 
 from rapid_main import software_version
+from rapid_main.communication_log import CommunicationLogger
 from rapid_main.config import AppConfig
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -299,7 +300,12 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         # so the VB6 ARC and settling delays are actually observed.
         self._acquisition_clock = clock
         self._motor_config = _build_motor_controller_config(config)
-        self._client = MotorSerialClient(self._motor_config)
+        self._motor_communication_logger = CommunicationLogger(
+            "DC_MOTOR", port=str(config.changer.port), max_payload_chars=2048
+        )
+        self._client = MotorSerialClient(
+            self._motor_config, trace=self._trace_motor_communication
+        )
         self._axes = {
             "changer_x": MotorAxisConfig("ChangerX", 1, 1),
             "turning": MotorAxisConfig("Turning", 2, 2),
@@ -336,6 +342,29 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._run_id = ""
         self._operator = str(config.general.operator or "")
         self._last_holder_outcome: "HolderMeasurementOutcome | None" = None
+
+    def _trace_motor_communication(
+        self, direction: str, payload: str, detail: str
+    ) -> None:
+        logger = self._motor_communication_logger
+        if direction == "TX":
+            logger.sent(payload, detail=detail)
+        elif direction == "RX":
+            logger.received(payload, detail=detail)
+        elif direction == "ERROR":
+            logger.error(detail, payload=payload)
+        else:
+            logger.info(detail or payload)
+
+    def _require_motion_success(self, action: str, result: object) -> None:
+        if bool(getattr(result, "success", False)):
+            return
+        detail = (
+            f"{action} failed: target={getattr(result, 'target', 'unknown')} "
+            f"final={getattr(result, 'final_position', 'unknown')}"
+        )
+        self._motor_communication_logger.error(detail)
+        raise QueueAutomationError(detail)
 
     # -- construction helpers ---------------------------------------------
 
@@ -385,6 +414,9 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         """Return immutable live SQUID and treatment traffic in time order."""
 
         events = []
+        motor_logger = getattr(self, "_motor_communication_logger", None)
+        if motor_logger is not None:
+            events.extend(motor_logger.transcript.events)
         for source in (self._bracketed, self._af_demag, self._irm_arm):
             if source is None or bool(getattr(source, "simulated", False)):
                 continue
@@ -677,15 +709,18 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         hole = int(hole)
 
         if self._sample_loaded:
-            self._client.sample_dropoff(self._axes["updown"])
+            dropoff = self._client.sample_dropoff(self._axes["updown"])
+            self._require_motion_success("holder sample dropoff", dropoff)
             self._sample_loaded = False
 
         if hole > 0:
-            self._client.changer_motor_to_hole(self._axes["changer_x"], float(hole), wait_for_stop=True)
+            changer = self._client.changer_motor_to_hole(
+                self._axes["changer_x"], float(hole), wait_for_stop=True
+            )
+            self._require_motion_success(f"holder changer move to hole {hole}", changer)
             self._last_hole = hole
             pickup = self._client.sample_pickup(self._axes["updown"])
-            if not pickup.success:
-                raise QueueAutomationError(f"sample pickup failed at hole {hole}")
+            self._require_motion_success(f"holder sample pickup at hole {hole}", pickup)
             self._sample_loaded = True
 
         self._measure_holder(hole)
@@ -722,50 +757,71 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
     def goto_hole(self, hole: int) -> None:
         if hole <= 0:
             if self._sample_loaded:
-                self._client.sample_dropoff(self._axes["updown"])
+                dropoff = self._client.sample_dropoff(self._axes["updown"])
+                self._require_motion_success("sample dropoff", dropoff)
                 self._sample_loaded = False
             return
         self._ensure_connected()
         hole = int(hole)
-        self._client.changer_motor_to_hole(self._axes["changer_x"], float(hole), wait_for_stop=True)
+        changer = self._client.changer_motor_to_hole(
+            self._axes["changer_x"], float(hole), wait_for_stop=True
+        )
+        self._require_motion_success(f"changer move to hole {hole}", changer)
         self._last_hole = hole
 
     def flip(self) -> None:
         self._ensure_connected()
         # A 180° rotation emulates switching to the reverse face.
-        self._client.turning_motor_rotate(self._axes["turning"], 180.0, wait_for_stop=True)
+        turn = self._client.turning_motor_rotate(
+            self._axes["turning"], 180.0, wait_for_stop=True
+        )
+        self._require_motion_success("sample flip 180 degrees", turn)
         self._last_flip = not self._last_flip
         self._direction_up = not self._direction_up
 
     def init_up(self, file_id: str) -> None:
         del file_id
         self._ensure_connected()
-        self._direction_up = True
         if self._sample_loaded:
-            try:
-                self._client.sample_dropoff(self._axes["updown"])
-            finally:
-                self._sample_loaded = False
+            dropoff = self._client.sample_dropoff(self._axes["updown"])
+            self._require_motion_success("initial sample dropoff", dropoff)
+            self._sample_loaded = False
         # Homing the up/down axis before a measurement file run keeps motion
         # deterministic for both orientation passes.
-        self._client.home_to_top(self._axes["updown"])
+        homed = self._client.home_to_top(self._axes["updown"])
+        self._require_motion_success("home Up/Down to top", homed)
+        self._direction_up = True
 
     def return_to_safe_state(self) -> None:
         if not self._connected or not _to_bool_connected(self._client.is_connected):
             return
+        errors: list[str] = []
         try:
             reset_af = getattr(self._af_demag, "reset_field", None)
             if callable(reset_af):
-                reset_af()
+                try:
+                    reset_af()
+                except Exception as exc:
+                    errors.append(f"AF reset failed: {exc}")
             if self._sample_loaded:
-                self._client.sample_dropoff(self._axes["updown"])
-                self._sample_loaded = False
-            self._client.halt(self._axes["changer_x"])
-            self._client.halt(self._axes["changer_y"])
-            self._client.halt(self._axes["turning"])
-            self._client.halt(self._axes["updown"])
+                try:
+                    dropoff = self._client.sample_dropoff(self._axes["updown"])
+                    self._require_motion_success("safe-state sample dropoff", dropoff)
+                except Exception as exc:
+                    errors.append(str(exc))
+                else:
+                    self._sample_loaded = False
+            for axis_name in ("changer_x", "changer_y", "turning", "updown"):
+                try:
+                    self._client.halt(self._axes[axis_name])
+                except Exception as exc:
+                    errors.append(f"halt {axis_name} failed: {exc}")
         finally:
             self._connected = _to_bool_connected(self._client.is_connected)
+        if errors:
+            detail = "Safe-state return incomplete: " + "; ".join(errors)
+            self._motor_communication_logger.error(detail)
+            raise QueueAutomationError(detail)
 
     def _ensure_connected(self) -> None:
         if self._connected and _to_bool_connected(self._client.is_connected):

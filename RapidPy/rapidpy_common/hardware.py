@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import re
 import threading
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 import serial
 
@@ -71,14 +71,30 @@ _HEX4_RE = re.compile(r"[0-9A-Fa-f]{4}")
 class MotorSerialClient:
     """VB6-aligned Quicksilver serial protocol wrapper for DC motors."""
 
-    def __init__(self, config: Optional[MotorControllerConfig] = None) -> None:
+    def __init__(
+        self,
+        config: Optional[MotorControllerConfig] = None,
+        *,
+        trace: Callable[[str, str, str], None] | None = None,
+    ) -> None:
         self._serial: Optional[serial.Serial] = None
         self._port: str = ""
+        self._trace = trace
+        self._last_command = ""
         self._io_lock = threading.RLock()
         self._last_position: dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0}
         self._xy_last_pos: tuple[int, int] = (0, 0)
         self._axis_torque_capability: dict[int, bool] = {}
         self.config = config or MotorControllerConfig()
+
+    def _emit_trace(self, direction: str, payload: str, detail: str) -> None:
+        if self._trace is None:
+            return
+        try:
+            self._trace(str(direction), str(payload), str(detail))
+        except Exception:
+            # Evidence hooks must never alter controller behavior.
+            return
 
     @property
     def is_connected(self) -> bool:
@@ -87,24 +103,41 @@ class MotorSerialClient:
     def connect(self, port: str, baudrate: int = 57600, timeout: float = 0.35) -> None:
         with self._io_lock:
             self.disconnect()
-            self._serial = serial.Serial(
-                port=port,
-                baudrate=baudrate,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_TWO,
-                timeout=timeout,
-                write_timeout=timeout,
-            )
             self._port = port
-            self._serial.dtr = True
-            self._serial.rts = True
-            self._serial.reset_input_buffer()
-            self._serial.reset_output_buffer()
-            # VB6 issues this broadcast command at connect to set ACK delay.
-            self.send_ascii("@255 173 416")
-            time.sleep(0.03)
-            self._serial.reset_input_buffer()
+            try:
+                self._serial = serial.Serial(
+                    port=port,
+                    baudrate=baudrate,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_TWO,
+                    timeout=timeout,
+                    write_timeout=timeout,
+                )
+            except Exception as exc:
+                self._emit_trace(
+                    "ERROR", port, f"motor connect {port}:{baudrate} failed: {exc}"
+                )
+                raise
+            try:
+                self._serial.dtr = True
+                self._serial.rts = True
+                self._serial.reset_input_buffer()
+                self._serial.reset_output_buffer()
+                # VB6 issues this broadcast command at connect to set ACK delay.
+                self.send_ascii("@255 173 416")
+                time.sleep(0.03)
+                self._serial.reset_input_buffer()
+            except Exception as exc:
+                try:
+                    self._serial.close()
+                finally:
+                    self._serial = None
+                self._emit_trace(
+                    "ERROR", port, f"motor setup {port}:{baudrate} failed: {exc}"
+                )
+                raise
+            self._emit_trace("INFO", "", f"motor connected {port}:{baudrate}")
 
     def disconnect(self) -> None:
         with self._io_lock:
@@ -113,6 +146,7 @@ class MotorSerialClient:
                     self._serial.close()
                 finally:
                     self._serial = None
+                    self._emit_trace("INFO", "", f"motor disconnected {self._port}")
 
     def send_ascii(self, command: str) -> None:
         if not self.is_connected or self._serial is None:
@@ -120,15 +154,59 @@ class MotorSerialClient:
         self._serial.dtr = True
         self._serial.rts = True
         payload = f"{command}\r\n".encode("ascii", errors="ignore")
-        self._serial.write(payload)
-        self._serial.flush()
+        self._last_command = str(command)
+        try:
+            self._serial.write(payload)
+            self._serial.flush()
+        except Exception as exc:
+            self._emit_trace(
+                "ERROR", payload.decode("ascii", errors="replace"),
+                f"motor write failed command={command!r}: {exc}",
+            )
+            raise
+        self._emit_trace(
+            "TX", payload.decode("ascii", errors="replace"), "motor command"
+        )
 
     def read_ascii(self) -> str:
         if not self.is_connected or self._serial is None:
             raise HardwareError("Motor serial connection is not open.")
-        response = self._serial.read_until(b"\r").decode("ascii", errors="ignore").strip()
+        raw = self._serial.read_until(b"\r")
+        if not raw:
+            error = HardwareError("No response from motor controller.")
+            self._emit_trace(
+                "ERROR", "", f"reply to {self._last_command!r} failed: {error}"
+            )
+            raise error
+        if not raw.endswith(b"\r"):
+            error = HardwareError("Partial motor response without CR terminator.")
+            self._emit_trace(
+                "ERROR",
+                raw.decode("ascii", errors="replace"),
+                f"reply to {self._last_command!r} failed: {error}",
+            )
+            raise error
+        try:
+            response = raw.decode("ascii", errors="strict").strip()
+        except UnicodeDecodeError as exc:
+            error = HardwareError(f"Motor response is not valid ASCII: {exc}")
+            self._emit_trace(
+                "ERROR",
+                raw.decode("ascii", errors="replace"),
+                f"reply to {self._last_command!r} failed: {error}",
+            )
+            raise error from exc
         if not response:
-            raise HardwareError("No response from motor controller.")
+            error = HardwareError("Empty response from motor controller.")
+            self._emit_trace(
+                "ERROR", raw.decode("ascii", errors="replace"),
+                f"reply to {self._last_command!r} failed: {error}",
+            )
+            raise error
+        self._emit_trace(
+            "RX", raw.decode("ascii", errors="replace"),
+            f"reply to {self._last_command!r}",
+        )
         return response
 
     def query_ascii(self, command: str) -> str:
@@ -208,7 +286,11 @@ class MotorSerialClient:
             raise ValueError("Quicksilver RRG accepts between one and four registers.")
         register_text = " ".join(str(int(register)) for register in registers)
         response = self.query_ascii(f"{self._address(axis)}12 {register_text}")
-        return self._parse_register_values(response, len(registers))
+        try:
+            return self._parse_register_values(response, len(registers))
+        except Exception as exc:
+            self._emit_trace("ERROR", response, f"motor register parse failed: {exc}")
+            raise
 
     def read_telemetry(self, axis: MotorAxisConfig) -> MotorTelemetry:
         """Read target, feedback, error, velocity, and torque efficiently.
@@ -256,13 +338,21 @@ class MotorSerialClient:
 
     def read_position(self, axis: MotorAxisConfig) -> int:
         response = self.query_ascii(f"{self._address(axis)}12 1")
-        pos = self._parse_position(response)
+        try:
+            pos = self._parse_position(response)
+        except Exception as exc:
+            self._emit_trace("ERROR", response, f"motor position parse failed: {exc}")
+            raise
         self._last_position[axis.motor_id] = pos
         return pos
 
     def check_internal_status(self, axis: MotorAxisConfig, bit: int) -> int:
         response = self.query_ascii(f"{self._address(axis)}20")
-        status_word = self._parse_status_word(response)
+        try:
+            status_word = self._parse_status_word(response)
+        except Exception as exc:
+            self._emit_trace("ERROR", response, f"motor status parse failed: {exc}")
+            raise
         return (status_word // (2 ** bit)) % 2
 
     def halt(self, axis: MotorAxisConfig) -> str:

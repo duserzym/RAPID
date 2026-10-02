@@ -253,6 +253,8 @@ class DCMotorControlTelemetryUiTest(_TestAppMixin, unittest.TestCase):
     def test_plot_refresh_is_throttled_by_latest_sample(self) -> None:
         window = self._build_window()
         try:
+            if not window._curves:
+                self.skipTest("pyqtgraph is not installed; fallback plotting state is active")
             counter = self._PlotCounter()
             window._curves = {name: counter for name in window._curves}
 
