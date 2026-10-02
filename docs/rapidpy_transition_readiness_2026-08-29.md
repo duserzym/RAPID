@@ -242,7 +242,9 @@ explicit hardware operation, never a silent accept.
   gating is retained (the legacy controller itself has no pressure telemetry);
 - IRM/ARM physical execution, safe-abort, ADwin, DAC, and MCC
   calibration/loopback evidence;
-- furnace/oven control and thermal safety acceptance;
+- furnace/oven control and thermal safety acceptance. The planning path is
+  software-verified, while hardware-mode queues now block during treatment-plan
+  preflight unless a typed furnace/oven adapter is configured;
 - susceptibility, VRM, and rock-magnetic acquisition with reproducible bundles;
 - interrupted-queue recovery and physical safe-state acceptance;
 - DC motor physical encoder, torque/current, stall, limit, direction, sample
@@ -252,8 +254,9 @@ explicit hardware operation, never a silent accept.
   partial replies; transport failures return to zero, clear/reset, back off,
   and reacquire a fresh whole block, with bounded exhaustion and structured run
   evidence. Vacuum, AF/IRM ADwin, and DC motor software evidence are also
-  integrated; equivalent retained-auxiliary integration plus physical
-  transcript acceptance remain open.
+  integrated. Live thermal and unknown treatment labels now fail plan preflight
+  instead of reaching the generic measurement shim; equivalent retained-
+  auxiliary integration plus physical transcript acceptance remain open.
 
 ### P2 — operator and analysis parity
 
@@ -296,9 +299,14 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **515 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **519 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
+- Treatment-route coverage proves plan preflight occurs before hardware
+  preflight, planning-only thermal steps block without a production adapter,
+  malformed/unsupported live labels cannot be silently acknowledged, failed
+  routes preserve the last accepted treatment context, and explicit
+  no-communication simulation remains available.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
   and faults (22), live transport and backend facade (21), holder state and
   holder command (19), queue-level fail-closed and holder behavior (13),

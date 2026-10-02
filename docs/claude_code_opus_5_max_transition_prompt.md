@@ -82,28 +82,12 @@ implementation baseline:
 - `254fa71` — make live vacuum control fail closed and auditable.
 - `319d467` — make ADwin treatments fail closed and auditable.
 - `23d666b` — make DC motor transport auditable and fail closed.
+- `b71ffa9` — block unimplemented live treatment routes.
 
-The complete RapidPy suite now reports **515 passing tests** using
+The complete RapidPy suite now reports **519 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
-
-There is also an intentional, uncommitted treatment-route safety slice in the
-working tree. Preserve and finish it before starting a new feature. At handoff,
-the expected modified files are:
-
-- `RapidPy/rapid_main/rapid_main/hardware_contracts.py`;
-- `RapidPy/rapid_main/rapid_main/measurement_worker.py`;
-- `RapidPy/rapid_main/tests/test_queue_and_bundle.py`; and
-- `RapidPy/rapid_main/tests/test_measurement_worker.py`.
-
-These changes add queue-level treatment-plan preflight, block live thermal
-execution when no production furnace/oven adapter exists, and prevent unknown
-treatment labels from falling through to the generic measurement-label shim.
-The focused thermal/queue/worker set passed **49 tests before** the final
-unsupported-label classifier was added. That newest classifier has not yet
-been re-verified, so do not present the working tree as complete or passing
-until you run the tests described below.
 
 The main shell, Dashboard, Sample Queue, Sequence editor, Live Measure panel,
 Settings, Calibration Center, and reachable dialogs already share the
@@ -115,24 +99,21 @@ shows a remaining gap.
 
 Work in this priority order:
 
-1. finish, test, document, and split-commit the in-progress treatment-route
-   preflight slice described below. Do not discard or rewrite the working-tree
-   changes from scratch;
-2. extend raw communication evidence and deterministic fault handling to the
+1. extend raw communication evidence and deterministic fault handling to the
    remaining retained auxiliary live adapters without touching hardware.
    SQUID recovery, vacuum acknowledgment behavior, AF/IRM ADwin treatment
-   evidence, and DC motor transport/state safety are already complete; do not
-   duplicate those implementations;
-3. finish the remaining evidence-backed software parity rows and testable
+   evidence, DC motor transport/state safety, and treatment-route preflight are
+   already complete; do not duplicate those implementations;
+2. finish the remaining evidence-backed software parity rows and testable
    protocol/replay boundaries for thermal, susceptibility, VRM, rockmag, and
    retained auxiliaries; keep physical SQUID, vacuum, AF/IRM, ADwin/DAC/MCC,
    motor, and other RAPID-system-only gates explicitly pending;
-4. complete deployment acceptance in a dependency-clean environment and on the
+3. complete deployment acceptance in a dependency-clean environment and on the
    operator account. The installable wheel, packaged icons, configuration and
    dependency diagnostics, installed helper entry points, source-tree-free
    main-window construction, and helper resolution are verified on this
    computer; a fresh dependency install or signed installer is not yet tested;
-5. reconcile the parity/readiness documents only after the corresponding code
+4. reconcile the parity/readiness documents only after the corresponding code
    and tests exist.
 
 ### Completed assignment: raw SQUID transport evidence in the run bundle
@@ -278,47 +259,34 @@ was actuated. Do not recreate this path. Physical direction, encoder/torque,
 limit/stall, sample-transfer, safe-abort, and transcript acceptance remain
 pending.
 
-### In-progress assignment: block unimplemented live treatment routes
+### Completed assignment: block unimplemented live treatment routes
 
-The working tree already begins the retained thermal/auxiliary execution
-boundary. Preserve its core safety decision: `rapid_main.thermal` is a
-planning service, not a furnace controller, and the repository currently has
-no truthful production furnace/oven transport. Hardware-mode queues must
-therefore fail during treatment-plan preflight before ordinary device
-preflight or any step command. A configured callable `apply_thermal` route may
-pass; no-communication mode remains explicitly permissive for simulator
-labels. Never invent furnace commands, temperature readback, interlocks, or
-successful treatment evidence.
+Commit `b71ffa9` closes the silent treatment-label acknowledgment gap. Before
+ordinary hardware preflight, `MeasurementWorker` now asks the queue backend to
+validate the complete label plan under the bounded preflight timeout. A block,
+exception, or timeout aborts with workflow evidence before any step command.
 
-Finish this slice in the following order:
+`QueueHardwareBackend` treats `rapid_main.thermal` truthfully as a planning
+service. A live TT/TH/TEMP label requires a callable production
+`apply_thermal` route; without one, the plan and any direct call fail with a
+specific furnace/oven readback-and-interlock reason. Unknown and unsupported
+live labels—including backfield, RRM, PTRM, ZF, IF, custom, malformed IRM, and
+malformed AF—cannot fall through to the generic measurement shim. Only exact
+AF/AFMAX/AFZ, numeric IRM, ARM, thermal with an adapter, and explicit
+measurement-only labels are accepted. Failed routes leave the last accepted
+treatment context unchanged. No-communication mode remains explicitly
+simulator-permissive.
 
-1. Inspect the current diff before editing. Keep the worker's bounded
-   `validate_treatment_plan(tuple(labels))` call and its aborted workflow
-   evidence when the plan blocks, raises, or times out.
-2. Tighten AF classification in both `set_demag_step` and
-   `validate_treatment_plan`: accept only the parsed types `AF`, `AFMAX`, and
-   `AFZ`. Do not use `startswith("AF")`, because a malformed label such as
-   `AFBOGUS` must block rather than execute at a configured fallback peak.
-3. Add focused tests proving live hardware mode accepts only explicit
-   measurement-only labels (`NRM`, `NRM-X`, `NRM-Y`, `NRM-Z`, `SUSC`, and
-   `REPEAT<n>`), blocks `IRM-BF`, malformed IRM, `RRM`, `PTRM`, `ZF`, `IF`,
-   `CUSTOM`, and `AFBOGUS`, and does not pass blocked labels to the generic
-   measurement shim. Also prove no-communication mode remains explicit and
-   permissive for a simulator-only custom label.
-4. Run `python -m unittest tests.test_queue_and_bundle
-   tests.test_measurement_worker tests.test_thermal`, then the complete
-   `RapidPy/rapid_main` discovery suite. Treat **515** as the last committed
-   baseline, not the expected final count.
-5. Split the result into an implementation/test commit and a documentation
-   commit. Update `RapidPy/rapid_main/PRODUCTION_READINESS_ASSESSMENT.md`,
-   `docs/rapidpy_transition_readiness_2026-08-29.md`,
-   `docs/vb6_parity_inventory.md`, and this handoff only after the tests pass.
-   Record that live thermal and unsupported treatment families are blocked,
-   not implemented, and that physical furnace integration remains pending.
+Focused queue/worker/thermal verification passes 51 tests; the complete suite
+passes 519 tests. No furnace, port, board, motor, or other hardware was opened
+or actuated. Do not recreate this path. Live furnace/oven protocol integration,
+temperature readback, safety interlocks, safe abort, and physical acceptance
+remain open.
 
-After this slice is committed, take the highest-priority retained auxiliary
-path actually used in production—likely susceptibility, VRM, or rockmag—and
-trace it from queue/UI entry to protocol, evidence, output, and failure state.
+For the next implementation assignment, take the highest-priority retained
+auxiliary path actually used in production—likely susceptibility, VRM, or
+rockmag—and trace it from queue/UI entry to protocol, evidence, output, and
+failure state.
 Add a typed, fail-closed live adapter and current-run evidence only where the
 repository contains a truthful transport contract. If no production protocol
 exists, preserve planning or launch behavior, block unsupported live execution
