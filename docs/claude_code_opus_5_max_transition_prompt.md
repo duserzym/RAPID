@@ -48,23 +48,16 @@ implementation baseline:
 - `ccb900f` — use the acquisition clock for holder records;
 - `3afc7f3` — make sequence editing stateful and atomic;
 - `676e62c` — wire the truthful responsive dashboard shell;
-- `cc61ffe` — align transition evidence with verified application state.
+- `cc61ffe` — align transition evidence with verified application state;
+- `96fd2a7` — make measurement plots truthful by default;
+- `6a17d50` — load real sample indexes into an empty queue;
+- `df8c3ce` — isolate AF examples from live hardware; and
+- `abebb65` — add atomic settings backup and restore.
 
-Before the current uncommitted edits, the complete RapidPy test run reported
-**411 passing tests**. Treat that number only as a historical checkpoint: rerun
-the suite and report the actual count after your changes.
-
-At handoff time the working tree may contain deliberate, unfinished edits in:
-
-- `RapidPy/rapid_main/rapid_main/dialogs/plots.py`; and
-- `RapidPy/rapid_main/rapid_main/dialogs/sample_select.py`.
-
-Those edits remove implicit demo data from operator-facing dialogs, add an
-explicit and unmistakable simulated-example path for plots, validate plot
-vector lengths and finite values, and make sample-index loading report whether
-real rows were loaded. Inspect and preserve them. Finish their tests and commit
-them as a focused truthfulness change; do not discard them or mix them into an
-unrelated commit.
+The complete RapidPy suite now reports **431 passing tests** using
+`python -m unittest discover -s tests -p 'test_*.py'` from
+`RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
+and current test discovery as authoritative if later commits add tests.
 
 The main shell, Dashboard, Sample Queue, Sequence editor, Live Measure panel,
 Settings, Calibration Center, and reachable dialogs already share the
@@ -76,16 +69,23 @@ shows a remaining gap.
 
 Work in this priority order:
 
-1. finish and test the truthful empty states in Plots and Sample Selection;
-2. connect the real `SampleSelectDialog` to the Sample Queue or main workflow so
-   “Load Sample” loads an operator-selected `.sam`/`.csv` index instead of only
-   navigating or prompting for a bare name;
-3. audit every visible “demo” action, especially AF diagnostics, and ensure it
-   cannot actuate live hardware or create evidence that looks production-valid;
-4. complete Settings backup/restore and restart-required behavior, Calibration
-   audit/version workflows, transition help, and clean-environment packaging;
+1. complete the Calibration approval/version/expiry/invalidity/rollback
+   registry and link the selected calibration record ID into every measurement
+   bundle; timestamped artifacts and config hashes exist, but that lifecycle is
+   not complete;
+2. add searchable “Where did this VB6 control go?” transition help inside the
+   main app and complete clean-environment packaging/startup verification;
+3. finish the remaining evidence-backed parity rows, especially live thermal,
+   AF, vacuum, IRM/ARM, susceptibility, VRM, rockmag, and transport robustness;
+4. render and inspect the remaining reachable dialogs at small and normal
+   desktop sizes, fixing any glass-theme or keyboard/accessibility omissions;
 5. reconcile the parity/readiness documents only after the corresponding code
    and tests exist.
+
+The truthful empty Plots/Sample Selection/Queue states, real `.sam`/`.csv`
+sample-index-to-queue workflow, No-Communication-only AF examples, and atomic
+settings backup/validated restore/restart messaging are already implemented and
+tested. Do not recreate them.
 
 Do not represent placeholder thermal estimates, simulated plots, demo samples,
 or No-Communication results as hardware evidence. An explicit simulation tool

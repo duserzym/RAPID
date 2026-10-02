@@ -250,8 +250,10 @@ explicit hardware operation, never a silent accept.
 - complete advanced plot/analysis parity and validated export formats;
 - all dialogs, status displays, hardware monitor states, and operator messages
   verified at production resolution;
-- installation, configuration migration, calibration backup/restore, and
-  rollback exercised on the RAPID computer.
+- installation and configuration migration exercised on the RAPID computer;
+- calibration approval/version/expiry/invalidity/rollback lifecycle completed
+  and exercised (settings backup/restore is software-complete, but this is not
+  a substitute for a calibration-record registry).
 
 ## Safe connection and acceptance sequence
 
@@ -277,8 +279,9 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **411 passed** (`python -m unittest discover -s
-  tests -t .` from `RapidPy/rapid_main`); the pre-existing baseline was 261.
+- Full RapidMain test suite: **431 passed** (`python -m unittest discover -s
+  tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
+  was 261.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
   and faults (22), live transport and backend facade (21), holder state and
   holder command (19), queue-level fail-closed and holder behavior (13),
@@ -289,6 +292,11 @@ summary:
   overflow, synchronized workflow/sample/step state, wired Flow/session
   actions, halt-after-confirm shutdown ordering, atomic sequence documents,
   malformed-file reporting, and executable/saveable imported sequences.
+- The current checkpoint also covers truthful empty plot/sample/queue states,
+  real `.sam`/`.csv` sample-index selection into the queue with retained
+  metadata registrations, hardware-mode refusal of simulated AF examples, and
+  versioned atomic settings backup/validated restore with active-run blocking
+  and explicit restart-required state.
 - `python -m compileall` is clean across `rapid_main`, its tests,
   `updown_control`, and `rapidpy_common`. The repository configures no linter
   or type checker (no ruff/flake8/mypy config and no lint CI job), so none was
