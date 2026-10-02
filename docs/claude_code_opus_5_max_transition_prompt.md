@@ -91,7 +91,8 @@ implementation baseline:
 - `92f4242` — carry rockmag routines into auditable run bundles; and
 - `e324937` — record rockmag run-bundle readiness;
 - `887a30a` — refine this handoff around the truthful thermal boundary; and
-- `a389315` — make thermal planning auditable and fail closed.
+- `a389315` — make thermal planning auditable and fail closed; and
+- `f8afef1` — record auditable thermal-boundary readiness.
 
 The complete RapidPy suite now reports **552 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
@@ -405,29 +406,86 @@ CR-terminated finite numeric replies, applies the configured scale, migrates
 legacy settings, exposes immutable communication events, and has its own glass
 dialog. Hardware-mode `SUSC` queue labels correctly remain blocked.
 
-Trace the active VB6 susceptibility call graph and physical sequence before
-editing. Determine the authoritative coil positions, motion controller/axis,
-zero/empty-coil reading order, holder correction, standard/calibration checks,
-sample reading order, retries, abort behavior, and safe return. Then implement
-one typed, ownership-safe state machine only where source evidence supports it:
+The active VB6 runtime sequence has now been traced. Treat these facts as the
+authoritative compatibility baseline, and verify the cited source before
+editing:
 
-1. validate configuration, bridge identity/readiness, motion readiness,
-   calibration/standard state, and holder-correction state before movement;
-2. acquire bridge zero, move to each verified position, collect exact raw
-   replies, apply the documented holder/calibration math, and return to the
-   documented safe position on success, halt, timeout, or error;
-3. retain exact commands/replies, positions, timestamps, calibration and holder
-   identities, values, errors, retries, and final safe-state outcome in an
-   immutable susceptibility run artifact linked from the measurement bundle;
-4. prevent a rejected/partial reading from becoming zero or accepted output,
-   and never update holder/calibration state until the complete block passes;
-5. add deterministic fake/replay and fault-injection coverage for every state,
-   ownership conflict, malformed/partial reply, motion mismatch, timeout,
-   interruption, safe-return failure, and artifact-index path; and
-6. keep `SUSC` live preflight blocked until the entire state machine and its
-   required configuration are present. If VB6 source or hardware identity is
-   insufficient, record the exact integration/retirement blocker rather than
-   guessing mechanics.
+- `modMeasure.Measure` invokes susceptibility only when the step requests it
+  and `doUp` is true or `doBoth` is false. It does so before
+  `measurementSteps.CurrentStep.PerformStep` and before `Measure_Read`.
+- During a holder run, `frmSusceptibilityMeter.LagTime` is obtained first when
+  the bridge is configured. Ordinary sample runs reuse that established delay.
+- `modSusceptibility.Susceptibility_Measure` computes the vertical target as
+  `Int(SCoilPos + processingSample.SampleHeight / 2)` and rejects a target whose
+  sign crosses the configured coil side. If the current up/down height is more
+  than half of `Abs(SampleBottom)`, VB6 homes to top before proceeding.
+- The actual acquisition is exactly: send bridge zero (`Z`), move the up/down
+  axis to the computed target at legacy speed index `0`, send measure (`M`),
+  and apply `SusceptibilityScaleFactor` in the bridge form.
+- A holder measurement stores that scaled bridge value directly. A sample
+  result is `(scaled_sample - SampleHolder.Susceptibility) *
+  SusceptibilityMomentFactorCGS`. Do not substitute magnetic holder moment or a
+  SQUID read for the holder susceptibility value.
+- The Bartington-standard factor/coil-position scan in
+  `frmCalRod.RunSusceSeq` is a separate calibration workflow. Do not invent an
+  empty-coil reading or run that calibration scan during every ordinary
+  susceptibility step.
+- VB6 does not establish a robust safe-return contract after the bridge read.
+  RapidPy must add a conservative, verified return-to-safe-position policy,
+  label it as an intentional safety improvement, and keep physical acceptance
+  pending rather than claiming that policy as legacy evidence.
+
+The current RapidPy seams are also known. `QueueHardwareBackend` owns verified
+up/down motion but does not own or share the separate susceptibility diagnostic
+backend; its live `read_susceptibility()` and live `SUSC` plan validation still
+fail closed. `MeasurementWorker` currently attempts the SQUID cycle before its
+special-case susceptibility read, which is the reverse of the active VB6
+ordering. `HolderCorrection` persists magnetic holder correction only, so it
+cannot yet prove the susceptibility subtraction input. Resolve these seams
+through narrow typed contracts rather than reaching into private fields or
+opening a second serial owner.
+
+Implement one typed, ownership-safe state machine and integration slice:
+
+1. validate finite/nonzero coil geometry, sample height, bridge readiness,
+   exclusive serial ownership, up/down readiness, configured scale/factor, and
+   a valid persisted holder-susceptibility record before any sample movement;
+2. model the evidenced sequence explicitly: optional/required safe homing,
+   bridge zero, verified slow move to `SCoilPos + SampleHeight / 2`, bridge
+   measure, holder subtraction and moment-factor conversion, followed by a
+   verified safe return on success, interruption, timeout, or error;
+3. share one susceptibility backend between diagnostics and queued acquisition
+   under the existing ownership manager. Do not create competing bridge
+   clients, and do not connect hardware merely by constructing the main window;
+4. extend holder state backward-compatibly with the raw scaled susceptibility,
+   acquisition time, and evidence identity. Stage magnetic and susceptibility
+   holder results and atomically replace the accepted holder record only after
+   the whole requested holder block and persistence succeed; retain the prior
+   accepted holder on every failure;
+5. execute requested susceptibility before treatment and SQUID measurement,
+   matching the active VB6 ordering, while preserving cancellation and the
+   transactional measurement-bundle boundary;
+6. write an immutable versioned susceptibility acquisition artifact containing
+   raw/scaled bridge value, holder value and identity, factor, computed result,
+   requested and verified positions, exact communication events, timestamps,
+   phase outcomes, error, and final safe-state outcome. Link it from the run
+   artifact index with byte size and SHA-256;
+7. prevent partial/rejected reads from becoming zero, accepted holder state,
+   `.rmg` output, summaries, or published production bundles. If safe return
+   fails, surface that as a distinct high-severity outcome without hiding the
+   original acquisition error; and
+8. add deterministic injected fakes/replay and fault coverage for validation,
+   ordering, ownership conflicts, zero/measure failures, malformed or partial
+   replies, motion mismatch, timeout, interruption, persistence failure,
+   holder rollback, safe-return failure, transcript inclusion, and artifact
+   indexing. Keep live `SUSC` preflight blocked unless every required component
+   and accepted holder/calibration input is present.
+
+Do not infer retry counts, motor tolerances, the safe return coordinate, or
+calibration validity rules that are not established by existing configuration
+and transport contracts. If a required value still lacks authoritative source
+evidence, add a fail-closed configuration/integration decision and document the
+exact physical acceptance question instead of guessing.
 
 No hardware actuation is authorized by this prompt. Produce the physical
 acceptance procedure and evidence schema, but leave live bridge/coil/standard
@@ -538,14 +596,22 @@ Read these files first:
 - `RapidPy/rapid_main/rapid_main/queue_hardware_backend.py`
 - `RapidPy/rapid_main/rapid_main/panels/calibration.py`
 - `RapidPy/rapid_main/rapid_main/susceptibility_transport.py`
+- `RapidPy/rapid_main/rapid_main/susceptibility.py`
 - `RapidPy/rapid_main/rapid_main/diagnostic_services.py`
+- `RapidPy/rapid_main/rapid_main/holder_state.py`
+- `RapidPy/rapid_main/rapid_main/holder_measurement.py`
+- `RapidPy/rapid_main/rapid_main/config.py`
 - `RapidPy/rapid_main/rapid_main/magnetometer.py`
 - `RapidPy/rapid_main/rapid_main/measurement_worker.py`
-- `RapidPy/rapid_main/rapid_main/diagnostic_services.py`
 - `RapidPy/rapid_main/rapid_main/glass_theme.py`
 - `RapidPy/rapid_main/rapid_main/hardware_contracts.py`
 - `RapidPy/rapid_main/rapid_main/queue_compiler.py`
 - `RapidPy/rapid_main/rapid_main/panels/measurement.py`
+- `RapidPy/rapid_main/tests/test_holder_state.py`
+- `RapidPy/rapid_main/tests/test_queue_hardware_backend.py`
+- `RapidPy/rapid_main/tests/test_measurement_worker.py`
+- `RapidPy/rapid_main/tests/test_diagnostic_services.py`
+- `RapidPy/rapid_main/tests/test_susceptibility_transport.py`
 - `RapidPy/updown_control/updown_control/app.py`
 - `RapidPy/rapidpy_common/ui.py`
 - every module under `RapidPy/rapid_main/rapid_main/panels/` and every dialog
