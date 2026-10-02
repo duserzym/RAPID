@@ -25,7 +25,7 @@ tests; none of it has been validated against the physical RAPID system.
 | Motion and interlock behavior | Verified in software only | **No** | Every motion is verified and a failure aborts the block |
 | Output parity against VB6 | Fixtures only | **No** | VB6 now compiles; side-by-side comparison still requires the no-communication smoke test and a physical reference run |
 
-Full suite: **440 tests passing** (`python -m unittest discover -s tests -p
+Full suite: **447 tests passing** (`python -m unittest discover -s tests -p
 'test_*.py'` from `RapidPy/rapid_main`), up from a 261-test baseline. The
 October 2 shell slice adds truthful Dashboard backend snapshots, responsive
 glass-card reflow, workflow/session menu wiring, shutdown ordering, atomic
@@ -34,6 +34,10 @@ AF simulation isolation, atomic settings backup/restore, and searchable VB6
 transition-help tests. It also covers immutable calibration artifact snapshots,
 versioned approvals, expiry/invalidation, event-based rollback, integrity
 checks, and measurement-provenance linkage.
+The current distribution checkpoint also builds an installable
+`berkeley-rapidpy` wheel, excludes checkout bytecode, packages application
+icons, exposes seven console entry points, diagnoses dependencies/configuration
+headlessly, and constructs the main window from an isolated install target.
 
 ### Behavior changes an operator will notice
 
@@ -50,6 +54,9 @@ checks, and measurement-provenance linkage.
   active calibration. Approvals, activations/rollbacks, and invalidations are
   append-only; expired, invalidated, missing, or hash-mismatched artifacts are
   excluded from new measurement provenance.
+- Installed builds resolve helper applications through packaged modules rather
+  than repository-relative scripts; checkout scripts remain the development
+  preference. A dependency-clean/operator-account deployment is still pending.
 - Sample measurement is blocked when no valid holder correction exists.
 - Measurement output is published only when a run completes; an aborted run
   leaves the production output path untouched.

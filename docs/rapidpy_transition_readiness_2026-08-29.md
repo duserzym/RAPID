@@ -250,7 +250,10 @@ explicit hardware operation, never a silent accept.
 - complete advanced plot/analysis parity and validated export formats;
 - all dialogs, status displays, hardware monitor states, and operator messages
   verified at production resolution;
-- installation and configuration migration exercised on the RAPID computer;
+- dependency-clean installation and configuration migration exercised under
+  the operator account. The wheel itself builds, installs to an isolated target,
+  finds packaged assets/configuration, constructs the main window without the
+  source tree, and exposes seven console entry points on this computer;
 - calibration approvals exercised against real reference standards and signed
   by the operating lab. The append-only version/expiry/invalidity/rollback
   registry and measurement-record linkage are software-complete; that does not
@@ -280,7 +283,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **440 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **447 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence

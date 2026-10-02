@@ -56,9 +56,11 @@ implementation baseline:
 - `a861d46` — refresh readiness and Claude handoff evidence; and
 - `dcb402d` — add searchable VB6 transition help;
 - `d784bdb` — update this handoff after transition help; and
-- `0fd469b` — add the auditable calibration lifecycle and measurement linkage.
+- `0fd469b` — add the auditable calibration lifecycle and measurement linkage;
+- `4a271e7` — record calibration lifecycle readiness; and
+- `77f53c1` — package RapidPy for clean installation and startup diagnostics.
 
-The complete RapidPy suite now reports **440 passing tests** using
+The complete RapidPy suite now reports **447 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -73,13 +75,15 @@ shows a remaining gap.
 
 Work in this priority order:
 
-1. complete clean-environment packaging/startup verification, including
-   resources, icons, dependency diagnostics, configuration discovery, and
-   removal of source-tree-only assumptions;
-2. finish the remaining evidence-backed parity rows, especially live thermal,
+1. finish the remaining evidence-backed parity rows, especially live thermal,
    AF, vacuum, IRM/ARM, susceptibility, VRM, rockmag, and transport robustness;
-3. render and inspect the remaining reachable dialogs at small and normal
+2. render and inspect the remaining reachable dialogs at small and normal
    desktop sizes, fixing any glass-theme or keyboard/accessibility omissions;
+3. complete deployment acceptance in a dependency-clean environment and on the
+   operator account. The installable wheel, packaged icons, configuration and
+   dependency diagnostics, installed helper entry points, source-tree-free
+   main-window construction, and helper resolution are verified on this
+   computer; a fresh dependency install or signed installer is not yet tested;
 4. reconcile the parity/readiness documents only after the corresponding code
    and tests exist.
 
@@ -91,6 +95,9 @@ tested. The Calibration Center now also has immutable artifact snapshots,
 versioned approvals, expiry and invalidation state, event-based rollback, hash
 integrity checks, and active record IDs in measurement provenance. Do not
 recreate these paths; hardware/reference-standard acceptance remains pending.
+The `berkeley-rapidpy` wheel and seven console entry points are also implemented
+and tested from an isolated install target. Do not restore repository-relative
+launch assumptions.
 
 Do not represent placeholder thermal estimates, simulated plots, demo samples,
 or No-Communication results as hardware evidence. An explicit simulation tool
@@ -213,7 +220,8 @@ At minimum, verify and finish:
    prompts, halt-before-exit, layout restore, logging, and useful diagnostics.
 10. Clean-environment startup and packaging, resources/icons, configuration
     discovery, useful missing-dependency errors, and removal of source-tree-only
-    assumptions.
+    assumptions. The wheel and isolated-target smoke test are complete; retain
+    them and close only the remaining dependency-clean/operator deployment gate.
 
 Do not make fake implementations merely to make controls appear wired. When a
 feature requires unavailable physical hardware, complete its protocol boundary,
