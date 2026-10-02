@@ -245,13 +245,14 @@ explicit hardware operation, never a silent accept.
 - furnace/oven control and thermal safety acceptance;
 - susceptibility, VRM, and rock-magnetic acquisition with reproducible bundles;
 - interrupted-queue recovery and physical safe-state acceptance;
-- DC motor encoder, torque/current, stall, limit, and direction verification;
+- DC motor physical encoder, torque/current, stall, limit, direction, sample
+  transfer, safe-abort, and transcript verification;
 - physical fault-injection acceptance of coherent whole-block SQUID recovery.
   In software, numeric queries discard uncorrelated buffered input and reject
   partial replies; transport failures return to zero, clear/reset, back off,
   and reacquire a fresh whole block, with bounded exhaustion and structured run
-  evidence. Vacuum and AF/IRM ADwin software evidence are also integrated;
-  equivalent DC motor and other retained-adapter integration plus physical
+  evidence. Vacuum, AF/IRM ADwin, and DC motor software evidence are also
+  integrated; equivalent retained-auxiliary integration plus physical
   transcript acceptance remain open.
 
 ### P2 — operator and analysis parity
@@ -295,7 +296,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **505 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **515 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
@@ -370,6 +371,13 @@ summary:
   events chronologically and excludes simulated sources. Focused fake-controller
   tests cover success, failure, malformed evidence, readiness refusal, reset,
   and multi-source merging without accessing the board.
+- The shared Quicksilver motor transport now records exact CRLF commands,
+  CR-terminated replies, and errors. Empty, unterminated, non-ASCII, and
+  unparseable replies fail closed; partially initialized connections close the
+  port. Diagnostic and queue adapters reject unsuccessful motion results before
+  mutating direction/hole/load state. Safe return attempts every motor halt even
+  after AF reset or sample-drop failures and then reports one combined error.
+  Current-run motor events merge chronologically into `communication.tsv`.
 - `python -m compileall` is clean across `rapid_main`, its tests,
   `updown_control`, and `rapidpy_common`. The repository configures no linter
   or type checker (no ruff/flake8/mypy config and no lint CI job), so none was

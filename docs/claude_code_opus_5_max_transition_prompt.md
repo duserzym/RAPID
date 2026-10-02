@@ -81,8 +81,9 @@ implementation baseline:
 - `1ba9c6c` — recover SQUID transport faults by safely reacquiring whole blocks.
 - `254fa71` — make live vacuum control fail closed and auditable.
 - `319d467` — make ADwin treatments fail closed and auditable.
+- `23d666b` — make DC motor transport auditable and fail closed.
 
-The complete RapidPy suite now reports **505 passing tests** using
+The complete RapidPy suite now reports **515 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -98,14 +99,14 @@ shows a remaining gap.
 Work in this priority order:
 
 1. extend raw communication evidence and deterministic fault handling to the
-   remaining DC motor and retained auxiliary live adapters without touching
-   hardware. SQUID recovery, vacuum connection/acknowledgment behavior, and
-   AF/IRM ADwin readiness plus structured treatment evidence are already
-   complete; do not duplicate those implementations;
+   remaining retained auxiliary live adapters without touching hardware.
+   SQUID recovery, vacuum acknowledgment behavior, AF/IRM ADwin treatment
+   evidence, and DC motor transport/state safety are already complete; do not
+   duplicate those implementations;
 2. finish the remaining evidence-backed software parity rows and testable
-   protocol/replay boundaries for thermal, DC motors, susceptibility, VRM,
-   rockmag, and transport robustness; keep physical SQUID, vacuum, AF/IRM,
-   ADwin/DAC/MCC, motor, and other RAPID-system-only gates explicitly pending;
+   protocol/replay boundaries for thermal, susceptibility, VRM, rockmag, and
+   retained auxiliaries; keep physical SQUID, vacuum, AF/IRM, ADwin/DAC/MCC,
+   motor, and other RAPID-system-only gates explicitly pending;
 3. complete deployment acceptance in a dependency-clean environment and on the
    operator account. The installable wheel, packaged icons, configuration and
    dependency diagnostics, installed helper entry points, source-tree-free
@@ -228,15 +229,44 @@ event ordering, and simulation exclusion without loading a board or actuating
 hardware. Do not recreate this path. Physical AF/IRM ramp, coil/interlock,
 decay, safe-abort, DAC/MCC loopback, and transcript acceptance remain pending.
 
-The next implementation assignment is the DC motor evidence boundary. Inspect
-the VB6 motor command/reply behavior and `MotorSerialClient` first, then add
-immutable current-run command/reply/error evidence at the lowest truthful
-shared transport boundary without changing command ordering or issuing any
-hardware calls during development. Preserve motion-result verification and
-fail closed on partial, malformed, timed-out, or unsuccessful results. Use
-injected fake transports and deterministic tests. Do not treat a high-level
-method return as raw serial evidence unless the underlying client actually
-retains the command and reply bytes.
+### Completed assignment: auditable and fail-closed DC motor transport
+
+Commit `23d666b` closes the DC motor software evidence and queue-state boundary
+without claiming that an axis moved. The shared `MotorSerialClient` now accepts
+an optional trace callback at the real Quicksilver send/read boundary. It
+records exact CRLF-terminated commands, CR-terminated raw replies, connection
+events, and transport/parse errors. Empty replies, unterminated partial replies,
+non-ASCII replies, and malformed position/status/register replies fail closed.
+If port opening succeeds but DTR/buffer setup or the initial ACK-delay command
+fails, the partially initialized port is closed before the failure propagates.
+
+The integrated DC diagnostic adapter and `QueueHardwareBackend` feed those live
+events into immutable chronological snapshots, so `MeasurementWorker` includes
+only current-run motor traffic in `communication.tsv`. Simulated sources still
+cannot satisfy live evidence. Diagnostic and queue motion methods now reject
+`success=False` before changing recorded hole, direction, flip, or sample-load
+state. Safe return no longer lets an AF-reset or sample-drop failure skip the
+remaining motor halts: it attempts every axis halt, preserves uncertain sample
+state, and then raises one combined error containing all failures.
+
+Coverage lives in `tests/test_motor_transport.py`,
+`tests/test_diagnostic_services.py`, `tests/test_queue_hardware_backend.py`, and
+`tests/test_dcmotors_telemetry.py`. The standalone DC-motor suite also passes 12
+tests with its plot-only test explicitly skipped when optional `pyqtgraph` is
+absent and the documented fallback is active. No port was opened and no motor
+was actuated. Do not recreate this path. Physical direction, encoder/torque,
+limit/stall, sample-transfer, safe-abort, and transcript acceptance remain
+pending.
+
+The next implementation assignment is the retained thermal/auxiliary execution
+boundary. Start with the highest-priority device actually used by queue labels.
+Inspect its VB6 protocol and existing RapidPy planner/launcher first; distinguish
+a planning-only service from a production actuator. Add a typed, fail-closed
+live adapter and current-run evidence only where the repository contains a
+truthful transport contract. If no production protocol exists, preserve the
+planner, block live execution with a specific preflight reason, and write an
+executable hardware-integration acceptance specification instead of inventing
+commands or silently acknowledging a treatment label.
 
 The truthful empty Plots/Sample Selection/Queue states, real `.sam`/`.csv`
 sample-index-to-queue workflow, No-Communication-only AF examples, atomic
@@ -590,14 +620,14 @@ Document every intentional difference from VB6 and why it is safer or required.
 ## Remaining live acceptance work
 
 After the P0 path is complete in software, work through the P1/P2 inventory in
-`docs/rapidpy_transition_readiness_2026-08-29.md`: DC motors, thermal,
-susceptibility, VRM, rockmag, remaining serial robustness, installer/config
-migration, and physical acceptance. Vacuum and AF/IRM ADwin software behavior
-is complete as described above; remaining work for those paths is physical
-acceptance, including independent pressure integration if retained and
-ADwin/DAC/MCC loopback. Plot/export, settings backup/restore, and rollback
-software paths are already implemented; revisit them only for a demonstrated
-regression or a specific acceptance gap.
+`docs/rapidpy_transition_readiness_2026-08-29.md`: thermal, susceptibility,
+VRM, rockmag, remaining retained auxiliaries, installer/config migration, and
+physical acceptance. Vacuum, AF/IRM ADwin, and DC motor software behavior is
+complete as described above; remaining work for those paths is physical
+acceptance, including independent pressure integration if retained,
+ADwin/DAC/MCC loopback, and physical motor/interlock tests. Plot/export,
+settings backup/restore, and rollback software paths are already implemented;
+revisit them only for a demonstrated regression or a specific acceptance gap.
 
 For work that requires the physical RAPID system, provide an executable acceptance procedure and evidence schema instead of claiming success. Every hardware test record should include date/time, operator, machine/software commit, configuration hash, device/port identity, commands and raw replies, expected result, observed result, pass/fail, and artifact paths.
 
