@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 from rapidpy_common.ui import clamp_window_geometry
 
 # Import the installed package first, then support a source checkout fallback.
@@ -38,7 +38,9 @@ class WebcamDialog(QtWidgets.QDialog):
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
+        self.setObjectName("glassDialog")
         self.setWindowTitle("Webcam Monitor — XY Stage")
+        self.setAccessibleName("XY stage webcam monitor")
         self.setWindowFlags(
             QtCore.Qt.WindowType.Window
             | QtCore.Qt.WindowType.WindowCloseButtonHint
@@ -60,7 +62,7 @@ class WebcamDialog(QtWidgets.QDialog):
     def _fit_to_screen(self, screen: QtCore.QObject | None = None) -> None:
         active_screen = (
             screen
-            if isinstance(screen, QtCore.QScreen)
+            if isinstance(screen, QtGui.QScreen)
             else (self.screen() or QtWidgets.QApplication.primaryScreen())
         )
         if active_screen is None:
@@ -94,10 +96,11 @@ class WebcamDialog(QtWidgets.QDialog):
 
     def _build_ui(self) -> None:
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(12, 12, 12, 12)
 
         if _WEBCAM_AVAILABLE:
             self._webcam = WebcamWidget(self)
+            self._webcam.setAccessibleName("Webcam controls and live stage image")
             layout.addWidget(self._webcam)
         else:
             msg = QtWidgets.QLabel(
@@ -108,7 +111,9 @@ class WebcamDialog(QtWidgets.QDialog):
                 "  pip install opencv-python"
             )
             msg.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-            msg.setStyleSheet("color: #888; font-size: 13px; padding: 40px;")
+            msg.setObjectName("guidanceText")
+            msg.setWordWrap(True)
+            msg.setAccessibleName("Webcam dependency status")
             layout.addWidget(msg)
 
     def closeEvent(self, event: QtWidgets.QCloseEvent) -> None:  # type: ignore[override]

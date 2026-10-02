@@ -21,6 +21,8 @@ class SampleSelectDialogTests(unittest.TestCase):
         self.assertEqual(dialog._table.rowCount(), 0)
         self.assertIsNone(dialog.selected_sample)
         self.assertIn("No sample index loaded", dialog._source_lbl.text())
+        self.assertEqual(dialog._source_lbl.property("status"), "neutral")
+        self.assertFalse(dialog._select_btn.isEnabled())
         dialog.deleteLater()
 
     def test_csv_loader_populates_real_rows_and_missing_columns(self) -> None:
@@ -42,6 +44,7 @@ class SampleSelectDialogTests(unittest.TestCase):
         self.assertEqual(dialog._table.item(1, 0).text(), "SPEC-2")
         self.assertEqual(dialog._table.item(1, 3).text(), "")
         dialog._table.selectRow(0)
+        self.assertTrue(dialog._select_btn.isEnabled())
         self.assertEqual(
             dialog.selected_record,
             {
@@ -53,6 +56,9 @@ class SampleSelectDialogTests(unittest.TestCase):
         )
         self.assertIsNotNone(dialog.registrations)
         self.assertEqual(dialog.registrations.names, ["SPEC-1", "SPEC-2"])
+        dialog._search.setText("does-not-match")
+        self.assertIsNone(dialog.selected_sample)
+        self.assertFalse(dialog._select_btn.isEnabled())
         dialog.deleteLater()
 
     def test_csv_loader_rejects_header_only_file(self) -> None:

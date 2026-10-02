@@ -12,6 +12,7 @@ except ImportError:
 
 from PySide6 import QtCore, QtGui, QtWidgets
 from rapidpy_common.ui import clamp_window_geometry
+from rapid_main.glass_theme import set_semantic_status
 
 try:
     import pyqtgraph as pg
@@ -210,7 +211,7 @@ class _ZijderveldWidget(QtWidgets.QWidget):
         else:
             lbl = QtWidgets.QLabel("pyqtgraph not installed — pip install pyqtgraph")
             lbl.setAlignment(QtCore.Qt.AlignCenter)
-            lbl.setStyleSheet("color: #9a8885;")
+            lbl.setObjectName("dialogSubtitle")
             vl.addWidget(lbl)
 
     def set_data(
@@ -268,7 +269,9 @@ class PlotsDialog(QtWidgets.QDialog):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("glassDialog")
         self.setWindowTitle("Demagnetisation Plots")
+        self.setAccessibleName("Demagnetisation plots and quicklook review")
         self.resize(860, 560)
         self.setWindowFlags(
             self.windowFlags()
@@ -354,11 +357,13 @@ class PlotsDialog(QtWidgets.QDialog):
             "inclination": summary["inclination"],
             "declination": summary["declination"],
         }
-        self._demo_lbl.setText(
-            f"Measurement data — {len(summary['labels'])} step"
-            f"{'s' if len(summary['labels']) != 1 else ''}"
+        set_semantic_status(
+            self._demo_lbl,
+            f"Measurement data: {len(summary['labels'])} step"
+            f"{'s' if len(summary['labels']) != 1 else ''}",
+            "ready",
+            accessible_name="Plot data provenance status",
         )
-        self._demo_lbl.setStyleSheet("color: #4b5563; font-size: 11px;")
 
     def quicklook_summary(self) -> dict[str, object]:
         """Return a reproducible summary of the current quicklook data."""
@@ -392,50 +397,66 @@ class PlotsDialog(QtWidgets.QDialog):
 
         hdr_row = QtWidgets.QHBoxLayout()
         hdr = QtWidgets.QLabel("Demagnetisation Plots")
-        hdr.setStyleSheet("font-size: 14px; font-weight: 700; color: #7A0219;")
+        hdr.setObjectName("dialogTitle")
+        hdr.setAccessibleName("Demagnetisation plots title")
         hdr_row.addWidget(hdr)
         hdr_row.addStretch()
 
-        self._demo_lbl = QtWidgets.QLabel("No measurement data loaded")
-        self._demo_lbl.setStyleSheet("color: #6b7280; font-size: 11px;")
+        self._demo_lbl = QtWidgets.QLabel()
+        self._demo_lbl.setWordWrap(True)
+        set_semantic_status(
+            self._demo_lbl,
+            "No measurement data loaded",
+            "neutral",
+            accessible_name="Plot data provenance status",
+        )
         hdr_row.addWidget(self._demo_lbl)
         vl.addLayout(hdr_row)
 
-        tabs = QtWidgets.QTabWidget()
+        self._tabs = QtWidgets.QTabWidget()
+        self._tabs.setAccessibleName("Demagnetisation plot views")
 
         # Zijderveld
         zij_wrap = QtWidgets.QWidget()
         self._zij = _ZijderveldWidget()
         QtWidgets.QVBoxLayout(zij_wrap).addWidget(self._zij)
-        tabs.addTab(zij_wrap, "Zijderveld")
+        self._tabs.addTab(zij_wrap, "Zijderveld")
 
         # Equal-area stereonet
         stereo_wrap = QtWidgets.QWidget()
         sl = QtWidgets.QHBoxLayout(stereo_wrap)
         sl.setAlignment(QtCore.Qt.AlignCenter)
         self._stereo = _StereonetWidget()
-        self._stereo.setFixedSize(320, 320)
+        self._stereo.setMinimumSize(220, 220)
+        self._stereo.setAccessibleName("Equal-area stereonet")
         sl.addWidget(self._stereo)
-        tabs.addTab(stereo_wrap, "Equal-Area")
+        self._tabs.addTab(stereo_wrap, "Equal-Area")
 
         # Intensity decay
         int_wrap = QtWidgets.QWidget()
         self._int_plot = _IntensityWidget()
         QtWidgets.QVBoxLayout(int_wrap).addWidget(self._int_plot)
-        tabs.addTab(int_wrap, "Intensity Decay")
+        self._tabs.addTab(int_wrap, "Intensity Decay")
 
-        vl.addWidget(tabs, 1)
+        vl.addWidget(self._tabs, 1)
 
         # Buttons
-        close_btn = QtWidgets.QPushButton("Close")
-        close_btn.clicked.connect(self.close)
-        demo_btn = QtWidgets.QPushButton("Load SIMULATED example")
-        demo_btn.setToolTip("Load synthetic values for UI demonstration only; not hardware evidence")
-        demo_btn.clicked.connect(self._load_demo)
+        self._close_btn = QtWidgets.QPushButton("Close")
+        self._close_btn.setAccessibleName("Close demagnetisation plots")
+        self._close_btn.clicked.connect(self.close)
+        self._demo_btn = QtWidgets.QPushButton("Load SIMULATED example")
+        self._demo_btn.setAccessibleName("Load simulated plot example")
+        self._demo_btn.setAccessibleDescription(
+            "Loads synthetic values for interface review only; not hardware evidence."
+        )
+        self._demo_btn.setToolTip(
+            "Load synthetic values for UI demonstration only; not hardware evidence"
+        )
+        self._demo_btn.clicked.connect(self._load_demo)
         btn_row = QtWidgets.QHBoxLayout()
-        btn_row.addWidget(demo_btn)
+        btn_row.addWidget(self._demo_btn)
         btn_row.addStretch()
-        btn_row.addWidget(close_btn)
+        btn_row.addWidget(self._close_btn)
         vl.addLayout(btn_row)
 
     def _load_demo(self) -> None:
@@ -480,9 +501,9 @@ class PlotsDialog(QtWidgets.QDialog):
         self._mark_simulated_example()
 
     def _mark_simulated_example(self) -> None:
-        self._demo_lbl.setText("SIMULATED EXAMPLE — not hardware evidence")
-        self._demo_lbl.setStyleSheet(
-            "color: #92400e; background: rgba(245,158,11,0.13); "
-            "border: 1px solid rgba(217,119,6,0.38); border-radius: 7px; "
-            "padding: 3px 8px; font-size: 11px; font-weight: 650;"
+        set_semantic_status(
+            self._demo_lbl,
+            "Example plot data; not hardware evidence",
+            "simulated",
+            accessible_name="Plot data provenance status",
         )

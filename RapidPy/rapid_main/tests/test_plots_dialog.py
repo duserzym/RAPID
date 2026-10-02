@@ -48,7 +48,8 @@ class PlotsDialogTests(unittest.TestCase):
         dialog._load_demo()
 
         self.assertGreater(dialog.quicklook_summary()["step_count"], 0)
-        self.assertIn("SIMULATED EXAMPLE", dialog._demo_lbl.text())
+        self.assertEqual(dialog._demo_lbl.property("status"), "simulated")
+        self.assertIn("SIMULATED", dialog._demo_lbl.text())
         self.assertIn("not hardware evidence", dialog._demo_lbl.text())
         dialog.deleteLater()
 
@@ -58,7 +59,8 @@ class PlotsDialogTests(unittest.TestCase):
 
         dialog.set_data([1.0], [0.0], [0.0], ["NRM"])
 
-        self.assertEqual(dialog._demo_lbl.text(), "Measurement data — 1 step")
+        self.assertEqual(dialog._demo_lbl.property("status"), "ready")
+        self.assertIn("Measurement data: 1 step", dialog._demo_lbl.text())
         self.assertNotIn("SIMULATED", dialog._demo_lbl.text())
         dialog.deleteLater()
 

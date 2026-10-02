@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6 import QtCore, QtGui, QtWidgets
 from rapidpy_common.ui import clamp_window_geometry
 from rapid_main.data_model import SampleIndexRegistration, SampleIndexRegistrations
+from rapid_main.glass_theme import set_semantic_status
 
 try:
     from rapid_main.io.sam_reader import specimen_path
@@ -22,7 +23,9 @@ class SampleSelectDialog(QtWidgets.QDialog):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("glassDialog")
         self.setWindowTitle("Select Sample")
+        self.setAccessibleName("Select specimen from a sample index")
         self.resize(560, 380)
         self.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowContextHelpButtonHint)
         self._source_path: Path | None = None
@@ -118,24 +121,30 @@ class SampleSelectDialog(QtWidgets.QDialog):
         vl.setSpacing(8)
 
         hdr = QtWidgets.QLabel("Sample Index")
-        hdr.setStyleSheet("font-size: 14px; font-weight: 700; color: #7A0219;")
+        hdr.setObjectName("dialogTitle")
+        hdr.setAccessibleName("Sample index title")
         vl.addWidget(hdr)
 
         # Search
         search_row = QtWidgets.QHBoxLayout()
         self._search = QtWidgets.QLineEdit()
         self._search.setPlaceholderText("Filter by name, formation, or location…")
+        self._search.setAccessibleName("Filter sample index")
         self._search.textChanged.connect(self._filter)
-        load_btn = QtWidgets.QPushButton("Load File…")
-        load_btn.clicked.connect(self._load_file)
+        self._load_btn = QtWidgets.QPushButton("Load File…")
+        self._load_btn.setAccessibleName("Load a SAM or CSV sample index")
+        self._load_btn.clicked.connect(self._load_file)
         search_row.addWidget(self._search, 1)
-        search_row.addWidget(load_btn)
+        search_row.addWidget(self._load_btn)
         vl.addLayout(search_row)
 
-        self._source_lbl = QtWidgets.QLabel(
-            "No sample index loaded. Choose Load File to open a real .sam or .csv index."
+        self._source_lbl = QtWidgets.QLabel()
+        set_semantic_status(
+            self._source_lbl,
+            "No sample index loaded. Choose Load File to open a real .sam or .csv index.",
+            "neutral",
+            accessible_name="Sample index source status",
         )
-        self._source_lbl.setObjectName("readLbl")
         self._source_lbl.setWordWrap(True)
         vl.addWidget(self._source_lbl)
 
@@ -145,19 +154,35 @@ class SampleSelectDialog(QtWidgets.QDialog):
         self._table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self._table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self._table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self._table.setAccessibleName("Samples in the loaded index")
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.verticalHeader().setVisible(False)
         self._table.doubleClicked.connect(self._on_double_click)
+        self._table.itemSelectionChanged.connect(self._update_select_enabled)
         vl.addWidget(self._table, 1)
 
         # Buttons
-        btns = QtWidgets.QDialogButtonBox(
+        self._buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
         )
-        btns.button(QtWidgets.QDialogButtonBox.Ok).setText("Select")
-        btns.accepted.connect(self._on_accept)
-        btns.rejected.connect(self.reject)
-        vl.addWidget(btns)
+        self._buttons.setAccessibleName("Sample selection actions")
+        self._select_btn = self._buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+        self._cancel_btn = self._buttons.button(
+            QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        if self._select_btn is not None:
+            self._select_btn.setText("Select")
+            self._select_btn.setAccessibleName("Select highlighted sample")
+            self._select_btn.setEnabled(False)
+        if self._cancel_btn is not None:
+            self._cancel_btn.setAccessibleName("Cancel sample selection")
+        self._buttons.accepted.connect(self._on_accept)
+        self._buttons.rejected.connect(self.reject)
+        vl.addWidget(self._buttons)
+
+    def _update_select_enabled(self) -> None:
+        if self._select_btn is not None:
+            self._select_btn.setEnabled(self.selected_sample is not None)
 
     def _filter(self, text: str) -> None:
         text = text.lower()
@@ -168,6 +193,10 @@ class SampleSelectDialog(QtWidgets.QDialog):
                 if self._table.item(row, col)
             )
             self._table.setRowHidden(row, not match)
+        selected = self._table.selectionModel().selectedRows()
+        if selected and self._table.isRowHidden(selected[0].row()):
+            self._table.clearSelection()
+        self._update_select_enabled()
 
     def _load_file(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -188,9 +217,12 @@ class SampleSelectDialog(QtWidgets.QDialog):
             loaded = self._load_sam(p)
         if loaded:
             self._source_path = p
-            self._source_lbl.setText(
+            set_semantic_status(
+                self._source_lbl,
                 f"Loaded {self._table.rowCount()} specimen"
-                f"{'s' if self._table.rowCount() != 1 else ''} from {p.name}"
+                f"{'s' if self._table.rowCount() != 1 else ''} from {p.name}",
+                "ready",
+                accessible_name="Sample index source status",
             )
             self._source_lbl.setToolTip(str(p))
 
