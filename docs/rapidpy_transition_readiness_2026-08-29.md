@@ -283,7 +283,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **459 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **468 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
@@ -310,6 +310,12 @@ summary:
   with shared glass styling, adaptive forms/headers/actions, accessible primary
   controls, mandatory operator identity coverage, and truthful empty-search
   action state.
+- The completed reachable-dialog audit also covers Plots, Sample Selection,
+  Webcam, Debug Console, Step Monitor, and DC Motors. Tests verify compact
+  actions, written semantic states, accessible control/readout metadata,
+  fail-closed unavailable motor controls, safe diagnostic-text rendering,
+  correct `QtGui.QScreen` fitting, and control refresh after motor disconnect.
+  This is software UI evidence, not live instrument acceptance.
 - `python -m compileall` is clean across `rapid_main`, its tests,
   `updown_control`, and `rapidpy_common`. The repository configures no linter
   or type checker (no ruff/flake8/mypy config and no lint CI job), so none was

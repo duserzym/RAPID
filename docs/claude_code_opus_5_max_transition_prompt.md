@@ -66,9 +66,10 @@ implementation baseline:
 - `3a6ac66` — record the first glass-dialog readiness evidence; and
 - `153fb63` — finish the glass guidance and transition-dialog slice;
 - `786c36a` — record the guidance-dialog readiness evidence; and
-- `d170a93` — finish the glass data/review-dialog slice.
+- `d170a93` — finish the glass data/review-dialog slice; and
+- `1536b5b` — finish the remaining glass dialogs and runtime fixes.
 
-The complete RapidPy suite now reports **463 passing tests** using
+The complete RapidPy suite now reports **468 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -83,19 +84,16 @@ shows a remaining gap.
 
 Work in this priority order:
 
-1. finish the reachable-dialog glass/accessibility audit described in the
-   immediate assignment below. Vacuum, IRM/ARM, SQUID, Login, About, Quick
-   Start, Transition Help, Plots, Sample Selection, and Webcam are complete;
-   the remaining named dialogs are Debug Console, Step Monitor, and DC Motors;
-2. finish the remaining evidence-backed software parity rows, especially live
-   thermal, AF, vacuum, IRM/ARM, susceptibility, VRM, rockmag, and transport
-   robustness;
-3. complete deployment acceptance in a dependency-clean environment and on the
+1. finish the remaining evidence-backed software parity rows and testable
+   protocol/replay boundaries for thermal, AF, vacuum, IRM/ARM, susceptibility,
+   VRM, rockmag, and transport robustness; keep physical acceptance named and
+   pending where the RAPID system is required;
+2. complete deployment acceptance in a dependency-clean environment and on the
    operator account. The installable wheel, packaged icons, configuration and
    dependency diagnostics, installed helper entry points, source-tree-free
    main-window construction, and helper resolution are verified on this
    computer; a fresh dependency install or signed installer is not yet tested;
-4. reconcile the parity/readiness documents only after the corresponding code
+3. reconcile the parity/readiness documents only after the corresponding code
    and tests exist.
 
 The truthful empty Plots/Sample Selection/Queue states, real `.sam`/`.csv`
@@ -114,10 +112,10 @@ The `berkeley-rapidpy` wheel and seven console entry points are also implemented
 and tested from an isolated install target. Do not restore repository-relative
 launch assumptions.
 
-### Immediate assignment: finish reachable dialogs without redoing the shell
+### Completed assignment: reachable dialogs
 
-The next concrete implementation pass is not another main-window redesign. It
-is a systematic audit and repair of every dialog reachable from `rapid_main`.
+The completed implementation pass systematically audited and repaired every
+dialog reachable from `rapid_main`; do not start another main-window redesign.
 The first slice is complete in `dd2e057`: `dialogs/vacuum.py`,
 `dialogs/irm_arm.py`, and `dialogs/squid_comm.py` now use shared glass surfaces,
 semantic non-color-only states, accessible control metadata, compact form
@@ -127,17 +125,22 @@ the shared system with compact action visibility and accessibility coverage.
 The third slice is complete in `d170a93`: Plots, Sample Selection, and Webcam
 now use the shared dialog contract, expose accessible controls, retain compact
 actions, communicate real versus simulated data in words and semantic state,
-and fix Webcam's screen-type handling. Continue with Debug Console, Step
-Monitor, and DC Motors. Audit each dialog's real service wiring while touching
-it, but keep protocol or hardware acceptance gaps separate from visual work.
+and fix Webcam's screen-type handling. The final slice is complete in
+`1536b5b`: Debug Console, Step Monitor, and DC Motors now use the shared glass
+and accessibility contracts; Debug Console uses the supported PySide6 rich-text
+path and escapes backend text; Step Monitor uses `QtGui.QScreen`, normalized
+progress, and written execution state; DC Motors labels simulated/unavailable
+state in words, fails closed when unavailable, and refreshes controls after
+disconnect. Do not redo this audit. Revisit a dialog only for a demonstrated
+regression or a real backend/service gap.
 
-The first audit found numerous dialog-local `setStyleSheet(...)` calls, sparse
-accessible names/descriptions, status labels whose meaning is conveyed mainly
-by color, and several fixed/minimum-width assumptions. Treat these as findings
-to verify in the three remaining dialogs, not as permission to mechanically
-delete styles or shrink safety-critical controls.
+The completed audit found and repaired dialog-local `setStyleSheet(...)`
+conflicts, sparse accessible names/descriptions, color-dependent status labels,
+and rigid geometry assumptions in the reachable set. Preserve the centralized
+contracts; do not mechanically delete styles in unrelated standalone apps or
+shrink safety-critical controls.
 
-For this pass:
+For any later dialog regression fix:
 
 - reuse the centralized dialog title/subtitle, readout-card, and
   semantic-status contracts in `rapid_main/glass_theme.py`; extend them only
