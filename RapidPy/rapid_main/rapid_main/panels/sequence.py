@@ -8,6 +8,9 @@ from PySide6 import QtCore, QtWidgets
 from rapid_main.rockmag import compile_rockmag_routine, rockmag_the_works
 
 
+_HAWAIIAN_AF_LABELS = ["NRM", "AF25", "AF50", "AF100", "AF200", "AF400", "AF800"]
+
+
 @dataclass
 class SequenceConfig:
     do_nrm: bool = False
@@ -43,6 +46,8 @@ class SequencePanel(QtWidgets.QWidget):
         self._cfg = SequenceConfig()
         self._compiled_routine_labels: list[str] | None = None
         self._applying_preset = False
+        self._current_path: Path | None = None
+        self._dirty = False
 
         root = QtWidgets.QHBoxLayout(self)
         root.setContentsMargins(16, 12, 16, 16)
@@ -57,6 +62,7 @@ class SequencePanel(QtWidgets.QWidget):
         lv.addStretch()
         root.addWidget(left_panel, 3)
         root.addWidget(self._build_preview_card(), 2)
+        self._rebuild_preview()
 
     # ── Presets ───────────────────────────────────────────────────────────────
     def _build_presets_card(self) -> QtWidgets.QFrame:
@@ -256,9 +262,9 @@ class SequencePanel(QtWidgets.QWidget):
         cl.setContentsMargins(18, 14, 18, 14)
         cl.setSpacing(8)
 
-        hdr = QtWidgets.QLabel("SEQUENCE PREVIEW")
-        hdr.setObjectName("sectionHdr")
-        cl.addWidget(hdr)
+        self._preview_header = QtWidgets.QLabel("SEQUENCE PREVIEW")
+        self._preview_header.setObjectName("sectionHdr")
+        cl.addWidget(self._preview_header)
 
         self._preview = QtWidgets.QPlainTextEdit()
         self._preview.setObjectName("console")
@@ -345,7 +351,11 @@ class SequencePanel(QtWidgets.QWidget):
     def _rebuild_preview(self) -> None:
         if not self._applying_preset and self.sender() is not None:
             self._compiled_routine_labels = None
+            self._set_dirty(True)
         labels = self.generate_labels()
+        self._render_labels(labels)
+
+    def _render_labels(self, labels: list[str], *, loaded: bool = False) -> None:
         lines = ["Configured measurement sequence:\n"]
         if labels:
             for lbl in labels:
@@ -354,11 +364,40 @@ class SequencePanel(QtWidgets.QWidget):
             lines.append("  (no steps selected — choose a preset or check steps above)")
         self._preview.setPlainText("\n".join(lines))
         n = len(labels)
-        self._step_count_lbl.setText(f"{n} step{'s' if n != 1 else ''} configured")
+        suffix = "loaded from file" if loaded else "configured"
+        self._step_count_lbl.setText(f"{n} step{'s' if n != 1 else ''} {suffix}")
+        self._update_document_caption()
         # Push labels to MainWindow runtime estimator
         mw = self.window()
         if hasattr(mw, "load_sequence_labels"):
             mw.load_sequence_labels(labels)
+
+    def _set_dirty(self, dirty: bool) -> None:
+        self._dirty = bool(dirty)
+        if hasattr(self, "_preview_header"):
+            self._update_document_caption()
+
+    def _update_document_caption(self) -> None:
+        name = self._current_path.name if self._current_path is not None else "Untitled"
+        marker = " • Unsaved" if self._dirty else ""
+        self._preview_header.setText(f"SEQUENCE PREVIEW — {name}{marker}")
+
+    def has_unsaved_changes(self) -> bool:
+        return self._dirty
+
+    def confirm_discard_changes(self) -> bool:
+        if not self._dirty:
+            return True
+        name = self._current_path.name if self._current_path is not None else "Untitled sequence"
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Unsaved sequence",
+            f"{name} has unsaved changes. Discard them?",
+            QtWidgets.QMessageBox.StandardButton.Discard
+            | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Cancel,
+        )
+        return answer == QtWidgets.QMessageBox.StandardButton.Discard
 
     def _generate(self) -> None:
         labels = self.generate_labels()
@@ -376,22 +415,40 @@ class SequencePanel(QtWidgets.QWidget):
 
     # ── Save / Load ───────────────────────────────────────────────────────────
 
-    def _save_sequence(self) -> None:
+    def _save_sequence(self) -> bool:
         labels = self.generate_labels()
         if not labels:
             QtWidgets.QMessageBox.warning(self, "Save Sequence", "No steps to save.")
-            return
+            return False
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Save Sequence", "", "JSON sequence (*.json);;Text file (*.txt)"
+            self,
+            "Save Sequence",
+            str(self._current_path or ""),
+            "JSON sequence (*.json);;Text file (*.txt)",
         )
         if not path:
-            return
+            return False
+        return self.save_to_path(Path(path))
+
+    def save_to_path(self, path: Path) -> bool:
         from rapid_main.io.sequence_io import save_sequence_json, save_sequence_txt
-        p = Path(path)
-        if p.suffix.lower() == ".json":
-            save_sequence_json(p, labels)
-        else:
-            save_sequence_txt(p, labels)
+        labels = self.generate_labels()
+        try:
+            if path.suffix.lower() == ".json":
+                save_sequence_json(path, labels)
+            else:
+                save_sequence_txt(path, labels)
+        except (OSError, ValueError) as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Save Sequence", f"Unable to save sequence:\n\n{exc}"
+            )
+            return False
+        self._current_path = path
+        self._set_dirty(False)
+        self._step_count_lbl.setText(
+            f"{len(labels)} step{'s' if len(labels) != 1 else ''} saved"
+        )
+        return True
 
     def _load_sequence(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -399,27 +456,59 @@ class SequencePanel(QtWidgets.QWidget):
         )
         if not path:
             return
-        from rapid_main.io.sequence_io import load_sequence
-        labels = load_sequence(Path(path))
-        if not labels:
-            QtWidgets.QMessageBox.warning(self, "Load Sequence", "No steps found in file.")
+        if not self.confirm_discard_changes():
             return
-        # Display loaded sequence directly in preview
-        self._preview.setPlainText(
-            f"Loaded {len(labels)} steps from file:\n\n" + "\n".join(f"  {l}" for l in labels)
-        )
-        self._step_count_lbl.setText(f"{len(labels)} steps loaded from file")
-        mw = self.window()
-        if hasattr(mw, "load_sequence_labels"):
-            mw.load_sequence_labels(labels)
+        from rapid_main.io.sequence_io import SequenceFormatError, load_sequence_strict
+        try:
+            labels = load_sequence_strict(Path(path))
+        except SequenceFormatError as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Load Sequence", f"Unable to load sequence:\n\n{exc}"
+            )
+            return
+        self.load_labels(labels, source_path=Path(path))
+
+    def load_labels(self, labels: list[str], *, source_path: Path | None = None) -> None:
+        """Install imported labels as the active executable and saveable sequence."""
+        self._compiled_routine_labels = list(labels)
+        self._current_path = source_path
+        self._set_dirty(False)
+        self._render_labels(list(labels), loaded=source_path is not None)
+
+    def clear_for_new_session(self) -> None:
+        self._applying_preset = True
+        try:
+            for checkbox in (
+                self._chk_nrm,
+                self._chk_nrm_3axis,
+                self._chk_rrm,
+                self._chk_rrm_neg,
+                self._chk_arm,
+                self._chk_irm,
+                self._chk_backfield,
+                self._chk_susc,
+            ):
+                checkbox.setChecked(False)
+        finally:
+            self._applying_preset = False
+        self._compiled_routine_labels = None
+        self._current_path = None
+        self._set_dirty(False)
+        self._rebuild_preview()
 
     # ── Preset loaders ────────────────────────────────────────────────────────
     def _preset_hawaiian(self) -> None:
-        self._compiled_routine_labels = None
-        for chk in (self._chk_nrm, self._chk_rrm, self._chk_arm,
-                    self._chk_irm, self._chk_backfield, self._chk_susc):
-            chk.setChecked(False)
-        self._chk_nrm.setChecked(True)
+        self._compiled_routine_labels = list(_HAWAIIAN_AF_LABELS)
+        self._applying_preset = True
+        try:
+            for chk in (self._chk_nrm, self._chk_rrm, self._chk_arm,
+                        self._chk_irm, self._chk_backfield, self._chk_susc):
+                chk.setChecked(False)
+            self._chk_nrm.setChecked(True)
+        finally:
+            self._applying_preset = False
+        self._current_path = None
+        self._set_dirty(True)
         self._rebuild_preview()
 
     def _preset_works(self) -> None:
@@ -434,6 +523,8 @@ class SequencePanel(QtWidgets.QWidget):
             self._chk_susc.setChecked(True)
         finally:
             self._applying_preset = False
+        self._current_path = None
+        self._set_dirty(True)
         self._rebuild_preview()
 
 
