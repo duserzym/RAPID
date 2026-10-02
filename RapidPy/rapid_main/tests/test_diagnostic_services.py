@@ -1,20 +1,24 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from rapidpy_common.hardware import MotorAxisConfig, MotorTelemetry
 
 from rapid_main.config import AfDemagConfig, IrmArmConfig, SquidConfig, VacuumConfig
 from rapid_main import diagnostic_services
+from rapid_main.communication_log import CommunicationDirection
 from rapid_main.diagnostic_services import (
     DCMotorNoCommBackend,
+    AfDemagBackendAdapter,
     AfDemagNoCommBackend,
     build_dcmotor_backend,
     collect_diagnostic_status,
     VacuumNoCommBackend,
     VacuumBackendAdapter,
     IrmArmNoCommBackend,
+    IrmArmBackendAdapter,
     SquidNoCommBackend,
     read_vacuum_snapshot,
     read_squid_snapshot,
@@ -32,6 +36,157 @@ from rapid_main.diagnostic_services import (
 
 
 class TestDiagnosticServices(unittest.TestCase):
+    @staticmethod
+    def _adwin_result() -> SimpleNamespace:
+        return SimpleNamespace(
+            out_count=120,
+            in_count=118,
+            up_count=40,
+            down_start=80,
+            monitor_peak_v=2.5,
+            ramp_peak_v=5.0,
+            down_slope_vps=1.25,
+            timestep_s=0.001,
+            points_per_period=100.0,
+        )
+
+    def test_af_live_adapter_records_request_result_and_confirmed_reset(self) -> None:
+        result = self._adwin_result()
+
+        class _Controller:
+            def __init__(self) -> None:
+                self.requests = []
+
+            def test_version(self) -> int:
+                return 91
+
+            def run_ramp(self, request):
+                self.requests.append(request)
+                return result
+
+            def set_af_relays(self, active_coil: str, one_chan_on: bool = True) -> int:
+                self.relay_call = (active_coil, one_chan_on)
+                return 0
+
+        controller = _Controller()
+        backend = AfDemagBackendAdapter(AfDemagConfig(board=2), controller=controller)
+        command = plan_af_demag_command("AF50", AfDemagConfig(peak=100.0))
+
+        status = backend.apply_af(command)
+        reset_status = backend.reset_field()
+
+        self.assertIn("AF completed", status)
+        self.assertEqual(reset_status, "AF field reset confirmed.")
+        self.assertEqual(controller.relay_call, ("off", True))
+        events = backend.communication_events()
+        self.assertEqual(
+            [event.direction for event in events],
+            [
+                CommunicationDirection.TX,
+                CommunicationDirection.RX,
+                CommunicationDirection.TX,
+                CommunicationDirection.RX,
+            ],
+        )
+        self.assertEqual(events[0].channel, "ADWIN_AF")
+        self.assertEqual(events[0].port, "board:2")
+        self.assertIn('"action":"run_ramp"', events[0].payload)
+        self.assertIn('"active_coil":"axial"', events[0].payload)
+        self.assertIn('"action":"run_ramp_result"', events[1].payload)
+        self.assertIn('"monitor_peak_v":2.5', events[1].payload)
+        self.assertIn('"action":"set_af_relays"', events[2].payload)
+        self.assertIn('"relay_word":0', events[3].payload)
+
+    def test_af_live_adapter_logs_error_and_does_not_claim_completion(self) -> None:
+        class _Controller:
+            def test_version(self) -> int:
+                return 91
+
+            def run_ramp(self, request):
+                del request
+                raise RuntimeError("ADwin process timeout")
+
+        backend = AfDemagBackendAdapter(AfDemagConfig(), controller=_Controller())
+        command = plan_af_demag_command("AF25", AfDemagConfig(peak=100.0))
+
+        with self.assertRaisesRegex(RuntimeError, "process timeout"):
+            backend.apply_af(command)
+
+        events = backend.communication_events()
+        self.assertEqual(
+            [event.direction for event in events],
+            [CommunicationDirection.TX, CommunicationDirection.ERROR],
+        )
+        self.assertIn("AF25 failed", events[-1].detail)
+        self.assertNotIn("completed", backend.status().lower())
+
+    def test_af_live_adapter_rejects_incomplete_result_evidence(self) -> None:
+        class _Controller:
+            def test_version(self) -> int:
+                return 91
+
+            def run_ramp(self, request):
+                del request
+                return SimpleNamespace(out_count=1)
+
+        backend = AfDemagBackendAdapter(AfDemagConfig(), controller=_Controller())
+        command = plan_af_demag_command("AF25", AfDemagConfig(peak=100.0))
+
+        with self.assertRaises(AttributeError):
+            backend.apply_af(command)
+
+        events = backend.communication_events()
+        self.assertEqual(
+            [event.direction for event in events],
+            [CommunicationDirection.TX, CommunicationDirection.ERROR],
+        )
+        self.assertNotIn("completed", backend.status().lower())
+
+    def test_irm_live_adapter_records_every_incremental_ramp(self) -> None:
+        result = self._adwin_result()
+
+        class _Controller:
+            def __init__(self) -> None:
+                self.requests = []
+
+            def test_version(self) -> int:
+                return 91
+
+            def run_ramp(self, request):
+                self.requests.append(request)
+                return result
+
+        controller = _Controller()
+        backend = IrmArmBackendAdapter(IrmArmConfig(), controller=controller)
+
+        backend.apply_irm(
+            max_field_mT=30.0,
+            axis="Z (up-axis)",
+            ramp_label="Fast (10 s)",
+            steps=3,
+        )
+
+        self.assertEqual(len(controller.requests), 3)
+        events = backend.communication_events()
+        self.assertEqual(len(events), 6)
+        self.assertEqual(
+            [event.direction for event in events],
+            [CommunicationDirection.TX, CommunicationDirection.RX] * 3,
+        )
+        self.assertTrue(all(event.channel == "ADWIN_IRM_ARM" for event in events))
+        self.assertIn("field=10 mT", events[0].detail)
+        self.assertIn("field=30 mT", events[-1].detail)
+
+    def test_adwin_readiness_probe_failure_blocks_live_adapters(self) -> None:
+        class _Unreachable:
+            def test_version(self) -> int:
+                return 0
+
+        with self.assertRaisesRegex(HardwareUnavailableError, "unreachable"):
+            AfDemagBackendAdapter(AfDemagConfig(), controller=_Unreachable())
+        with self.assertRaisesRegex(HardwareUnavailableError, "unreachable"):
+            IrmArmBackendAdapter(IrmArmConfig(), controller=_Unreachable())
+
     def test_disconnected_vacuum_snapshot_fails_without_reading_fake_pressure(self) -> None:
         class _Disconnected:
             simulated = False

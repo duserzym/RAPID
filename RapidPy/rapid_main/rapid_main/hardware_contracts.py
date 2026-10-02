@@ -382,11 +382,17 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         return self._acquisition_error
 
     def communication_events(self):
-        """Return immutable raw SQUID traffic for the current run."""
+        """Return immutable live SQUID and treatment traffic in time order."""
 
-        if self._bracketed is None:
-            return ()
-        return tuple(self._bracketed.communication_events())
+        events = []
+        for source in (self._bracketed, self._af_demag, self._irm_arm):
+            if source is None or bool(getattr(source, "simulated", False)):
+                continue
+            provider = getattr(source, "communication_events", None)
+            if not callable(provider):
+                continue
+            events.extend(provider())
+        return tuple(sorted(events, key=lambda event: event.timestamp))
 
     @property
     def transport_recovery_records(self):

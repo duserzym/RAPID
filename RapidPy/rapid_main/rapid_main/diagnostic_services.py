@@ -8,6 +8,7 @@ fallbacks so ownership and orchestration can be kept in-process.
 from __future__ import annotations
 
 import abc
+import json
 import random
 import time
 import math
@@ -176,6 +177,61 @@ def _field_mT_to_volts(
     if not command.allowed:
         raise HardwareError(command.command_summary)
     return command.voltage_v
+
+
+def _adwin_event_payload(action: str, **values: object) -> str:
+    """Return a stable, single-line ADwin request/result evidence payload."""
+
+    return json.dumps(
+        {"action": str(action), **values},
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _adwin_ramp_request_payload(request: object) -> str:
+    return _adwin_event_payload(
+        "run_ramp",
+        active_coil=str(getattr(request, "active_coil", "")),
+        hold_ms=int(getattr(request, "hold_ms", 0)),
+        io_rate_hz=float(getattr(request, "io_rate_hz", 0.0)),
+        monitor_peak_voltage=float(getattr(request, "peak_monitor_voltage", 0.0)),
+        noise_level=int(getattr(request, "noise_level", 0)),
+        ramp_down_mode=int(getattr(request, "ramp_down_mode", 0)),
+        ramp_mode=int(getattr(request, "ramp_mode", 0)),
+        ramp_peak_voltage=float(getattr(request, "ramp_peak_voltage", 0.0)),
+        sine_freq_hz=float(getattr(request, "sine_freq_hz", 0.0)),
+        slope_down=float(getattr(request, "slope_down", 0.0)),
+        slope_up=float(getattr(request, "slope_up", 0.0)),
+    )
+
+
+def _adwin_ramp_result_payload(result: object) -> str:
+    return _adwin_event_payload(
+        "run_ramp_result",
+        down_slope_vps=float(getattr(result, "down_slope_vps")),
+        down_start=int(getattr(result, "down_start")),
+        in_count=int(getattr(result, "in_count")),
+        monitor_peak_v=float(getattr(result, "monitor_peak_v")),
+        out_count=int(getattr(result, "out_count")),
+        points_per_period=float(getattr(result, "points_per_period")),
+        ramp_peak_v=float(getattr(result, "ramp_peak_v")),
+        timestep_s=float(getattr(result, "timestep_s")),
+        up_count=int(getattr(result, "up_count")),
+    )
+
+
+def _verify_adwin_controller(controller: object, *, label: str) -> int:
+    """Verify a live ADwin board without issuing a treatment or relay command."""
+
+    test_version = getattr(controller, "test_version", None)
+    if not callable(test_version):
+        raise HardwareUnavailableError(f"{label} controller has no readiness probe.")
+    version = int(test_version())
+    if version == 0:
+        raise HardwareUnavailableError(f"{label} ADwin board is unreachable or not booted.")
+    return version
 
 
 #: Marker stamped on every simulated payload, log line, UI label, and file so a
@@ -779,25 +835,38 @@ class AfDemagNoCommBackend(_BaseBackend, AfDemagBackend):
 class AfDemagBackendAdapter(_BaseBackend, AfDemagBackend):
     """ADwin-backed AF demagnetizer treatment backend."""
 
-    def __init__(self, cfg: AfDemagConfig | None = None) -> None:
+    def __init__(
+        self,
+        cfg: AfDemagConfig | None = None,
+        *,
+        controller: object | None = None,
+    ) -> None:
         super().__init__(simulated=False)
         self._cfg = cfg or AfDemagConfig()
-        self._controller = None
+        self._communication_logger = CommunicationLogger(
+            "ADWIN_AF", port=f"board:{int(self._cfg.board) or 1}", max_payload_chars=2048
+        )
+        self._controller = controller
         self._last_result = None
         self._status = "AF ADwin backend not connected"
-        self._connect_if_possible()
+        self._connect()
 
-    def _connect_if_possible(self) -> None:
-        if AdwinAFController is None:
-            self._status = "AF ADwin classes unavailable on this host."
-            return
+    def _connect(self) -> None:
+        if self._controller is None and AdwinAFController is None:
+            raise HardwareUnavailableError("AF ADwin classes are unavailable on this host.")
         try:
-            board = AdwinBoardConfig(board_num=int(self._cfg.board) or 1)
-            self._controller = AdwinAFController(board=board, limits=AdwinCoilLimits())
-            self._status = "AF ADwin backend connected"
-        except Exception as exc:  # pragma: no cover - transport dependent
+            if self._controller is None:
+                board = AdwinBoardConfig(board_num=int(self._cfg.board) or 1)
+                self._controller = AdwinAFController(board=board, limits=AdwinCoilLimits())
+            version = _verify_adwin_controller(self._controller, label="AF")
+        except Exception as exc:
             self._controller = None
             self._status = f"AF ADwin backend unavailable: {exc}"
+            raise HardwareUnavailableError(self._status) from exc
+        self._status = f"AF ADwin backend connected (version probe {version})"
+
+    def communication_events(self) -> tuple[CommunicationEvent, ...]:
+        return tuple(self._communication_logger.transcript.events)
 
     def is_connected(self) -> bool:
         return self._controller is not None
@@ -818,7 +887,21 @@ class AfDemagBackendAdapter(_BaseBackend, AfDemagBackend):
             io_rate_hz=25_000.0,
             noise_level=5,
         )
-        self._last_result = self._controller.run_ramp(request)
+        payload = _adwin_ramp_request_payload(request)
+        self._communication_logger.sent(payload, detail=f"AF treatment {command.label}")
+        try:
+            self._last_result = self._controller.run_ramp(request)
+            result_payload = _adwin_ramp_result_payload(self._last_result)
+        except Exception as exc:
+            self._status = f"AF treatment failed: {exc}"
+            self._communication_logger.error(
+                f"AF treatment {command.label} failed: {exc}", payload=payload
+            )
+            raise
+        self._communication_logger.received(
+            result_payload,
+            detail=f"AF treatment {command.label} completed",
+        )
         self._status = (
             f"AF completed: {command.field_mT:.3g} mT, "
             f"{command.sine_freq_hz:.3g} Hz."
@@ -826,11 +909,25 @@ class AfDemagBackendAdapter(_BaseBackend, AfDemagBackend):
         return self._status
 
     def reset_field(self) -> str:
-        if self._controller is not None and hasattr(self._controller, "set_af_relays"):
-            self._controller.set_af_relays("off", one_chan_on=True)
-            self._status = "AF field reset command issued."
-        else:
-            self._status = "AF field reset unavailable (backend disconnected)."
+        if self._controller is None or not hasattr(self._controller, "set_af_relays"):
+            raise HardwareError("AF ADwin backend is not connected.")
+        payload = _adwin_event_payload(
+            "set_af_relays", active_coil="off", one_chan_on=True
+        )
+        self._communication_logger.sent(payload, detail="AF safe field reset")
+        try:
+            relay_word = self._controller.set_af_relays("off", one_chan_on=True)
+        except Exception as exc:
+            self._status = f"AF safe field reset failed: {exc}"
+            self._communication_logger.error(
+                f"AF safe field reset failed: {exc}", payload=payload
+            )
+            raise
+        self._communication_logger.received(
+            _adwin_event_payload("set_af_relays_result", relay_word=int(relay_word)),
+            detail="AF safe field reset confirmed",
+        )
+        self._status = "AF field reset confirmed."
         return self._status
 
     def status(self) -> str:
@@ -840,25 +937,38 @@ class AfDemagBackendAdapter(_BaseBackend, AfDemagBackend):
 class IrmArmBackendAdapter(_BaseBackend, IrmArmBackend):
     """Adapter-backed IRM/ARM backend using ADwin AF controller."""
 
-    def __init__(self, cfg: IrmArmConfig | None = None) -> None:
+    def __init__(
+        self,
+        cfg: IrmArmConfig | None = None,
+        *,
+        controller: object | None = None,
+    ) -> None:
         super().__init__(simulated=False)
         self._cfg = cfg or IrmArmConfig()
         self._status = "IRM / ARM ADwin backend not connected"
-        self._controller = None
+        self._communication_logger = CommunicationLogger(
+            "ADWIN_IRM_ARM", port="board:1", max_payload_chars=2048
+        )
+        self._controller = controller
         self._last_result = None
-        self._connect_if_possible()
+        self._connect()
 
-    def _connect_if_possible(self) -> None:
-        if AdwinAFController is None:
-            self._status = "IRm / ARM ADwin classes unavailable on this host."
-            return
+    def _connect(self) -> None:
+        if self._controller is None and AdwinAFController is None:
+            raise HardwareUnavailableError("IRM / ARM ADwin classes are unavailable on this host.")
         try:
-            board = AdwinBoardConfig()  # defaults match adwin-comms defaults
-            self._controller = AdwinAFController(board=board, limits=AdwinCoilLimits())
-            self._status = "IRM / ARM ADwin backend connected"
-        except Exception as exc:  # pragma: no cover - transport dependent
+            if self._controller is None:
+                board = AdwinBoardConfig()  # defaults match adwin-comms defaults
+                self._controller = AdwinAFController(board=board, limits=AdwinCoilLimits())
+            version = _verify_adwin_controller(self._controller, label="IRM / ARM")
+        except Exception as exc:
             self._controller = None
             self._status = f"IRM / ARM ADwin backend unavailable: {exc}"
+            raise HardwareUnavailableError(self._status) from exc
+        self._status = f"IRM / ARM ADwin backend connected (version probe {version})"
+
+    def communication_events(self) -> tuple[CommunicationEvent, ...]:
+        return tuple(self._communication_logger.transcript.events)
 
     def _run_single_ramp(self, field_mT: float, axis: str, label: str) -> None:
         if self._controller is None:
@@ -882,7 +992,24 @@ class IrmArmBackendAdapter(_BaseBackend, IrmArmBackend):
             io_rate_hz=25_000.0,
             noise_level=5,
         )
-        result = self._controller.run_ramp(request)
+        payload = _adwin_ramp_request_payload(request)
+        self._communication_logger.sent(
+            payload, detail=f"{label} field={field_mT:.6g} mT axis={axis}"
+        )
+        try:
+            result = self._controller.run_ramp(request)
+            result_payload = _adwin_ramp_result_payload(result)
+        except Exception as exc:
+            self._status = f"{label} ramp failed: {exc}"
+            self._communication_logger.error(
+                f"{label} field={field_mT:.6g} mT axis={axis} failed: {exc}",
+                payload=payload,
+            )
+            raise
+        self._communication_logger.received(
+            result_payload,
+            detail=f"{label} field={field_mT:.6g} mT axis={axis} completed",
+        )
         self._last_result = result
 
     def is_connected(self) -> bool:
@@ -938,11 +1065,25 @@ class IrmArmBackendAdapter(_BaseBackend, IrmArmBackend):
         return self._status
 
     def reset_field(self) -> str:
-        if self._controller is not None and hasattr(self._controller, "set_af_relays"):
-            self._controller.set_af_relays("off", one_chan_on=True)
-            self._status = "IRM / ARM field reset command issued."
-        else:
-            self._status = "IRM / ARM field reset (simulated)"
+        if self._controller is None or not hasattr(self._controller, "set_af_relays"):
+            raise HardwareError("IRM / ARM ADwin backend is not connected.")
+        payload = _adwin_event_payload(
+            "set_af_relays", active_coil="off", one_chan_on=True
+        )
+        self._communication_logger.sent(payload, detail="IRM / ARM safe field reset")
+        try:
+            relay_word = self._controller.set_af_relays("off", one_chan_on=True)
+        except Exception as exc:
+            self._status = f"IRM / ARM safe field reset failed: {exc}"
+            self._communication_logger.error(
+                f"IRM / ARM safe field reset failed: {exc}", payload=payload
+            )
+            raise
+        self._communication_logger.received(
+            _adwin_event_payload("set_af_relays_result", relay_word=int(relay_word)),
+            detail="IRM / ARM safe field reset confirmed",
+        )
+        self._status = "IRM / ARM field reset confirmed."
         return self._status
 
 

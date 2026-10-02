@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 from rapid_main.config import AppConfig
+from rapid_main.communication_log import CommunicationDirection, CommunicationEvent
 from rapid_main.diagnostic_services import HardwareUnavailableError
 from rapid_main.hardware_contracts import (
     QueueAutomationError,
@@ -97,6 +98,15 @@ class _PlainSquidAdapter:
         return 0.0
 
 
+class _CommunicationSource:
+    def __init__(self, event: CommunicationEvent, *, simulated: bool = False) -> None:
+        self._event = event
+        self.simulated = simulated
+
+    def communication_events(self) -> tuple[CommunicationEvent, ...]:
+        return (self._event,)
+
+
 def _config(tmp: Path, *, configured_motion: bool = True) -> AppConfig:
     cfg = AppConfig()
     cfg.general.nocomm = False
@@ -118,6 +128,35 @@ class QueueBackendFailClosedTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
+
+    def test_communication_events_merge_live_treatment_sources_in_time_order(self) -> None:
+        early = CommunicationEvent(
+            timestamp=NOW,
+            channel="ADWIN_AF",
+            direction=CommunicationDirection.TX,
+            payload="af-request",
+        )
+        middle = CommunicationEvent(
+            timestamp=NOW + timedelta(seconds=1),
+            channel="ADWIN_IRM_ARM",
+            direction=CommunicationDirection.RX,
+            payload="irm-result",
+        )
+        simulated = CommunicationEvent(
+            timestamp=NOW + timedelta(seconds=2),
+            channel="SIMULATED",
+            direction=CommunicationDirection.INFO,
+            payload="must-not-publish",
+        )
+        backend = object.__new__(QueueHardwareBackend)
+        backend._bracketed = None
+        backend._af_demag = _CommunicationSource(early)
+        backend._irm_arm = _CommunicationSource(middle)
+
+        self.assertEqual(backend.communication_events(), (early, middle))
+
+        backend._af_demag = _CommunicationSource(simulated, simulated=True)
+        self.assertEqual(backend.communication_events(), (middle,))
 
     def test_component_construction_failure_becomes_a_preflight_blocker(self) -> None:
         cfg = _config(self.tmp)
