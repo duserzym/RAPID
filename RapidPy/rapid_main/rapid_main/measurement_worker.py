@@ -61,6 +61,7 @@ from rapid_main.magnetometer import (
 from rapid_main.status_codes import OperatorStatus, error_status, status_for_phase, warning_status
 from rapid_main.susceptibility import write_susceptibility_summary_json
 from rapid_main.rockmag import write_rockmag_run_artifact
+from rapid_main.thermal import write_thermal_run_artifact
 from rapid_main.workflow import WorkflowPhase, WorkflowStateMachine
 from rapid_main import software_version
 from rapid_main.io.measurement_bundle import (
@@ -144,6 +145,7 @@ class MeasurementWorker(QtCore.QThread):
         calibration_records: Sequence[Mapping[str, Any]] | None = None,
         communication_sources: Sequence[object] | None = None,
         routine_context: Mapping[str, Any] | None = None,
+        thermal_context: Mapping[str, Any] | None = None,
         parent: Optional[QtCore.QObject] = None,
     ) -> None:
         super().__init__(parent)
@@ -163,6 +165,9 @@ class MeasurementWorker(QtCore.QThread):
         self._allow_simulated_production_output = bool(allow_simulated_production_output)
         self._calibration_records = [dict(record) for record in (calibration_records or ())]
         self._routine_context = dict(routine_context) if routine_context is not None else None
+        self._thermal_context = dict(thermal_context) if thermal_context is not None else None
+        if self._routine_context is not None and self._thermal_context is not None:
+            raise ValueError("a measurement run cannot have both rockmag and thermal plan identity")
         # A backend that declares itself simulated taints every artifact it
         # produces: the run is labelled and kept out of the production path.
         self._simulated = bool(getattr(self._backend, "simulated", False))
@@ -772,6 +777,7 @@ class MeasurementWorker(QtCore.QThread):
             ],
             "calibration_records": list(self._calibration_records),
             "rockmag_routine": dict(self._routine_context) if self._routine_context else None,
+            "thermal_routine": dict(self._thermal_context) if self._thermal_context else None,
         }
 
     def _run_provenance(self) -> dict[str, object]:
@@ -878,6 +884,20 @@ class MeasurementWorker(QtCore.QThread):
                 if self._routine_context is not None
                 else None
             ),
+            "thermal_routine": (
+                {
+                    "procedure_id": self._thermal_context.get("procedure_id", ""),
+                    "routine_name": self._thermal_context.get("routine_name", ""),
+                    "queue_labels": list(
+                        self._thermal_context.get(
+                            "queue_labels", self._thermal_context.get("labels", ())
+                        )
+                    ),
+                    "automation_status": "MANUAL_EXTERNAL_ONLY",
+                }
+                if self._thermal_context is not None
+                else None
+            ),
             "aborted": bool(aborted),
             "simulated": self._simulated,
             "simulation_statement": (
@@ -945,6 +965,7 @@ class MeasurementWorker(QtCore.QThread):
         self._write_workflow_summary(aborted=aborted)
         self._write_communication_transcript()
         self._write_rockmag_run_artifact(aborted=aborted)
+        self._write_thermal_run_artifact(aborted=aborted)
         self._write_artifact_index(aborted=aborted)
         self.run_finished.emit(aborted)
 
@@ -976,6 +997,37 @@ class MeasurementWorker(QtCore.QThread):
             )
         except Exception as exc:
             self._error_messages.append(f"rockmag run artifact write failed: {exc}")
+            if self._comm_logger is not None:
+                self._comm_logger.error(self._error_messages[-1])
+
+    def _write_thermal_run_artifact(self, *, aborted: bool) -> None:
+        if self._thermal_context is None:
+            return
+        try:
+            write_thermal_run_artifact(
+                self._publish_dir / "thermal_run.json",
+                self._thermal_context,
+                run_id=self._run_id,
+                sample=self._meta.name,
+                operator=self._operator,
+                labels_requested=self._labels,
+                completed_labels=self._completed_labels,
+                skipped_duplicate_labels=self._skipped_labels,
+                errors=self._error_messages,
+                aborted=aborted,
+                simulated=self._simulated,
+                final_phase=(
+                    str(self._phase_history[-1]["phase"]) if self._phase_history else ""
+                ),
+                software_version=software_version(),
+                config_hash=(
+                    str(self._last_block_audit.config_hash)
+                    if self._last_block_audit is not None
+                    else ""
+                ),
+            )
+        except Exception as exc:
+            self._error_messages.append(f"thermal run artifact write failed: {exc}")
             if self._comm_logger is not None:
                 self._comm_logger.error(self._error_messages[-1])
 
@@ -1024,6 +1076,11 @@ class MeasurementWorker(QtCore.QThread):
             "rockmag_routine": (
                 str(self._routine_context.get("routine_name", ""))
                 if self._routine_context is not None
+                else ""
+            ),
+            "thermal_routine": (
+                str(self._thermal_context.get("routine_name", ""))
+                if self._thermal_context is not None
                 else ""
             ),
             "calibration_record_ids": [
@@ -1106,6 +1163,19 @@ class MeasurementWorker(QtCore.QThread):
                     description=(
                         "Compiled rockmag routine identity, requested/completed labels, "
                         "outcome, failures, and simulation/hardware acceptance boundary."
+                    ),
+                )
+            )
+        if self._thermal_context is not None:
+            payload["artifacts"].append(
+                entry(
+                    "thermal_run",
+                    self._publish_dir / "thermal_run.json",
+                    required=True,
+                    producer="MeasurementWorker",
+                    description=(
+                        "Compiled thermal plan identity, requested/completed labels, blocker or "
+                        "outcome, and the manual-external/hardware acceptance boundary."
                     ),
                 )
             )

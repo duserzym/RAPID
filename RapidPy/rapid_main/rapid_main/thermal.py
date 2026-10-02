@@ -1,18 +1,21 @@
-"""Thermal treatment planning mapped from VB6 ``modThermal``.
+"""Specimen thermal-treatment planning without claiming furnace control.
 
-RapidPy already understands thermal labels such as ``TT400`` in IO and runtime
-estimation paths. This module adds the missing workflow foundation: validated
-thermal treatment steps, routine expansion, safety limits, and queue-compatible
-labels without claiming live furnace control.
+The legacy ``modThermal`` module protects the AF coil temperature sensors; it
+does not implement a specimen furnace protocol.  RapidPy understands specimen
+thermal labels such as ``TT400`` in IO and runtime-estimation paths, so this
+module provides validated planning and auditable run evidence while keeping the
+unknown live furnace boundary fail-closed.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 from rapid_main.data_model import MeasurementBlock
 
@@ -133,6 +136,11 @@ class ThermalRoutinePlan:
             },
         )
 
+    def to_queue_labels(self) -> list[str]:
+        """Return the exact labels carried into the measurement runner."""
+
+        return self.to_measurement_block().to_queue_labels()
+
     def to_artifact(
         self,
         *,
@@ -151,6 +159,7 @@ class ThermalRoutinePlan:
         timestamp = timestamp_iso or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         block = self.to_measurement_block()
         return {
+            "schema": "rapidpy.thermal.plan.v1",
             "procedure_id": "thermal/routine-planning",
             "procedure_name": "Thermal Routine Planning",
             "timestamp_iso": timestamp,
@@ -166,6 +175,7 @@ class ThermalRoutinePlan:
             ),
             "routine_name": self.name,
             "labels": self.labels,
+            "queue_labels": self.to_queue_labels(),
             "max_temperature_c": self.max_temperature_c,
             "requires_cooldown": self.requires_cooldown,
             "estimated_seconds": self.estimated_seconds(),
@@ -240,10 +250,9 @@ def write_thermal_routine_artifact(
     notes: str = "",
     timestamp_iso: str | None = None,
 ) -> Path:
-    """Write a thermal routine planning artifact for operator review."""
+    """Atomically write a thermal routine planning artifact for review."""
 
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
     payload = thermal_routine_artifact(
         plan,
         run_context=run_context,
@@ -251,5 +260,181 @@ def write_thermal_routine_artifact(
         notes=notes,
         timestamp_iso=timestamp_iso,
     )
-    target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _atomic_write_json(target, payload)
     return target
+
+
+def thermal_integration_decision(*, timestamp_iso: str = "2026-10-02T00:00:00+00:00") -> dict[str, Any]:
+    """Return the source-backed decision governing automated thermal treatment."""
+
+    return {
+        "schema": "rapidpy.thermal.integration_decision.v1",
+        "decision_id": "thermal/manual-external-until-protocol-known",
+        "recorded_at_iso": str(timestamp_iso),
+        "status": "MANUAL_EXTERNAL_ONLY",
+        "automated_live_dispatch": "BLOCKED",
+        "summary": (
+            "Specimen thermal treatments may be planned and recorded, but RapidPy must not "
+            "command a furnace until the production controller and protocol are identified, "
+            "implemented with interlocks, and physically accepted."
+        ),
+        "legacy_source_evidence": [
+            {
+                "path": "VB6/modThermal.bas",
+                "finding": (
+                    "Validates two AF coil thermal sensors and pauses/notifies on an invalid "
+                    "reading; contains no specimen furnace set-point or readback transport."
+                ),
+            },
+            {
+                "path": "VB6/modPaleomag.bas",
+                "finding": "Defines thermal-demagnetization identity and TH treatment labels.",
+            },
+            {
+                "path": "VB6/frmMeasure.frm",
+                "finding": "Classifies thermal treatment for measurement/output handling.",
+            },
+            {
+                "path": "VB6/frmPlots.frm",
+                "finding": "Classifies thermal treatment for plot presentation.",
+            },
+            {
+                "path": "VB6/Paleomag v3.vbp",
+                "finding": (
+                    "Active project membership includes modThermal, but the audited project "
+                    "does not identify a specimen furnace controller or transport module."
+                ),
+            },
+        ],
+        "missing_authoritative_inputs": [
+            "production furnace/controller make and model",
+            "command framing, set-point, readback, alarm, and fault protocol",
+            "temperature limits, independent interlocks, and calibration requirements",
+            "specimen loading/unloading and safe-transfer procedure",
+            "abort, power-loss, cooldown, and safe-return behavior",
+        ],
+        "reopen_criteria": [
+            "operator supplies authoritative controller documentation and wiring identity",
+            "typed adapter passes deterministic fake/replay and fault-injection tests",
+            "signed bench acceptance proves readback, limits, interlocks, abort, and cooldown",
+        ],
+        "current_software_behavior": {
+            "planning": "SUPPORTED",
+            "manual_external_treatment": "OPERATOR_CONTROLLED",
+            "no_communication_execution": "SIMULATED_ONLY",
+            "hardware_mode_without_adapter": "BLOCKED_BEFORE_HARDWARE_PREFLIGHT",
+        },
+    }
+
+
+def write_thermal_integration_decision(
+    path: str | Path,
+    *,
+    timestamp_iso: str = "2026-10-02T00:00:00+00:00",
+) -> Path:
+    """Atomically publish the thermal integration/retirement decision."""
+
+    target = Path(path)
+    _atomic_write_json(target, thermal_integration_decision(timestamp_iso=timestamp_iso))
+    return target
+
+
+def thermal_run_artifact(
+    routine_context: Mapping[str, Any],
+    *,
+    run_id: str,
+    sample: str,
+    operator: str,
+    labels_requested: Sequence[str],
+    completed_labels: Sequence[str],
+    skipped_duplicate_labels: Sequence[str] = (),
+    errors: Sequence[str] = (),
+    aborted: bool,
+    simulated: bool,
+    final_phase: str,
+    software_version: str = "",
+    config_hash: str = "",
+    timestamp_iso: str | None = None,
+) -> dict[str, Any]:
+    """Build run evidence tied to one compiled thermal planning artifact."""
+
+    context = dict(routine_context)
+    if context.get("procedure_id") != "thermal/routine-planning":
+        raise ValueError("thermal run context must be a routine-planning artifact")
+    planned = [str(label) for label in context.get("queue_labels", context.get("labels", ()))]
+    requested = [str(label) for label in labels_requested]
+    if planned != requested:
+        raise ValueError("thermal run labels do not match the compiled routine context")
+    completed = [str(label) for label in completed_labels]
+    if completed != requested[: len(completed)]:
+        raise ValueError("completed thermal labels are not a prefix of the requested plan")
+    timestamp = timestamp_iso or datetime.now(timezone.utc).isoformat()
+    return {
+        "schema": "rapidpy.thermal.run.v1",
+        "status": "ABORTED" if aborted else "COMPLETED",
+        "timestamp_iso": timestamp,
+        "run_id": str(run_id),
+        "sample": str(sample),
+        "operator": str(operator),
+        "software_version": str(software_version),
+        "config_hash": str(config_hash),
+        "simulated": bool(simulated),
+        "simulation_statement": (
+            "Simulated thermal-label execution; no specimen furnace was controlled."
+            if simulated
+            else ""
+        ),
+        "automation_status": "MANUAL_EXTERNAL_ONLY",
+        "integration_decision_id": "thermal/manual-external-until-protocol-known",
+        "routine": context,
+        "labels_requested": requested,
+        "labels_completed": completed,
+        "skipped_duplicate_labels": [str(label) for label in skipped_duplicate_labels],
+        "errors": [str(error) for error in errors],
+        "final_phase": str(final_phase),
+        "hardware_validation_required": True,
+        "hardware_validation_statement": (
+            "This record proves software planning and runner behavior only. It is not proof "
+            "of specimen furnace treatment, temperature readback, interlocks, or cooldown."
+        ),
+    }
+
+
+def write_thermal_run_artifact(
+    path: str | Path,
+    routine_context: Mapping[str, Any],
+    **run_evidence: Any,
+) -> Path:
+    """Atomically publish one thermal run artifact."""
+
+    target = Path(path)
+    _atomic_write_json(target, thermal_run_artifact(routine_context, **run_evidence))
+    return target
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(dict(payload), handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise

@@ -418,6 +418,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._estimator = RuntimeEstimator(self.config.sequence.as_estimator_dict())
         self._sequence_labels: list[str] = []  # current loaded sequence step labels
         self._rockmag_routine_plan: object | None = None
+        self._thermal_routine_plan: object | None = None
         self._queue_plan: list[QueueCommand] = []
         self._queue_pos: int = 0
         self._queue_resume_pos: int = 0
@@ -664,6 +665,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._calibration_panel = CalibrationCenterPanel(
             self, backend_provider=lambda: self.measurement_backend()
         )
+        self._calibration_panel.thermal_plan_recorded.connect(self._install_thermal_plan)
         for panel in (
             self._dashboard,
             self._sample_queue,
@@ -865,6 +867,10 @@ class MainWindow(QtWidgets.QMainWindow):
             planned = getattr(self._rockmag_routine_plan, "to_queue_labels", lambda: [])()
             if list(planned) != self._sequence_labels:
                 self._rockmag_routine_plan = None
+        if self._thermal_routine_plan is not None:
+            planned = getattr(self._thermal_routine_plan, "to_queue_labels", lambda: [])()
+            if list(planned) != self._sequence_labels:
+                self._thermal_routine_plan = None
         self._update_runtime_display(running=False)
 
     def set_rockmag_routine_plan(self, plan: object | None) -> None:
@@ -877,6 +883,30 @@ class MainWindow(QtWidgets.QMainWindow):
         if list(labels) != self._sequence_labels:
             raise ValueError("rockmag routine plan does not match the active sequence labels")
         self._rockmag_routine_plan = plan
+        if plan is not None:
+            self._thermal_routine_plan = None
+
+    def set_thermal_routine_plan(self, plan: object | None) -> None:
+        """Associate current labels with a reviewed manual-external thermal plan."""
+
+        if plan is None:
+            self._thermal_routine_plan = None
+            return
+        labels = getattr(plan, "to_queue_labels", lambda: [])()
+        if list(labels) != self._sequence_labels:
+            raise ValueError("thermal routine plan does not match the active sequence labels")
+        self._thermal_routine_plan = plan
+        self._rockmag_routine_plan = None
+
+    @QtCore.Slot(object)
+    def _install_thermal_plan(self, plan: object) -> None:
+        """Load a recorded thermal plan without implying automated furnace control."""
+
+        self._sequence.install_thermal_plan(plan)
+        self._nav_select(2)
+        self.set_status(
+            "Loaded manual-external thermal labels. Live furnace automation remains blocked."
+        )
 
     def start_queue_run(self, samples: list[QueueSample], options: QueueOptions) -> bool:
         """Start a queue-driven measurement run.

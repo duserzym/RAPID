@@ -17,6 +17,7 @@ from rapid_main.hardware_contracts import PreflightResult
 from rapid_main.magnetometer import BracketedMeasurementBlock, CommandEvent, ZeroPairValidation
 from rapid_main.measurement_worker import MeasurementWorker
 from rapid_main.rockmag import RockmagRoutineSpec, compile_rockmag_routine, rockmag_af_demag
+from rapid_main.thermal import compile_thermal_routine
 from rapid_main.workflow import WorkflowPhase
 
 
@@ -384,6 +385,53 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
         )
         self.assertTrue(rockmag_entry["required"])
         self.assertTrue(rockmag_entry["exists"])
+
+    def test_blocked_thermal_plan_writes_aborted_evidence_before_hardware_preflight(self) -> None:
+        class _BlockedThermalBackend(DeterministicBackend):
+            def validate_treatment_plan(self, labels: tuple[str, ...]) -> PreflightResult:
+                return PreflightResult.blocked(
+                    "Thermal treatment TT100 cannot run in hardware mode: no production "
+                    "furnace/oven adapter with temperature readback and safety interlocks "
+                    "is configured."
+                )
+
+        plan = compile_thermal_routine([100.0, 200.0], name="External oven sequence")
+        context = plan.to_artifact(
+            run_context="run-thermal-1",
+            operator="opr",
+            timestamp_iso="2026-10-02T12:00:00+00:00",
+        )
+        backend = _BlockedThermalBackend()
+
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out"
+            worker = MeasurementWorker(
+                meta=_meta("THERMAL_BLOCK"),
+                labels=plan.labels,
+                output_dir=out,
+                backend=backend,
+                operator="opr",
+                run_id="run-thermal-1",
+                thermal_context=context,
+            )
+            worker.run()
+            run_payload = json.loads((out / "thermal_run.json").read_text(encoding="utf-8"))
+            workflow = json.loads((out / "workflow_summary.json").read_text(encoding="utf-8"))
+            artifact_index = json.loads((out / "artifact_index.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(backend.preflight_calls, 0)
+        self.assertEqual(backend.step_calls, [])
+        self.assertEqual(run_payload["status"], "ABORTED")
+        self.assertEqual(run_payload["labels_completed"], [])
+        self.assertEqual(run_payload["automation_status"], "MANUAL_EXTERNAL_ONLY")
+        self.assertIn("no production furnace/oven adapter", run_payload["errors"][0])
+        self.assertEqual(workflow["thermal_routine"]["routine_name"], "External oven sequence")
+        thermal_entry = next(
+            item for item in artifact_index["artifacts"] if item["name"] == "thermal_run"
+        )
+        self.assertTrue(thermal_entry["required"])
+        self.assertTrue(thermal_entry["exists"])
+        self.assertEqual(len(thermal_entry["sha256"]), 64)
 
     def test_treatment_plan_preflight_blocks_before_hardware_preflight(self) -> None:
         class _PlanningOnlyBackend(DeterministicBackend):

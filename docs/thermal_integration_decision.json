@@ -1,0 +1,48 @@
+{
+  "automated_live_dispatch": "BLOCKED",
+  "current_software_behavior": {
+    "hardware_mode_without_adapter": "BLOCKED_BEFORE_HARDWARE_PREFLIGHT",
+    "manual_external_treatment": "OPERATOR_CONTROLLED",
+    "no_communication_execution": "SIMULATED_ONLY",
+    "planning": "SUPPORTED"
+  },
+  "decision_id": "thermal/manual-external-until-protocol-known",
+  "legacy_source_evidence": [
+    {
+      "finding": "Validates two AF coil thermal sensors and pauses/notifies on an invalid reading; contains no specimen furnace set-point or readback transport.",
+      "path": "VB6/modThermal.bas"
+    },
+    {
+      "finding": "Defines thermal-demagnetization identity and TH treatment labels.",
+      "path": "VB6/modPaleomag.bas"
+    },
+    {
+      "finding": "Classifies thermal treatment for measurement/output handling.",
+      "path": "VB6/frmMeasure.frm"
+    },
+    {
+      "finding": "Classifies thermal treatment for plot presentation.",
+      "path": "VB6/frmPlots.frm"
+    },
+    {
+      "finding": "Active project membership includes modThermal, but the audited project does not identify a specimen furnace controller or transport module.",
+      "path": "VB6/Paleomag v3.vbp"
+    }
+  ],
+  "missing_authoritative_inputs": [
+    "production furnace/controller make and model",
+    "command framing, set-point, readback, alarm, and fault protocol",
+    "temperature limits, independent interlocks, and calibration requirements",
+    "specimen loading/unloading and safe-transfer procedure",
+    "abort, power-loss, cooldown, and safe-return behavior"
+  ],
+  "recorded_at_iso": "2026-10-02T00:00:00+00:00",
+  "reopen_criteria": [
+    "operator supplies authoritative controller documentation and wiring identity",
+    "typed adapter passes deterministic fake/replay and fault-injection tests",
+    "signed bench acceptance proves readback, limits, interlocks, abort, and cooldown"
+  ],
+  "schema": "rapidpy.thermal.integration_decision.v1",
+  "status": "MANUAL_EXTERNAL_ONLY",
+  "summary": "Specimen thermal treatments may be planned and recorded, but RapidPy must not command a furnace until the production controller and protocol are identified, implemented with interlocks, and physically accepted."
+}

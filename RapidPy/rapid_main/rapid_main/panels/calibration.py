@@ -36,6 +36,8 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
     production.
     """
 
+    thermal_plan_recorded = QtCore.Signal(object)
+
     PROCEDURES = {
         "gaussmeter_baseline": {
             "name": "SQUID / Gaussmeter Baseline",
@@ -173,7 +175,7 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         irm_form.addRow("", self._run_irm_btn)
         fl.addRow("", self._irm_box)
 
-        self._thermal_box = QtWidgets.QGroupBox("Thermal routine planning")
+        self._thermal_box = QtWidgets.QGroupBox("Thermal planning — manual/external treatment only")
         thermal_form = QtWidgets.QFormLayout(self._thermal_box)
         thermal_form.setContentsMargins(12, 10, 12, 10)
         thermal_form.setSpacing(8)
@@ -207,7 +209,16 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         thermal_form.addRow("Run context:", self._thermal_context)
         thermal_form.addRow("Operator:", self._thermal_operator)
         thermal_form.addRow("Artifact folder:", self._thermal_artifact_dir)
-        self._run_thermal_btn = QtWidgets.QPushButton("Record Thermal Plan")
+        boundary = QtWidgets.QLabel(
+            "RapidPy does not control a specimen furnace. This records and loads labels for "
+            "operator-managed external treatment; live hardware mode remains blocked."
+        )
+        boundary.setWordWrap(True)
+        boundary.setObjectName("statusWarning")
+        boundary.setAccessibleName("Thermal automation boundary")
+        thermal_form.addRow("Automation:", boundary)
+        self._run_thermal_btn = QtWidgets.QPushButton("Record + Load Manual-External Plan")
+        self._run_thermal_btn.setAccessibleName("Record and load manual-external thermal plan")
         self._run_thermal_btn.clicked.connect(self._run_thermal_routine)
         thermal_form.addRow("", self._run_thermal_btn)
         fl.addRow("", self._thermal_box)
@@ -640,8 +651,8 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
                 operator=self._thermal_operator.text(),
                 notes=(
                     "Operator-recorded thermal planning artifact from Calibration Center. "
-                    "Hardware furnace execution, abort, alarms, and temperature readback "
-                    "remain hardware-only acceptance gates."
+                    "No specimen furnace is controlled. Live automation remains blocked until "
+                    "the controller protocol, interlocks, and hardware acceptance exist."
                 ),
             )
         except Exception as exc:
@@ -656,10 +667,12 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
             f"Estimated time: {plan.estimated_seconds()} s\n"
             f"Cooldown required: {'yes' if plan.requires_cooldown else 'no'}\n"
             f"Artifact: {written}\n"
-            "Hardware acceptance still required for live furnace execution, safe abort, "
-            "alarm handling, and temperature readback."
+            "MANUAL/EXTERNAL ONLY: RapidPy did not control a furnace. Live automation remains "
+            "blocked pending a known controller protocol, interlocks, and hardware acceptance."
         )
-        self._status.setText("Thermal routine planning artifact recorded.")
+        self._status.setText(
+            "Thermal planning artifact recorded and manual-external plan loaded into Sequence."
+        )
         self._result.setPlainText(text)
         self._history.appendleft(
             f"{QtCore.QDateTime.currentDateTimeUtc().toString(QtCore.Qt.ISODate)} | "
@@ -667,6 +680,7 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
             f"estimate={plan.estimated_seconds()}s"
         )
         self._history_view.setPlainText("\n".join(self._history))
+        self.thermal_plan_recorded.emit(plan)
 
     def _apply_result(self, result: CalibrationResult) -> None:
         artifact_line = ""

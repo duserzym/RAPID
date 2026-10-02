@@ -9,7 +9,11 @@ from rapid_main.thermal import (
     ThermalSafetyLimits,
     ThermalStep,
     compile_thermal_routine,
+    thermal_integration_decision,
+    thermal_run_artifact,
+    write_thermal_integration_decision,
     write_thermal_routine_artifact,
+    write_thermal_run_artifact,
 )
 
 
@@ -69,13 +73,85 @@ class ThermalRoutineTests(unittest.TestCase):
             payload = json.loads(path.read_text(encoding="utf-8"))
 
         self.assertEqual(payload["procedure_id"], "thermal/routine-planning")
+        self.assertEqual(payload["schema"], "rapidpy.thermal.plan.v1")
         self.assertEqual(payload["status"], "PLANNED")
         self.assertEqual(payload["run_context"], "bench-context")
         self.assertEqual(payload["operator"], "operator-a")
         self.assertEqual(payload["labels"], ["TT100", "TT200"])
+        self.assertEqual(payload["queue_labels"], ["TT100", "TT200"])
         self.assertEqual(payload["queue_block"]["block_type"], "thermal")
         self.assertTrue(payload["hardware_validation_required"])
         self.assertIn("hardware acceptance", payload["hardware_validation_statement"])
+
+    def test_integration_decision_matches_versioned_repository_record(self) -> None:
+        expected = thermal_integration_decision()
+        repository_record = Path(__file__).parents[3] / "docs" / "thermal_integration_decision.json"
+
+        self.assertEqual(json.loads(repository_record.read_text(encoding="utf-8")), expected)
+        self.assertEqual(expected["status"], "MANUAL_EXTERNAL_ONLY")
+        self.assertEqual(expected["automated_live_dispatch"], "BLOCKED")
+        self.assertIn("VB6/modThermal.bas", [item["path"] for item in expected["legacy_source_evidence"]])
+
+        with tempfile.TemporaryDirectory() as td:
+            path = write_thermal_integration_decision(Path(td) / "decision.json")
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), expected)
+            self.assertEqual(list(Path(td).glob("*.tmp")), [])
+
+    def test_thermal_run_evidence_is_tied_to_exact_compiled_plan(self) -> None:
+        plan = compile_thermal_routine([100.0, 200.0], name="External oven sequence")
+        context = plan.to_artifact(
+            run_context="thermal-run-1",
+            operator="operator-a",
+            timestamp_iso="2026-10-02T12:00:00+00:00",
+        )
+        payload = thermal_run_artifact(
+            context,
+            run_id="thermal-run-1",
+            sample="THERMAL_1",
+            operator="operator-a",
+            labels_requested=plan.labels,
+            completed_labels=["TT100"],
+            errors=["operator halted before next external treatment"],
+            aborted=True,
+            simulated=False,
+            final_phase="HALTED",
+            timestamp_iso="2026-10-02T12:30:00+00:00",
+        )
+
+        self.assertEqual(payload["schema"], "rapidpy.thermal.run.v1")
+        self.assertEqual(payload["status"], "ABORTED")
+        self.assertEqual(payload["automation_status"], "MANUAL_EXTERNAL_ONLY")
+        self.assertEqual(payload["labels_completed"], ["TT100"])
+        self.assertFalse(payload["simulated"])
+
+        with self.assertRaisesRegex(ValueError, "do not match"):
+            thermal_run_artifact(
+                context,
+                run_id="bad",
+                sample="THERMAL_1",
+                operator="operator-a",
+                labels_requested=["TT300"],
+                completed_labels=[],
+                aborted=True,
+                simulated=False,
+                final_phase="PREFLIGHT",
+            )
+
+        with tempfile.TemporaryDirectory() as td:
+            path = write_thermal_run_artifact(
+                Path(td) / "thermal_run.json",
+                context,
+                run_id="thermal-run-1",
+                sample="THERMAL_1",
+                operator="operator-a",
+                labels_requested=plan.labels,
+                completed_labels=[],
+                aborted=True,
+                simulated=False,
+                final_phase="PREFLIGHT",
+            )
+            self.assertTrue(path.exists())
+            self.assertEqual(list(Path(td).glob("*.tmp")), [])
 
     def test_thermal_plan_rejects_unsafe_or_degenerate_inputs(self) -> None:
         with self.assertRaisesRegex(ValueError, "invalid thermal label"):

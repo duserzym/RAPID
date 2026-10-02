@@ -11,6 +11,7 @@ from rapid_main.rockmag import (
     rockmag_af_demag,
     rockmag_the_works,
 )
+from rapid_main.thermal import ThermalRoutinePlan
 
 
 @dataclass
@@ -48,6 +49,7 @@ class SequencePanel(QtWidgets.QWidget):
         self._cfg = SequenceConfig()
         self._compiled_routine_labels: list[str] | None = None
         self._compiled_routine_plan: RockmagRoutinePlan | None = None
+        self._compiled_thermal_plan: ThermalRoutinePlan | None = None
         self._applying_preset = False
         self._current_path: Path | None = None
         self._dirty = False
@@ -355,6 +357,7 @@ class SequencePanel(QtWidgets.QWidget):
         if not self._applying_preset and self.sender() is not None:
             self._compiled_routine_labels = None
             self._compiled_routine_plan = None
+            self._compiled_thermal_plan = None
             self._set_dirty(True)
         labels = self.generate_labels()
         self._render_labels(labels)
@@ -377,6 +380,8 @@ class SequencePanel(QtWidgets.QWidget):
             mw.load_sequence_labels(labels)
         if hasattr(mw, "set_rockmag_routine_plan"):
             mw.set_rockmag_routine_plan(self._compiled_routine_plan)
+        if hasattr(mw, "set_thermal_routine_plan"):
+            mw.set_thermal_routine_plan(self._compiled_thermal_plan)
 
     def _set_dirty(self, dirty: bool) -> None:
         self._dirty = bool(dirty)
@@ -478,6 +483,7 @@ class SequencePanel(QtWidgets.QWidget):
         """Install imported labels as the active executable and saveable sequence."""
         self._compiled_routine_labels = list(labels)
         self._compiled_routine_plan = None
+        self._compiled_thermal_plan = None
         self._current_path = source_path
         self._set_dirty(False)
         self._render_labels(list(labels), loaded=source_path is not None)
@@ -500,6 +506,7 @@ class SequencePanel(QtWidgets.QWidget):
             self._applying_preset = False
         self._compiled_routine_labels = None
         self._compiled_routine_plan = None
+        self._compiled_thermal_plan = None
         self._current_path = None
         self._set_dirty(False)
         self._rebuild_preview()
@@ -513,6 +520,7 @@ class SequencePanel(QtWidgets.QWidget):
             )
         )
         self._compiled_routine_plan = plan
+        self._compiled_thermal_plan = None
         self._compiled_routine_labels = plan.to_queue_labels()
         self._applying_preset = True
         try:
@@ -529,6 +537,7 @@ class SequencePanel(QtWidgets.QWidget):
     def _preset_works(self) -> None:
         plan = compile_rockmag_routine(rockmag_the_works())
         self._compiled_routine_plan = plan
+        self._compiled_thermal_plan = None
         self._compiled_routine_labels = plan.to_queue_labels()
         self._applying_preset = True
         try:
@@ -542,6 +551,18 @@ class SequencePanel(QtWidgets.QWidget):
         self._current_path = None
         self._set_dirty(True)
         self._rebuild_preview()
+
+    def install_thermal_plan(self, plan: ThermalRoutinePlan) -> None:
+        """Install a reviewed manual-external thermal plan as the active sequence."""
+
+        if not isinstance(plan, ThermalRoutinePlan):
+            raise TypeError("thermal plan must be a ThermalRoutinePlan")
+        self._compiled_routine_plan = None
+        self._compiled_thermal_plan = plan
+        self._compiled_routine_labels = plan.to_queue_labels()
+        self._current_path = None
+        self._set_dirty(True)
+        self._render_labels(self._compiled_routine_labels)
 
 
 # ── Module-level helpers ──────────────────────────────────────────────────────

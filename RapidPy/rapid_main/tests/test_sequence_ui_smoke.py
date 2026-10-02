@@ -11,6 +11,7 @@ from rapid_main.app import (
     _MIN_SIDEBAR_WIDTH,
     _clamp_main_window_size,
 )
+from rapid_main.thermal import compile_thermal_routine
 
 
 class _TestAppMixin:
@@ -29,6 +30,20 @@ class _TestAppMixin:
 
 
 class SequenceLayoutSmokeTest(_TestAppMixin, unittest.TestCase):
+    def test_main_window_installs_recorded_thermal_plan_as_manual_external_sequence(self) -> None:
+        mw = MainWindow()
+        plan = compile_thermal_routine([100.0, 200.0], name="External oven sequence")
+        try:
+            mw._install_thermal_plan(plan)
+
+            self.assertEqual(mw._sequence_labels, ["TT100", "TT200"])
+            self.assertIs(mw._thermal_routine_plan, plan)
+            self.assertIsNone(mw._rockmag_routine_plan)
+            self.assertEqual(mw._stack.currentWidget(), mw._sequence)
+            self.assertIn("Live furnace automation remains blocked", mw._sb_status.text())
+        finally:
+            mw.deleteLater()
+
     def _assert_spin_text_fits(self, spin: QtWidgets.QDoubleSpinBox) -> None:
         # Use a value near the configured max to exercise widest rendering.
         candidate = spin.maximum() / 2

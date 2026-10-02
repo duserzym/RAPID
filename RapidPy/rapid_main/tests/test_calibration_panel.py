@@ -82,6 +82,8 @@ class CalibrationCenterPanelTest(unittest.TestCase):
 
     def test_thermal_operator_path_writes_planning_artifact(self) -> None:
         panel = CalibrationCenterPanel()
+        recorded_plans = []
+        panel.thermal_plan_recorded.connect(recorded_plans.append)
         try:
             with tempfile.TemporaryDirectory() as td:
                 panel.set_procedure("thermal_routine")
@@ -105,6 +107,9 @@ class CalibrationCenterPanelTest(unittest.TestCase):
             self.assertEqual(payload["operator"], "operator-a")
             self.assertTrue(payload["hardware_validation_required"])
             self.assertIn("artifact recorded", panel._status.text())
+            self.assertEqual(len(recorded_plans), 1)
+            self.assertEqual(recorded_plans[0].to_queue_labels(), ["TT100", "TT200"])
+            self.assertIn("manual-external", panel._run_thermal_btn.text().lower())
         finally:
             panel.deleteLater()
 
