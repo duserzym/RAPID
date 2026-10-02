@@ -372,11 +372,17 @@ class BracketedAcquisitionService:
 
         # 2) 1x read mode for holder blocks, matching VB6 ChangeRange "A","1".
         with log.record("squid.set_range", f"axis=A range={range_label}"):
-            self._transport.set_range("A", range_label)
+            self._transport_call(
+                f"set range axis=A range={range_label}",
+                lambda: self._transport.set_range("A", range_label),
+            )
 
         # 3) Clear and reset the counters before the first zero (VB6 CLP/RC).
         with log.record("squid.clear_reset", "axis=A commands=CLP,RC"):
-            self._transport.clear_and_reset_counters("A")
+            self._transport_call(
+                "clear/reset counters axis=A",
+                lambda: self._transport.clear_and_reset_counters("A"),
+            )
         self._delay(cfg.arc_delay_s, log, "post-reset settle")
 
         # 4) Zero-before. VB6 latches without the extra settling delay here
@@ -515,6 +521,46 @@ class BracketedAcquisitionService:
             detail=(validation.reason if validation is not None else ""),
         )
 
+    def recover_transport_failure(
+        self,
+        detail: str,
+        *,
+        attempt: int = 1,
+        backoff_s: float = 0.0,
+    ) -> RecoveryRecord:
+        """Return to zero and prepare a fresh whole-block transport retry.
+
+        The failed latch/read stream is never resumed. The caller must invoke
+        :meth:`acquire` again, which starts with a new range/reset/latch cycle.
+        """
+
+        delay_s = float(backoff_s)
+        if not math.isfinite(delay_s) or delay_s < 0.0:
+            raise ValueError("transport recovery backoff must be finite and non-negative")
+        cfg = self._config
+        log = _CommandLog(self._clock)
+        started_iso = self._clock.now().isoformat()
+        try:
+            self._turn_to(POSITION_ANGLES_DEG[0], log)
+            self._lift_to(cfg.zero_position, cfg.zero_speed_index, log, "zero")
+            with log.record("squid.clear_reset", "axis=A commands=CLP,RC (transport recovery)"):
+                self._transport.clear_and_reset_counters("A")
+            self._delay(cfg.arc_delay_s + delay_s, log, "transport recovery backoff")
+        except MotionVerificationError:
+            raise
+        except Exception as exc:
+            raise RecoveryFailedError(
+                f"transport recovery failed on attempt {attempt}: {exc}"
+            ) from exc
+        return RecoveryRecord(
+            attempt=int(attempt),
+            started_iso=started_iso,
+            completed_iso=self._clock.now().isoformat(),
+            validation=None,
+            commands=log.snapshot(),
+            detail=str(detail),
+        )
+
     def return_to_safe_state(self) -> tuple[CommandEvent, ...]:
         """Lift to the zero position and square the turning axis."""
 
@@ -530,6 +576,16 @@ class BracketedAcquisitionService:
             return
         with log.record("delay", f"{detail} ({seconds:.3f}s)"):
             self._clock.sleep(float(seconds))
+
+    def _transport_call(self, detail: str, call: Callable[[], object]) -> object:
+        """Normalize adapter failures into a retry-classifiable error."""
+
+        try:
+            return call()
+        except TransportReadError:
+            raise
+        except Exception as exc:
+            raise TransportReadError(f"{detail}: {exc}") from exc
 
     def _lift_to(self, position: int, speed_index: int, log: _CommandLog, name: str) -> None:
         with log.record("vertical.move", f"{name} target={position} speed_index={speed_index}") as event:
@@ -567,7 +623,10 @@ class BracketedAcquisitionService:
         started = self._clock.now()
         monotonic_start = self._clock.monotonic()
         with log.record("squid.latch", f"{role} axis=A settle={settle}") as event:
-            latch = self._transport.latch("A", settle=settle)
+            latch = self._transport_call(
+                f"{role}: latch failed",
+                lambda: self._transport.latch("A", settle=settle),
+            )
             latch_id = getattr(latch, "latch_id", "") or ""
             event.set_reply(f"latch_id={latch_id}")
         if not latch_id:
@@ -576,7 +635,10 @@ class BracketedAcquisitionService:
         axes: list[AxisObservation] = []
         for axis_index, axis_name in enumerate(AXIS_NAMES):
             with log.record("squid.read_axis", f"{role} axis={axis_name}") as event:
-                reply = self._transport.read_axis(axis_name)
+                reply = self._transport_call(
+                    f"{role}: axis {axis_name} read failed",
+                    lambda axis_name=axis_name: self._transport.read_axis(axis_name),
+                )
                 event.set_reply(
                     f"count={getattr(reply, 'count_reply', '')!r} "
                     f"data={getattr(reply, 'data_reply', '')!r}"

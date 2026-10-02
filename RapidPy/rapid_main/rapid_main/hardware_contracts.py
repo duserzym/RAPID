@@ -280,7 +280,10 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
 
     preflight_timeout: float | None = 12.0
     step_timeout: float | None = 45.0
-    read_timeout: float | None = 8.0
+    # Bracketed acquisition is bounded by serial/motion adapters and performs
+    # safe whole-block recovery. A worker-thread timeout cannot cancel physical
+    # I/O and eight seconds is shorter than a normal six-latch acquisition.
+    read_timeout: float | None = None
     susceptibility_timeout: float | None = 2.0
     return_timeout: float | None = 20.0
 
@@ -384,6 +387,14 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         if self._bracketed is None:
             return ()
         return tuple(self._bracketed.communication_events())
+
+    @property
+    def transport_recovery_records(self):
+        """Return immutable whole-block transport recovery evidence."""
+
+        if self._bracketed is None:
+            return ()
+        return tuple(self._bracketed.transport_recovery_records)
 
     def holder_status(self):
         """Holder validity summary for the operator UI."""

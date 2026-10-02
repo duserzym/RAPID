@@ -20,6 +20,7 @@ producing synthetic numbers.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Callable
 
 from rapid_main.acquisition import (
@@ -32,6 +33,7 @@ from rapid_main.acquisition import (
     LatchResult,
     MotionOutcome,
     RecoveryRecord,
+    TransportReadError,
 )
 from rapid_main.config import AppConfig
 from rapid_main.communication_log import CommunicationEvent, CommunicationLogger
@@ -288,6 +290,8 @@ class BracketedSquidBackend:
     is discarded and re-acquired from the zero-before step.
     """
 
+    # Raw serial reads and bounded whole-block recovery own their deadlines.
+    # An outer worker thread timeout cannot cancel physical I/O safely.
     read_timeout: float | None = None
     return_timeout: float | None = None
 
@@ -299,6 +303,8 @@ class BracketedSquidBackend:
         direction_provider: Callable[[], bool] | None = None,
         context_provider: Callable[[], BlockContext] | None = None,
         flux_discontinuity_retries: int = 2,
+        transport_retries: int = 1,
+        transport_retry_backoff_s: float = 0.25,
         simulated: bool = False,
         communication_events_provider: Callable[[], tuple[CommunicationEvent, ...]] | None = None,
     ) -> None:
@@ -307,10 +313,15 @@ class BracketedSquidBackend:
         self._direction_provider = direction_provider
         self._context_provider = context_provider
         self.flux_discontinuity_retries = max(0, int(flux_discontinuity_retries))
+        self.transport_retries = max(0, int(transport_retries))
+        self.transport_retry_backoff_s = float(transport_retry_backoff_s)
+        if not math.isfinite(self.transport_retry_backoff_s) or self.transport_retry_backoff_s < 0:
+            raise ValueError("transport_retry_backoff_s must be finite and non-negative")
         self._simulated = bool(simulated)
         self._communication_events_provider = communication_events_provider
         self._last_acquisition: BracketedAcquisition | None = None
         self._recoveries: list[RecoveryRecord] = []
+        self._transport_recoveries: list[RecoveryRecord] = []
 
     @property
     def simulated(self) -> bool:
@@ -323,6 +334,10 @@ class BracketedSquidBackend:
     @property
     def recovery_records(self) -> tuple[RecoveryRecord, ...]:
         return tuple(self._recoveries)
+
+    @property
+    def transport_recovery_records(self) -> tuple[RecoveryRecord, ...]:
+        return tuple(self._transport_recoveries)
 
     def communication_events(self) -> tuple[CommunicationEvent, ...]:
         """Return an immutable adapter-event snapshot for run publication."""
@@ -348,13 +363,27 @@ class BracketedSquidBackend:
             )
         is_up = bool(self._direction_provider()) if self._direction_provider else True
         holder = self._holder_provider() if self._holder_provider else None
-        acquisition = self._service.acquire(
-            is_up=is_up,
-            holder_positions=holder,
-            context=context,
-        )
-        self._last_acquisition = acquisition
-        return acquisition.block
+        for attempt in range(self.transport_retries + 1):
+            try:
+                acquisition = self._service.acquire(
+                    is_up=is_up,
+                    holder_positions=holder,
+                    context=context,
+                )
+            except TransportReadError as exc:
+                if attempt >= self.transport_retries:
+                    raise
+                backoff_s = self.transport_retry_backoff_s * (2**attempt)
+                record = self._service.recover_transport_failure(
+                    str(exc),
+                    attempt=attempt + 1,
+                    backoff_s=backoff_s,
+                )
+                self._transport_recoveries.append(record)
+                continue
+            self._last_acquisition = acquisition
+            return acquisition.block
+        raise RuntimeError("unreachable transport retry state")
 
     def recover_flux_count_discontinuity(
         self, validation: ZeroPairValidation | None = None

@@ -12,8 +12,9 @@ from PySide6 import QtCore
 
 from rapid_main.data_model import SpecimenMeta
 from rapid_main.communication_log import CommunicationDirection, CommunicationEvent
+from rapid_main.acquisition import RecoveryRecord
 from rapid_main.hardware_contracts import PreflightResult
-from rapid_main.magnetometer import BracketedMeasurementBlock, ZeroPairValidation
+from rapid_main.magnetometer import BracketedMeasurementBlock, CommandEvent, ZeroPairValidation
 from rapid_main.measurement_worker import MeasurementWorker
 from rapid_main.workflow import WorkflowPhase
 
@@ -639,6 +640,80 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
         self.assertEqual(transcript.count("\tSQUID-2G\tTX\tCOM7\tXSC\t"), 1)
         self.assertEqual(transcript.count("\tSQUID-2G\tRX\tCOM7\t12\t"), 1)
         self.assertIn("\tmeasurement-worker\tINFO\tTRANSCRIPT\t\tbundle initialized", transcript)
+
+    def test_transport_recovery_records_are_retained_in_workflow_summary(self) -> None:
+        class RecoveryEvidenceBackend(DeterministicBackend):
+            def __init__(self) -> None:
+                super().__init__([("NRM", 1.0, 2.0, 3.0)])
+                prior = self._record()
+                prior = RecoveryRecord(
+                    attempt=prior.attempt,
+                    started_iso=prior.started_iso,
+                    completed_iso=prior.completed_iso,
+                    validation=None,
+                    commands=prior.commands,
+                    detail="previous run timeout",
+                )
+                self._transport_recoveries = (prior,)
+
+            def read_squid(self):
+                self._transport_recoveries += (self._record(),)
+                return super().read_squid()
+
+            @property
+            def transport_recovery_records(self):
+                return self._transport_recoveries
+
+            @staticmethod
+            def _record():
+                return RecoveryRecord(
+                    attempt=1,
+                    started_iso="2026-10-02T00:00:00+00:00",
+                    completed_iso="2026-10-02T00:00:03+00:00",
+                    validation=None,
+                    commands=(
+                        CommandEvent(
+                            index=0,
+                            kind="squid.clear_reset",
+                            detail="transport recovery",
+                            started_iso="2026-10-02T00:00:01+00:00",
+                            completed_iso="2026-10-02T00:00:02+00:00",
+                            ok=True,
+                            reply="",
+                        ),
+                    ),
+                    detail="position-2 axis Y timed out",
+                )
+
+        backend = RecoveryEvidenceBackend()
+        warnings: list[str] = []
+
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out"
+            worker = MeasurementWorker(
+                meta=_meta("RECOVERY_EVIDENCE"),
+                labels=["NRM"],
+                output_dir=out / "RECOVERY_EVIDENCE",
+                backend=backend,
+            )
+            worker.preflight_warning.connect(warnings.append)
+            worker.run()
+            payload = json.loads(
+                (out / "RECOVERY_EVIDENCE" / "workflow_summary.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertEqual(payload["transport_recoveries"], 1)
+        self.assertEqual(
+            payload["transport_recovery_records"][0]["detail"],
+            "position-2 axis Y timed out",
+        )
+        self.assertEqual(
+            payload["transport_recovery_records"][0]["commands"][0]["kind"],
+            "squid.clear_reset",
+        )
+        self.assertTrue(any("discarded and reacquired from zero-before" in row for row in warnings))
 
     def test_magnetometer_reading_quality_flags_are_operator_warnings(self) -> None:
         from rapid_main.magnetometer import MagnetometerReading

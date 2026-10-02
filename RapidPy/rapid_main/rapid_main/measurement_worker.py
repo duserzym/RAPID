@@ -177,6 +177,9 @@ class MeasurementWorker(QtCore.QThread):
         self._state = WorkflowStateMachine()
         self._comm_logger: CommunicationLogger | None = None
         self._backend_comm_event_count = 0
+        self._transport_recovery_start_count = len(
+            self._backend_transport_recovery_records()
+        )
         self._phase_history: list[dict[str, object]] = []
 
     # Control API
@@ -605,11 +608,20 @@ class MeasurementWorker(QtCore.QThread):
         except (TypeError, ValueError):
             retry_limit = 2
         for attempt in range(retry_limit + 1):
+            transport_recoveries_before = len(self._transport_recovery_evidence())
             squid_reading = self._call_with_timeout(
                 self._backend.read_squid,
                 timeout=self._get_backend_timeout("read_timeout"),
                 phase="read_squid",
             )
+            transport_recoveries = self._transport_recovery_evidence()
+            if len(transport_recoveries) > transport_recoveries_before:
+                latest = transport_recoveries[-1]
+                self._emit_warning(
+                    f"SQUID transport recovered at step {label}; the incomplete block "
+                    f"was discarded and reacquired from zero-before "
+                    f"(attempt {latest['attempt']}): {latest['detail']}"
+                )
             try:
                 return self._coerce_squid_reading(squid_reading, label)
             except ObservationIntegrityError as exc:
@@ -698,10 +710,13 @@ class MeasurementWorker(QtCore.QThread):
 
     def _run_provenance(self) -> dict[str, object]:
         audit = self._last_block_audit
+        transport_recoveries = self._transport_recovery_evidence()
         payload: dict[str, object] = {
             "holder_record_id": self._holder_record_id,
             "holder_recorded_iso": self._holder_recorded_iso,
             "flux_recoveries": self._recovery_count,
+            "transport_recoveries": len(transport_recoveries),
+            "transport_recovery_records": transport_recoveries,
             "skipped_duplicate_labels": list(self._skipped_labels),
             "simulated": self._simulated,
         }
@@ -720,6 +735,49 @@ class MeasurementWorker(QtCore.QThread):
             )
         return payload
 
+    def _transport_recovery_evidence(self) -> list[dict[str, object]]:
+        """Serialize backend whole-block recovery records for run evidence."""
+
+        records = self._backend_transport_recovery_records()[
+            self._transport_recovery_start_count :
+        ]
+        evidence: list[dict[str, object]] = []
+        for record in records:
+            commands = []
+            for command in tuple(getattr(record, "commands", ()) or ()):
+                commands.append(
+                    {
+                        "index": int(getattr(command, "index", len(commands))),
+                        "kind": str(getattr(command, "kind", "")),
+                        "detail": str(getattr(command, "detail", "")),
+                        "started_iso": str(getattr(command, "started_iso", "")),
+                        "completed_iso": str(getattr(command, "completed_iso", "")),
+                        "ok": bool(getattr(command, "ok", False)),
+                        "reply": str(getattr(command, "reply", "")),
+                    }
+                )
+            evidence.append(
+                {
+                    "attempt": int(getattr(record, "attempt", len(evidence) + 1)),
+                    "started_iso": str(getattr(record, "started_iso", "")),
+                    "completed_iso": str(getattr(record, "completed_iso", "")),
+                    "detail": str(getattr(record, "detail", "")),
+                    "commands": commands,
+                }
+            )
+        return evidence
+
+    def _backend_transport_recovery_records(self) -> tuple[object, ...]:
+        """Snapshot backend recovery records without making evidence optionality fatal."""
+
+        try:
+            records = getattr(self._backend, "transport_recovery_records", ())
+            if callable(records):
+                records = records()
+            return tuple(records or ())
+        except Exception:
+            return ()
+
     def _comm_info(self, detail: str) -> None:
         if self._comm_logger is not None:
             self._comm_logger.info(detail)
@@ -737,6 +795,7 @@ class MeasurementWorker(QtCore.QThread):
             self._comm_logger.received(payload, detail=detail)
 
     def _write_workflow_summary(self, *, aborted: bool) -> None:
+        transport_recoveries = self._transport_recovery_evidence()
         payload = {
             "schema": "rapidpy.measurement.workflow_summary.v1",
             "sample": self._meta.name,
@@ -749,6 +808,8 @@ class MeasurementWorker(QtCore.QThread):
             ),
             "run_id": self._run_id,
             "flux_recoveries": self._recovery_count,
+            "transport_recoveries": len(transport_recoveries),
+            "transport_recovery_records": transport_recoveries,
             "skipped_duplicate_labels": list(self._skipped_labels),
             "holder_record_id": self._holder_record_id,
             "calibration_record_ids": [

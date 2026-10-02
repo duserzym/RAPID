@@ -266,8 +266,38 @@ class BracketedAcquisitionFaultTests(unittest.TestCase):
             }
         )
 
-        with self.assertRaises(TimeoutError):
+        with self.assertRaisesRegex(TransportReadError, "SQUID read timed out") as raised:
             service.acquire()
+        self.assertIsInstance(raised.exception.__cause__, TimeoutError)
+
+    def test_transport_recovery_returns_to_zero_resets_and_backs_off(self) -> None:
+        service, transport, vertical, turning, clock = _build_service()
+
+        record = service.recover_transport_failure(
+            "zero-before: axis X read timed out",
+            attempt=2,
+            backoff_s=0.75,
+        )
+
+        self.assertEqual(turning.angles, [0.0])
+        self.assertEqual(vertical.moves, [(ZERO_POSITION, 2)])
+        self.assertEqual(transport.reset_count, 1)
+        self.assertIn(3.25, clock.slept)
+        self.assertEqual(record.attempt, 2)
+        self.assertEqual(record.validation, None)
+        self.assertIn("axis X", record.detail)
+        self.assertEqual(
+            [event.kind for event in record.commands],
+            ["turning.rotate", "vertical.move", "squid.clear_reset", "delay"],
+        )
+
+    def test_transport_recovery_reset_failure_is_fatal(self) -> None:
+        service, _transport, _vertical, _turning, _clock = _build_service(
+            transport_kwargs={"reset_error": OSError("reset refused")}
+        )
+
+        with self.assertRaisesRegex(RecoveryFailedError, "reset refused"):
+            service.recover_transport_failure("read timeout", backoff_s=0.25)
 
 
 class FluxCountDiscontinuityTests(unittest.TestCase):

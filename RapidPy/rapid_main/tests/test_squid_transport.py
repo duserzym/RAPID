@@ -6,9 +6,13 @@ from datetime import datetime, timezone
 
 from rapid_main.acquisition import (
     AcquisitionConfig,
+    AcquisitionError,
     BlockContext,
     BracketedAcquisitionService,
     MotionOutcome,
+    RecoveryFailedError,
+    RecoveryRecord,
+    TransportReadError,
 )
 from rapid_main.communication_log import CommunicationDirection, CommunicationLogger
 from rapid_main.config import AppConfig, CalibrationConfig, SquidConfig
@@ -372,6 +376,116 @@ class BracketedSquidBackendTests(unittest.TestCase):
         )
 
         self.assertEqual(backend.communication_events(), ())
+
+    def test_transport_failure_recovers_then_restarts_the_whole_block(self) -> None:
+        class _Service:
+            def __init__(self) -> None:
+                self.acquire_calls = 0
+                self.recoveries: list[tuple[str, int, float]] = []
+
+            def acquire(self, **_kwargs):
+                self.acquire_calls += 1
+                if self.acquire_calls == 1:
+                    raise TransportReadError("position-2 axis Y timed out")
+                return type("Acquisition", (), {"block": "fresh-block"})()
+
+            def recover_transport_failure(self, detail, *, attempt, backoff_s):
+                self.recoveries.append((detail, attempt, backoff_s))
+                return RecoveryRecord(
+                    attempt=attempt,
+                    started_iso="2026-10-02T00:00:00+00:00",
+                    completed_iso="2026-10-02T00:00:01+00:00",
+                    validation=None,
+                    commands=(),
+                    detail=detail,
+                )
+
+        service = _Service()
+        backend = BracketedSquidBackend(  # type: ignore[arg-type]
+            service,
+            transport_retries=2,
+            transport_retry_backoff_s=0.5,
+        )
+
+        block = backend.read_squid()
+
+        self.assertEqual(block, "fresh-block")
+        self.assertEqual(service.acquire_calls, 2)
+        self.assertEqual(service.recoveries, [("position-2 axis Y timed out", 1, 0.5)])
+        self.assertEqual(len(backend.transport_recovery_records), 1)
+
+    def test_transport_retry_exhaustion_never_returns_a_block(self) -> None:
+        class _Service:
+            def __init__(self) -> None:
+                self.acquire_calls = 0
+                self.recovery_calls = 0
+                self.backoffs: list[float] = []
+
+            def acquire(self, **_kwargs):
+                self.acquire_calls += 1
+                raise TransportReadError("persistent timeout")
+
+            def recover_transport_failure(self, detail, *, attempt, backoff_s):
+                self.recovery_calls += 1
+                self.backoffs.append(backoff_s)
+                return RecoveryRecord(
+                    attempt=attempt,
+                    started_iso="start",
+                    completed_iso="complete",
+                    validation=None,
+                    commands=(),
+                    detail=detail,
+                )
+
+        service = _Service()
+        backend = BracketedSquidBackend(service, transport_retries=2)  # type: ignore[arg-type]
+
+        with self.assertRaisesRegex(TransportReadError, "persistent timeout"):
+            backend.read_squid()
+
+        self.assertEqual(service.acquire_calls, 3)
+        self.assertEqual(service.recovery_calls, 2)
+        self.assertEqual(service.backoffs, [0.25, 0.5])
+        self.assertIsNone(backend.last_acquisition)
+
+    def test_transport_recovery_failure_stops_without_another_read(self) -> None:
+        class _Service:
+            def __init__(self) -> None:
+                self.acquire_calls = 0
+
+            def acquire(self, **_kwargs):
+                self.acquire_calls += 1
+                raise TransportReadError("timeout")
+
+            def recover_transport_failure(self, detail, *, attempt, backoff_s):
+                del detail, attempt, backoff_s
+                raise RecoveryFailedError("counter reset refused")
+
+        service = _Service()
+        backend = BracketedSquidBackend(service, transport_retries=2)  # type: ignore[arg-type]
+
+        with self.assertRaisesRegex(RecoveryFailedError, "counter reset refused"):
+            backend.read_squid()
+
+        self.assertEqual(service.acquire_calls, 1)
+        self.assertEqual(backend.transport_recovery_records, ())
+
+    def test_motion_or_other_acquisition_failure_is_not_retried(self) -> None:
+        class _Service:
+            def __init__(self) -> None:
+                self.acquire_calls = 0
+
+            def acquire(self, **_kwargs):
+                self.acquire_calls += 1
+                raise AcquisitionError("turning verification failed")
+
+        service = _Service()
+        backend = BracketedSquidBackend(service, transport_retries=2)  # type: ignore[arg-type]
+
+        with self.assertRaisesRegex(AcquisitionError, "turning verification failed"):
+            backend.read_squid()
+
+        self.assertEqual(service.acquire_calls, 1)
 
 
 class MotionOutcomeTests(unittest.TestCase):
