@@ -58,7 +58,9 @@ implementation baseline:
 - `d784bdb` — update this handoff after transition help; and
 - `0fd469b` — add the auditable calibration lifecycle and measurement linkage;
 - `4a271e7` — record calibration lifecycle readiness; and
-- `77f53c1` — package RapidPy for clean installation and startup diagnostics.
+- `77f53c1` — package RapidPy for clean installation and startup diagnostics;
+  and
+- `13bad6b` — record the isolated package verification evidence.
 
 The complete RapidPy suite now reports **447 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
@@ -75,10 +77,12 @@ shows a remaining gap.
 
 Work in this priority order:
 
-1. finish the remaining evidence-backed parity rows, especially live thermal,
-   AF, vacuum, IRM/ARM, susceptibility, VRM, rockmag, and transport robustness;
-2. render and inspect the remaining reachable dialogs at small and normal
-   desktop sizes, fixing any glass-theme or keyboard/accessibility omissions;
+1. finish the reachable-dialog glass/accessibility audit described in the
+   immediate assignment below, starting with the live hardware-facing Vacuum,
+   IRM/ARM, and SQUID dialogs;
+2. finish the remaining evidence-backed software parity rows, especially live
+   thermal, AF, vacuum, IRM/ARM, susceptibility, VRM, rockmag, and transport
+   robustness;
 3. complete deployment acceptance in a dependency-clean environment and on the
    operator account. The installable wheel, packaged icons, configuration and
    dependency diagnostics, installed helper entry points, source-tree-free
@@ -99,6 +103,45 @@ The `berkeley-rapidpy` wheel and seven console entry points are also implemented
 and tested from an isolated install target. Do not restore repository-relative
 launch assumptions.
 
+### Immediate assignment: finish reachable dialogs without redoing the shell
+
+The next concrete implementation pass is not another main-window redesign. It
+is a systematic audit and repair of every dialog reachable from `rapid_main`.
+Start with `dialogs/vacuum.py`, `dialogs/irm_arm.py`, and
+`dialogs/squid_comm.py`, then cover login, plots, debug console, step monitor,
+startup guide, about, sample selection, DC motors, webcam, and transition help.
+
+The first audit found numerous dialog-local `setStyleSheet(...)` calls, sparse
+accessible names/descriptions, status labels whose meaning is conveyed mainly
+by color, and several fixed/minimum-width assumptions. Treat these as findings
+to verify in the current tree, not as permission to mechanically delete styles
+or shrink safety-critical controls.
+
+For this pass:
+
+- extend the centralized design system in `rapid_main/glass_theme.py` with
+  reusable dialog title/subtitle, readout-card, and semantic-status contracts;
+- provide one helper for semantic state that sets visible text, a stable Qt
+  property, accessibility metadata, and repolishes the widget;
+- ensure states such as ready, warning, error, unavailable, and simulated are
+  understandable without color alone;
+- replace conflicting page-local styling in the audited dialogs with shared
+  object names/properties while preserving device behavior and ownership;
+- give actionable controls and live readouts useful accessible names and, where
+  needed, descriptions;
+- keep dialogs within the available screen geometry and add scrolling or
+  internal table sizing when content cannot fit, rather than clipping controls;
+- preserve clear destructive/safety affordances and deterministic reduced-motion
+  behavior; and
+- add targeted contract tests plus offscreen renders at compact and normal
+  sizes. Inspect the rendered images; a successful `grab()` alone is not visual
+  acceptance.
+
+Do not mix this visual/accessibility pass with protocol invention or unapproved
+hardware execution. If a dialog exposes incomplete live behavior, record the
+software gap separately and address it through the shared service/backend layer,
+not by faking a successful state in the widget.
+
 Do not represent placeholder thermal estimates, simulated plots, demo samples,
 or No-Communication results as hardware evidence. An explicit simulation tool
 may remain when it is visibly marked, isolated from production outputs, and
@@ -115,6 +158,7 @@ Read these files first:
 - `RapidPy/rapid_main/rapid_main/magnetometer.py`
 - `RapidPy/rapid_main/rapid_main/measurement_worker.py`
 - `RapidPy/rapid_main/rapid_main/diagnostic_services.py`
+- `RapidPy/rapid_main/rapid_main/glass_theme.py`
 - `RapidPy/rapid_main/rapid_main/hardware_contracts.py`
 - `RapidPy/rapid_main/rapid_main/queue_compiler.py`
 - `RapidPy/rapid_main/rapid_main/panels/measurement.py`
@@ -175,6 +219,13 @@ Do not redesign unrelated standalone apps
 unless a shared-theme change requires a compatibility fix; keep shared-theme
 changes backward-compatible or create an explicit main-app variant.
 
+For status communication, use both words/icons and the shared semantic visual
+state. Never encode connected, safe, simulated, unavailable, warning, or fault
+state only through a foreground/background color. Accessibility names should
+identify the instrument and value/action rather than merely repeat a generic
+widget class. Preserve logical tab order and make focus visible against every
+glass surface.
+
 Render representative offscreen screenshots at more than one window size and
 inspect them. If native Windows capture is available, also inspect the real
 rendered application. Do not approve the design only because the stylesheet
@@ -233,6 +284,11 @@ it with active items in `VB6/Paleomag v3.vbp`. Every item must end in one of
 four evidence-backed states: implemented and software-verified; implemented but
 pending named hardware acceptance; intentionally retired with an approved
 replacement; or blocked with the exact dependency and next safe action.
+
+Do not treat stale summary prose in `ROADMAP.md` as stronger evidence than the
+current implementation, tests, readiness assessment, and parity inventory.
+Update stale roadmap claims only after verifying the relevant code path; do not
+recreate functionality merely because an older row still calls it a stub.
 
 ## Verified VB6 environment state on this computer
 
@@ -372,6 +428,13 @@ Before finishing:
 3. update the readiness assessment with code-complete versus hardware-validated status;
 4. produce focused commits, with tests paired with their implementation;
 5. report exactly what is complete, what remains, tests and counts, commits, hardware evidence obtained, and the first safe test to run when the system is connected.
+
+For the dialog pass, also provide a compact matrix with one row per reachable
+dialog: launch route, shared-theme status, compact-size result, keyboard/focus
+result, accessibility/status result, backend truthfulness, tests, and any named
+hardware-only gate. Include paths to representative compact and normal
+screenshots, but do not commit disposable captures unless the repository has an
+intentional visual-baseline location.
 
 Also report the VB6 gates separately in the final handoff:
 
