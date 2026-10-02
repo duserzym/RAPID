@@ -35,6 +35,41 @@ class PlotsDialogTests(unittest.TestCase):
         self.assertAlmostEqual(data["intensity"][1], math.sqrt(2.0))
         dialog.deleteLater()
 
+    def test_dialog_starts_empty_without_implicit_demo_evidence(self) -> None:
+        dialog = PlotsDialog()
+
+        self.assertEqual(dialog.quicklook_summary()["step_count"], 0)
+        self.assertIn("No measurement data", dialog._demo_lbl.text())
+        dialog.deleteLater()
+
+    def test_simulated_example_is_explicitly_marked(self) -> None:
+        dialog = PlotsDialog()
+
+        dialog._load_demo()
+
+        self.assertGreater(dialog.quicklook_summary()["step_count"], 0)
+        self.assertIn("SIMULATED EXAMPLE", dialog._demo_lbl.text())
+        self.assertIn("not hardware evidence", dialog._demo_lbl.text())
+        dialog.deleteLater()
+
+    def test_real_data_replaces_simulated_example_marker(self) -> None:
+        dialog = PlotsDialog()
+        dialog._load_demo()
+
+        dialog.set_data([1.0], [0.0], [0.0], ["NRM"])
+
+        self.assertEqual(dialog._demo_lbl.text(), "Measurement data — 1 step")
+        self.assertNotIn("SIMULATED", dialog._demo_lbl.text())
+        dialog.deleteLater()
+
+    def test_quicklook_rejects_mismatched_vector_lengths(self) -> None:
+        with self.assertRaisesRegex(ValueError, "equal lengths"):
+            build_quicklook_summary([1.0], [0.0, 1.0], [0.0], ["NRM"])
+
+    def test_quicklook_rejects_non_finite_values(self) -> None:
+        with self.assertRaisesRegex(ValueError, "not finite"):
+            build_quicklook_summary([float("nan")], [0.0], [0.0], ["NRM"])
+
     def test_quicklook_summary_can_be_written_as_json_artifact(self) -> None:
         dialog = PlotsDialog()
         dialog.set_data(

@@ -49,6 +49,16 @@ def build_quicklook_summary(
     e = list(east)
     u = list(up)
     step_labels = list(labels)
+    lengths = {len(n), len(e), len(u), len(step_labels)}
+    if len(lengths) != 1:
+        raise ValueError(
+            "Quicklook north/east/up vectors and labels must have equal lengths "
+            f"(got {len(n)}, {len(e)}, {len(u)}, {len(step_labels)})."
+        )
+    for axis, values in (("north", n), ("east", e), ("up", u)):
+        for index, value in enumerate(values, start=1):
+            if not math.isfinite(float(value)):
+                raise ValueError(f"Quicklook {axis} value {index} is not finite.")
     down = [-z for z in u]
     intensity = [math.sqrt(x**2 + y**2 + z**2) for x, y, z in zip(n, e, u)]
     inc: list[float] = []
@@ -265,8 +275,8 @@ class PlotsDialog(QtWidgets.QDialog):
             & ~QtCore.Qt.WindowContextHelpButtonHint
             | QtCore.Qt.WindowMaximizeButtonHint
         )
+        self._last_plot_data: dict[str, object] = {}
         self._build_ui()
-        self._load_demo()
 
     def showEvent(self, event: QtCore.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
@@ -281,7 +291,7 @@ class PlotsDialog(QtWidgets.QDialog):
     def _fit_to_screen(self, screen: QtCore.QObject | None = None) -> None:
         active_screen = (
             screen
-            if isinstance(screen, QtCore.QScreen)
+            if isinstance(screen, QtGui.QScreen)
             else (self.screen() or QtWidgets.QApplication.primaryScreen())
         )
         if active_screen is None:
@@ -344,6 +354,11 @@ class PlotsDialog(QtWidgets.QDialog):
             "inclination": summary["inclination"],
             "declination": summary["declination"],
         }
+        self._demo_lbl.setText(
+            f"Measurement data — {len(summary['labels'])} step"
+            f"{'s' if len(summary['labels']) != 1 else ''}"
+        )
+        self._demo_lbl.setStyleSheet("color: #4b5563; font-size: 11px;")
 
     def quicklook_summary(self) -> dict[str, object]:
         """Return a reproducible summary of the current quicklook data."""
@@ -381,8 +396,8 @@ class PlotsDialog(QtWidgets.QDialog):
         hdr_row.addWidget(hdr)
         hdr_row.addStretch()
 
-        self._demo_lbl = QtWidgets.QLabel("Demo data — load real data in Phase 3")
-        self._demo_lbl.setStyleSheet("color: #9a8885; font-size: 11px;")
+        self._demo_lbl = QtWidgets.QLabel("No measurement data loaded")
+        self._demo_lbl.setStyleSheet("color: #6b7280; font-size: 11px;")
         hdr_row.addWidget(self._demo_lbl)
         vl.addLayout(hdr_row)
 
@@ -414,13 +429,17 @@ class PlotsDialog(QtWidgets.QDialog):
         # Buttons
         close_btn = QtWidgets.QPushButton("Close")
         close_btn.clicked.connect(self.close)
+        demo_btn = QtWidgets.QPushButton("Load SIMULATED example")
+        demo_btn.setToolTip("Load synthetic values for UI demonstration only; not hardware evidence")
+        demo_btn.clicked.connect(self._load_demo)
         btn_row = QtWidgets.QHBoxLayout()
+        btn_row.addWidget(demo_btn)
         btn_row.addStretch()
         btn_row.addWidget(close_btn)
         vl.addLayout(btn_row)
 
     def _load_demo(self) -> None:
-        """Synthetic demagnetization sequence for demonstration."""
+        """Load an explicit, unmistakably simulated UI example."""
         if np is not None:
             rng = np.random.default_rng(42)
             nrm = np.array([0.85, 0.45, -0.12])
@@ -438,6 +457,7 @@ class PlotsDialog(QtWidgets.QDialog):
                 steps_arr[:, 2].tolist(),
                 labels,
             )
+            self._mark_simulated_example()
             return
 
         import random
@@ -456,4 +476,13 @@ class PlotsDialog(QtWidgets.QDialog):
             [row[1] for row in steps],
             [row[2] for row in steps],
             labels,
+        )
+        self._mark_simulated_example()
+
+    def _mark_simulated_example(self) -> None:
+        self._demo_lbl.setText("SIMULATED EXAMPLE — not hardware evidence")
+        self._demo_lbl.setStyleSheet(
+            "color: #92400e; background: rgba(245,158,11,0.13); "
+            "border: 1px solid rgba(217,119,6,0.38); border-radius: 7px; "
+            "padding: 3px 8px; font-size: 11px; font-weight: 650;"
         )
