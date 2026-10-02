@@ -14,16 +14,19 @@ from typing import Optional
 from PySide6 import QtCore, QtWidgets
 from rapidpy_common.ui import clamp_window_geometry
 
-# Import shared WebcamWidget from the sibling webcam_viewer package.
-# Falls back gracefully if webcam_viewer is not on the path.
+# Import the installed package first, then support a source checkout fallback.
 try:
-    _wv_path = Path(__file__).resolve().parents[3] / "webcam_viewer"
-    if str(_wv_path) not in sys.path:
-        sys.path.insert(0, str(_wv_path))
     from webcam_viewer.app import WebcamWidget  # type: ignore[import]
     _WEBCAM_AVAILABLE = True
 except ImportError:
-    _WEBCAM_AVAILABLE = False
+    try:
+        _wv_path = Path(__file__).resolve().parents[3] / "webcam_viewer"
+        if _wv_path.is_dir() and str(_wv_path) not in sys.path:
+            sys.path.insert(0, str(_wv_path))
+        from webcam_viewer.app import WebcamWidget  # type: ignore[import,no-redef]
+        _WEBCAM_AVAILABLE = True
+    except ImportError:
+        _WEBCAM_AVAILABLE = False
 
 
 class WebcamDialog(QtWidgets.QDialog):

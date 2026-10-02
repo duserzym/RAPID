@@ -35,6 +35,7 @@ from rapidpy_common.gaussmeter import (  # noqa: E402
     serial_port_name_to_number,
 )
 from rapidpy_common.ui import apply_card_shadow, apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon  # noqa: E402
+from rapidpy_common.resources import asset_directory  # noqa: E402
 
 
 # Physical unit conversion: displayed label → Tesla (B-field)
@@ -1056,7 +1057,10 @@ def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     apply_window_bounds_guard(app)
     apply_liquid_glass_theme(app)
-    assets_dir = Path(__file__).resolve().parent.parent / "assets"
+    assets_dir = asset_directory(
+        "gaussmeter_control_assets",
+        Path(__file__).resolve().parent.parent / "assets",
+    )
     set_app_icon(app, "gaussmeter_icon.png", assets_dir)
     window = MainWindow()
     set_app_icon(window, "gaussmeter_icon.png", assets_dir)

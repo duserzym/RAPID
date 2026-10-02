@@ -32,3 +32,36 @@ Implemented parity highlights:
 1. Keep each subsystem app familiar and standalone for operators.
 2. Validate protocol-accurate hardware behavior on Windows against machine limits and safety interlocks.
 3. Merge app backends into a single orchestrated control app once workflows are validated.
+
+## Install and verify the integrated application
+
+Python 3.11 or newer is required. From the `RapidPy` directory, install the
+distribution and its declared runtime dependencies:
+
+```powershell
+python -m pip install .
+python -m rapid_main --check-startup
+rapid-main
+```
+
+`--check-startup` is read-only and does not open the UI or connect to hardware.
+It reports required and optional modules, the packaged icon path, and the exact
+configuration file selected by `RAPID_CONFIG` (or
+`%USERPROFILE%\.rapid\config.json`). A malformed existing configuration is a
+startup blocker instead of being silently treated as defaults.
+
+The wheel also installs console entry points for AF Tuner, Data Viewer,
+Gaussmeter Control, Up/Down Control, VRM Logger, and Webcam Viewer. The main app
+prefers checkout scripts during development and automatically uses these
+installed modules in a packaged environment.
+
+To build and inspect the same wheel used by clean-environment verification:
+
+```powershell
+python -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
+python -m pip install --no-deps --target clean-install dist\berkeley_rapidpy-*.whl
+```
+
+Install normally (without `--no-deps`) for an operator machine. The
+`--no-deps` form is intended only for verification in an environment where the
+declared dependencies are already present.

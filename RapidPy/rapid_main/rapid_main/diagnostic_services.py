@@ -41,7 +41,7 @@ except Exception:  # pragma: no cover - optional ADwin transport dependency
     AdwinRampRequest = None
 
 try:
-    from updown_control.updown_control.app import (
+    from updown_control.app import (
         read_calibration_from_ini,
         SquidCalibration,
         SquidMomentReader,

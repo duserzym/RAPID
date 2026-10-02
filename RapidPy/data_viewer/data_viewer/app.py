@@ -24,6 +24,7 @@ except ImportError:
 from data_viewer.analysis import next_step_suggestion, principal_component_fit, summarize_paleointensity, vector_for_step
 from data_viewer.data_loading import MeasurementStep, SpecimenMeta, ViewerDataset, ViewerSpecimen, load_input, load_magic_directory, watch_paths_for_dataset
 from rapidpy_common.ui import apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon
+from rapidpy_common.resources import asset_directory
 
 
 # ── Demo data ────────────────────────────────────────────────────────────────
@@ -1183,7 +1184,10 @@ def main() -> int:
     apply_window_bounds_guard(app)
     apply_liquid_glass_theme(app)
 
-    assets_dir = Path(__file__).resolve().parent.parent / "assets"
+    assets_dir = asset_directory(
+        "data_viewer_assets",
+        Path(__file__).resolve().parent.parent / "assets",
+    )
     set_app_icon(app, _ICON_NAME, assets_dir)
 
     win = ZijderveldWindow()

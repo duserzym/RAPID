@@ -328,11 +328,15 @@ def main() -> None:
     """Launch the standalone webcam viewer application."""
     # Import shared theme/icon helpers and keep taskbar icon assignment explicit.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from rapidpy_common.resources import asset_directory
     from rapidpy_common.ui import apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon
 
     app = QtWidgets.QApplication(sys.argv)
     apply_window_bounds_guard(app)
-    assets_dir = Path(__file__).resolve().parent / "assets"
+    assets_dir = asset_directory(
+        "webcam_viewer_assets",
+        Path(__file__).resolve().parent.parent / "assets",
+    )
     apply_liquid_glass_theme(app)
     set_app_icon(app, "webcam_viewer_icon.png", assets_dir)
 

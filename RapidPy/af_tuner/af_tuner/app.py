@@ -27,6 +27,7 @@ from rapidpy_common.adwin_af import (  # noqa: E402
     AdwinRampRequest,
 )
 from rapidpy_common.ui import apply_card_shadow, apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon  # noqa: E402
+from rapidpy_common.resources import asset_directory  # noqa: E402
 
 
 @dataclass(slots=True)
@@ -110,7 +111,10 @@ def _default_process_file() -> str:
 
 
 def _assets_dir() -> Path:
-    return Path(__file__).resolve().parents[1] / "assets"
+    return asset_directory(
+        "af_tuner_assets",
+        Path(__file__).resolve().parents[1] / "assets",
+    )
 
 
 def _copy_config(obj):

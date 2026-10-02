@@ -21,7 +21,10 @@ def _bootstrap_common_imports() -> None:
 def _assets_dir() -> Path:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS) / "assets"  # type: ignore[attr-defined]
-    return Path(__file__).resolve().parent.parent / "assets"
+    return asset_directory(
+        "vrm_logger_assets",
+        Path(__file__).resolve().parent.parent / "assets",
+    )
 
 
 _bootstrap_common_imports()
@@ -31,6 +34,7 @@ from .models import MeasurementSample
 from .session_manifest import load_handoff_context, write_vrm_output_manifest
 from .squid_serial import SquidCommunicationError, SquidSerialClient
 from rapidpy_common.ui import apply_liquid_glass_theme, apply_window_bounds_guard, clamp_window_geometry, set_app_icon
+from rapidpy_common.resources import asset_directory
 
 
 class AbsoluteTimeAxis(pg.AxisItem):

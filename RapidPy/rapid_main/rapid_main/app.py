@@ -59,6 +59,7 @@ from .panels import (
     SettingsPanel,
 )
 from .queue_compiler import QueueCommand, QueueOptions, QueueSample, compile_queue
+from .package_launch import ToolUnavailableError, resolve_tool_launch
 from .runtime_estimator import RuntimeEstimator
 from .vrm import VRM_CONTEXT_ENV, build_vrm_launch_context, write_vrm_launch_context
 from .glass_theme import (
@@ -66,6 +67,7 @@ from .glass_theme import (
     apply_main_glass_theme,
     install_glass_elevation,
 )
+from .startup import main_assets_dir, select_main_icon
 
 
 # ── Extra stylesheet (appended to shared theme) ───────────────────────────────
@@ -1625,6 +1627,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _launch_af_tuner(self) -> None:
         self._launch_external_tool(
             target_path="af_tuner/main.py",
+            module="af_tuner",
             app_name="AF Tuner / ClipTest",
         )
 
@@ -1645,6 +1648,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _launch_gaussmeter(self) -> None:
         self._launch_external_tool(
             target_path="gaussmeter_control/main.py",
+            module="gaussmeter_control",
             app_name="908A Gaussmeter",
         )
 
@@ -1664,6 +1668,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._launch_external_tool(
             target_path="vrm_logger/main.py",
+            module="vrm_logger",
             app_name="VRM Logger",
             env={VRM_CONTEXT_ENV: str(context_path)},
         )
@@ -1695,6 +1700,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self,
         *,
         target_path: str,
+        module: str,
         app_name: str,
         env: dict[str, str] | None = None,
     ) -> None:
@@ -1717,26 +1723,31 @@ class MainWindow(QtWidgets.QMainWindow):
             ):
                 return
 
-        script_path = Path(__file__).resolve().parent.parent.parent / target_path
-        if not script_path.exists():
+        base_root = Path(__file__).resolve().parents[2]
+        try:
+            launch = resolve_tool_launch(
+                module=module,
+                source_root=base_root,
+                source_relative=target_path,
+            )
+        except ToolUnavailableError as exc:
             QtWidgets.QMessageBox.warning(
                 self,
                 "Tool unavailable",
-                f"{app_name} entry point not found: {script_path}",
+                f"{app_name} is not installed correctly.\n\n{exc}",
             )
             return
 
         try:
-            base_root = Path(__file__).resolve().parents[2]
             process_env = os.environ.copy()
             if env:
                 process_env.update(env)
             subprocess.Popen(
-                [sys.executable, str(script_path)],
-                cwd=str(base_root),
+                list(launch.command),
+                cwd=str(launch.cwd) if launch.cwd is not None else None,
                 env=process_env,
             )
-            self.set_status(f"Launched {app_name}.")
+            self.set_status(f"Launched {app_name} from {launch.source}.")
         except Exception as exc:  # pragma: no cover - platform/environment dependent
             QtWidgets.QMessageBox.warning(
                 self,
@@ -2197,12 +2208,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._step_dlg.raise_()
 
     def _launch_data_viewer(self) -> None:
-        data_viewer_script = Path(__file__).resolve().parents[2] / "data_viewer" / "main.py"
-        if not data_viewer_script.exists():
+        try:
+            launch = resolve_tool_launch(
+                module="data_viewer",
+                source_root=Path(__file__).resolve().parents[2],
+                source_relative="data_viewer/main.py",
+            )
+        except ToolUnavailableError as exc:
             QtWidgets.QMessageBox.warning(
                 self,
                 "Data Review",
-                "Data viewer launcher script is missing.",
+                f"Data Review is not installed correctly.\n\n{exc}",
             )
             return
 
@@ -2220,8 +2236,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         try:
             self._data_viewer_proc = subprocess.Popen(
-                [sys.executable, str(data_viewer_script)],
-                cwd=str(data_viewer_script.parent),
+                list(launch.command),
+                cwd=str(launch.cwd) if launch.cwd is not None else None,
             )
         except OSError as exc:
             QtWidgets.QMessageBox.warning(
@@ -2232,7 +2248,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._data_viewer_proc = None
             return
 
-        self.set_status("Data Review launched in a separate window.")
+        self.set_status(f"Data Review launched from {launch.source} in a separate window.")
 
     def _launch_webcam(self) -> None:
         if not hasattr(self, "_webcam_dlg"):
@@ -2544,20 +2560,10 @@ def main() -> int:
     apply_liquid_glass_theme(app)
     app.setStyleSheet(app.styleSheet() + _EXTRA_CSS)
     apply_main_glass_theme(app)
-    assets_dir = Path(__file__).resolve().parent.parent / "assets"
-    icon_candidates = (
-        "rapid_main_icon.ico",
-        "rapid_main_window_icon.ico",
-        "rapid_main_window_icon.png",
-        "rapid_main_icon.png",
-        "rapid_icon.ico",
-        "rapid_icon.png",
-    )
-    icon_name = "rapid_main_icon.png"
-    for candidate in icon_candidates:
-        if (assets_dir / candidate).exists():
-            icon_name = candidate
-            break
+    assets_dir = main_assets_dir()
+    icon_name, _icon_path = select_main_icon(assets_dir)
+    if not icon_name:
+        icon_name = "rapid_main_icon.png"
     set_app_icon(app, icon_name, assets_dir)
     window = MainWindow()
     set_app_icon(window, icon_name, assets_dir)
