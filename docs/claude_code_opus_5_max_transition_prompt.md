@@ -79,8 +79,9 @@ implementation baseline:
   and
 - `6b40b81` — reject stale buffered and unterminated partial SQUID replies.
 - `1ba9c6c` — recover SQUID transport faults by safely reacquiring whole blocks.
+- `254fa71` — make live vacuum control fail closed and auditable.
 
-The complete RapidPy suite now reports **493 passing tests** using
+The complete RapidPy suite now reports **499 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -95,14 +96,16 @@ shows a remaining gap.
 
 Work in this priority order:
 
-1. extend raw communication evidence and deterministic fault handling to each
-   other retained live adapter without touching hardware. SQUID stale/partial
-   rejection and safe whole-block retry/backoff are already complete; do not
-   add an unsafe per-query retry or duplicate the recovery state machine;
+1. extend raw communication evidence and deterministic fault handling to the
+   remaining retained AF, IRM/ARM, and DC/ADWIN live adapters without touching
+   hardware. SQUID stale/partial rejection and safe whole-block retry/backoff,
+   plus vacuum connection/acknowledgment fail-closed behavior, are already
+   complete; do not duplicate those implementations;
 2. finish the remaining evidence-backed software parity rows and testable
-   protocol/replay boundaries for thermal, AF, vacuum, IRM/ARM, susceptibility,
-   VRM, rockmag, and transport robustness; keep physical acceptance named and
-   pending where the RAPID system is required;
+   protocol/replay boundaries for thermal, AF, IRM/ARM, DC/ADWIN,
+   susceptibility, VRM, rockmag, and transport robustness; keep vacuum physical
+   pump/valve and independent pressure-instrument acceptance, and every other
+   RAPID-system-only gate, explicitly pending;
 3. complete deployment acceptance in a dependency-clean environment and on the
    operator account. The installable wheel, packaged icons, configuration and
    dependency diagnostics, installed helper entry points, source-tree-free
@@ -164,6 +167,49 @@ recovery records in provenance and `workflow_summary.json`. Do not duplicate
 this state machine. Next, add equivalent raw evidence and deterministic fault
 handling for other retained live adapters. Keep physical SQUID transcript and
 fault-injection acceptance explicitly pending.
+
+### Completed assignment: fail-closed and auditable vacuum control
+
+Commit `254fa71` closes the vacuum software-truthfulness gap without claiming
+physical-system acceptance. The legacy VB6 vacuum controller exposes pump and
+valve commands but no pressure telemetry. RapidPy must preserve that boundary:
+do not synthesize or model a live pressure value and do not treat a successful
+serial connection as pressure evidence.
+
+The completed vacuum path:
+
+- fails hardware-mode construction when the dependency, port, or connection is
+  unavailable instead of silently falling back to simulation;
+- records exact controller TX, CR-terminated RX acknowledgment, and ERROR
+  events, correlated to the command, through an immutable event snapshot;
+- rejects empty or partial acknowledgments and does not report the requested
+  pump state as confirmed after such a failure;
+- reports pressure as unavailable in live command-only mode rather than using a
+  modeled value;
+- blocks queue readiness when a positive vacuum-pressure threshold is required,
+  because this controller cannot prove that threshold. An explicit threshold of
+  zero is the narrowly defined opt-out and is accepted only when pump-on state
+  has been acknowledged; and
+- makes current-run production vacuum events eligible for idempotent merge into
+  the run's `communication.tsv`, alongside SQUID events. Per-source cursors are
+  established when the worker is constructed so earlier traffic is excluded,
+  and simulated sources cannot satisfy live evidence.
+
+Coverage lives in `tests/test_vacuum_transport.py`,
+`tests/test_diagnostic_services.py`, and `tests/test_measurement_worker.py`.
+These tests use fakes and do not open a serial port or actuate equipment. Do not
+redo this software path. Physical pump/valve command-and-acknowledgment
+round-trip, an independent pressure adapter/interlock if pressure gating is
+retained, and controlled physical fault injection remain explicitly pending.
+
+The next implementation assignment is the remaining AF/IRM/DC evidence and
+fault boundary. Inspect the VB6 commands and existing RapidPy adapters first,
+then add exact, immutable, current-run TX/RX/ERROR evidence and fail-closed
+connection/acknowledgment behavior where it is genuinely missing. Use injected
+fake transports and deterministic replay tests; do not open ports or actuate
+hardware. Do not copy SQUID's whole-block recovery state machine into treatment
+devices unless the legacy protocol and safety contract specifically require
+that behavior.
 
 The truthful empty Plots/Sample Selection/Queue states, real `.sam`/`.csv`
 sample-index-to-queue workflow, No-Communication-only AF examples, atomic
@@ -516,7 +562,15 @@ Document every intentional difference from VB6 and why it is safer or required.
 
 ## Remaining live acceptance work
 
-After the P0 path is complete in software, work through the P1/P2 inventory in `docs/rapidpy_transition_readiness_2026-08-29.md`: AF, vacuum, IRM/ARM, ADWIN/DAC/MCC, thermal, susceptibility, VRM, rockmag, motors, serial robustness, plots/exports, installer/config migration, backup/restore, and rollback.
+After the P0 path is complete in software, work through the P1/P2 inventory in
+`docs/rapidpy_transition_readiness_2026-08-29.md`: AF, IRM/ARM,
+ADWIN/DAC/MCC, thermal, susceptibility, VRM, rockmag, motors, serial
+robustness, installer/config migration, and physical acceptance. Vacuum
+software behavior is complete as described above; its remaining work is
+physical pump/valve acknowledgment and, if pressure gating is retained,
+integration and acceptance of an independent pressure source. Plot/export,
+settings backup/restore, and rollback software paths are already implemented;
+revisit them only for a demonstrated regression or a specific acceptance gap.
 
 For work that requires the physical RAPID system, provide an executable acceptance procedure and evidence schema instead of claiming success. Every hardware test record should include date/time, operator, machine/software commit, configuration hash, device/port identity, commands and raw replies, expected result, observed result, pass/fail, and artifact paths.
 
