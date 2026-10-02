@@ -25,12 +25,13 @@ tests; none of it has been validated against the physical RAPID system.
 | Motion and interlock behavior | Verified in software only | **No** | Every motion is verified and a failure aborts the block |
 | Output parity against VB6 | Fixtures only | **No** | VB6 now compiles; side-by-side comparison still requires the no-communication smoke test and a physical reference run |
 
-Full suite: **431 tests passing** (`python -m unittest discover -s tests -p
+Full suite: **435 tests passing** (`python -m unittest discover -s tests -p
 'test_*.py'` from `RapidPy/rapid_main`), up from a 261-test baseline. The
 October 2 shell slice adds truthful Dashboard backend snapshots, responsive
 glass-card reflow, workflow/session menu wiring, shutdown ordering, atomic
 sequence documents, truthful empty operator states, real sample-index loading,
-AF simulation isolation, and atomic settings backup/restore tests.
+AF simulation isolation, atomic settings backup/restore, and searchable VB6
+transition-help tests.
 
 ### Behavior changes an operator will notice
 

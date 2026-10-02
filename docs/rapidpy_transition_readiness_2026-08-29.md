@@ -279,7 +279,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **431 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **435 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence

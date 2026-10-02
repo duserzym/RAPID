@@ -52,9 +52,11 @@ implementation baseline:
 - `96fd2a7` — make measurement plots truthful by default;
 - `6a17d50` — load real sample indexes into an empty queue;
 - `df8c3ce` — isolate AF examples from live hardware; and
-- `abebb65` — add atomic settings backup and restore.
+- `abebb65` — add atomic settings backup and restore;
+- `a861d46` — refresh readiness and Claude handoff evidence; and
+- `dcb402d` — add searchable VB6 transition help.
 
-The complete RapidPy suite now reports **431 passing tests** using
+The complete RapidPy suite now reports **435 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -73,8 +75,9 @@ Work in this priority order:
    registry and link the selected calibration record ID into every measurement
    bundle; timestamped artifacts and config hashes exist, but that lifecycle is
    not complete;
-2. add searchable “Where did this VB6 control go?” transition help inside the
-   main app and complete clean-environment packaging/startup verification;
+2. complete clean-environment packaging/startup verification, including
+   resources, icons, dependency diagnostics, configuration discovery, and
+   removal of source-tree-only assumptions;
 3. finish the remaining evidence-backed parity rows, especially live thermal,
    AF, vacuum, IRM/ARM, susceptibility, VRM, rockmag, and transport robustness;
 4. render and inspect the remaining reachable dialogs at small and normal
@@ -83,8 +86,9 @@ Work in this priority order:
    and tests exist.
 
 The truthful empty Plots/Sample Selection/Queue states, real `.sam`/`.csv`
-sample-index-to-queue workflow, No-Communication-only AF examples, and atomic
-settings backup/validated restore/restart messaging are already implemented and
+sample-index-to-queue workflow, No-Communication-only AF examples, atomic
+settings backup/validated restore/restart messaging, and searchable
+“Where did this VB6 control go?” transition help are already implemented and
 tested. Do not recreate them.
 
 Do not represent placeholder thermal estimates, simulated plots, demo samples,
@@ -199,7 +203,9 @@ At minimum, verify and finish:
    safe failures, communication evidence, and visible unavailable/simulated
    state.
 8. Searchable “Where did this VB6 control go?” help, first-run guidance, and
-   transition sheets for active workflows.
+   transition sheets for active workflows. The searchable task map and direct
+   routing are complete; verify them and add only evidence-backed missing
+   workflow guidance.
 9. Login/authorization where retained, controlled shutdown, unsaved-work
    prompts, halt-before-exit, layout restore, logging, and useful diagnostics.
 10. Clean-environment startup and packaging, resources/icons, configuration
