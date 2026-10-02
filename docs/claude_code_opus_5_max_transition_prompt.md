@@ -89,9 +89,11 @@ implementation baseline:
 - `6e69b61` — make VRM sessions ownership-safe and auditable; and
 - `044aba5` — record VRM session readiness and acceptance gates;
 - `92f4242` — carry rockmag routines into auditable run bundles; and
-- `e324937` — record rockmag run-bundle readiness.
+- `e324937` — record rockmag run-bundle readiness;
+- `887a30a` — refine this handoff around the truthful thermal boundary; and
+- `a389315` — make thermal planning auditable and fail closed.
 
-The complete RapidPy suite now reports **546 passing tests** using
+The complete RapidPy suite now reports **552 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -106,14 +108,15 @@ shows a remaining gap.
 
 Work in this priority order:
 
-1. complete the next retained treatment boundary without touching hardware,
-   prioritizing thermal integration or an explicit retirement decision.
+1. complete the next retained auxiliary boundary without touching hardware,
+   prioritizing automated susceptibility mechanics and evidence.
    SQUID recovery, vacuum acknowledgment behavior, AF/IRM ADwin treatment
    evidence, DC motor transport/state safety, treatment-route preflight, and
-   susceptibility bridge diagnostics are already complete; do not duplicate
-   those implementations;
+   susceptibility bridge diagnostics are already complete. The thermal
+   manual/external decision and run-evidence boundary are also complete; do not
+   duplicate those implementations;
 2. finish the remaining evidence-backed software parity rows and testable
-   protocol/replay boundaries for thermal, susceptibility, and
+   protocol/replay boundaries for susceptibility and
    retained auxiliaries; keep physical VRM, SQUID, vacuum, AF/IRM, ADwin/DAC/MCC,
    motor, and other RAPID-system-only gates explicitly pending;
 3. complete deployment acceptance in a dependency-clean environment and on the
@@ -285,11 +288,12 @@ measurement-only labels are accepted. Failed routes leave the last accepted
 treatment context unchanged. No-communication mode remains explicitly
 simulator-permissive.
 
-Focused queue/worker/thermal verification passes 51 tests; the complete suite
-passes 519 tests at that checkpoint. No furnace, port, board, motor, or other
-hardware was opened or actuated. Do not recreate this path. Live furnace/oven protocol integration,
-temperature readback, safety interlocks, safe abort, and physical acceptance
-remain open.
+Focused queue/worker/thermal verification passed 51 tests and the complete suite
+passed 519 tests at that earlier treatment-route checkpoint. Commit `a389315`
+supersedes its open-ended furnace-integration item with the source-backed
+manual/external decision described below. Do not recreate either path. Automated
+furnace control may reopen only with authoritative controller/protocol evidence;
+physical manual-external result reconciliation remains open.
 
 ### Completed assignment: truthful and auditable susceptibility diagnostics
 
@@ -366,59 +370,68 @@ ordinary hardware preflight. Tests prove a blocked mixed plan emits an aborted
 rockmag artifact with no treatment or hardware-preflight call. No port, board,
 motor, furnace, bridge, or SQUID was opened.
 
-### Immediate assignment: make the thermal boundary explicit and auditable
+### Completed assignment: explicit, auditable thermal boundary
 
-Start from the source evidence already established in this repository audit:
+Commit `a389315` closes the testable thermal software boundary without
+inventing furnace control. The source audit establishes that `VB6/modThermal.bas`
+guards two AF coil temperature sensors; it is not a specimen-furnace transport.
+Thermal treatment identity exists in VB6 measurement/plot paths, but the active
+project contains no discovered set-point/readback protocol or automated
+specimen-transfer state machine.
 
-- `VB6/modThermal.bas` is **not** a specimen furnace/oven controller. It only
-  validates two AF coil thermal-sensor readings, pauses execution, raises the
-  program alert level, sends notification, and offers an operator-controlled
-  resume after a low/invalid sensor condition;
-- the VB6 project contains thermal-treatment identity and plotting
-  classification (`Action_ThermalDemag`, `DemagType_Thermal`, and the TH branch
-  in measurement/plot forms), but the current source search has not found a
-  production furnace transport, temperature set-point command, temperature
-  readback protocol, or automated specimen-transfer state machine; and
-- RapidPy currently has a planning-only `rapid_main.thermal` service and
-  correctly blocks `TT`/`TH`/`TEMP` live queue labels unless the selected
-  production backend supplies a callable `apply_thermal` implementation.
+`docs/thermal_integration_decision.json` is the versioned source-backed decision:
+specimen thermal treatment is manual/external-only until the production
+controller, protocol, interlocks, loading procedure, abort/cooldown behavior,
+and signed acceptance evidence are supplied. `rapid_main.thermal` now publishes
+atomic `rapidpy.thermal.plan.v1` artifacts. Calibration Center says
+manual/external explicitly and loads the reviewed plan into Sequence; a manual
+edit invalidates its identity. The Measurement path carries that identity into
+provenance and workflow summary and writes atomic `rapidpy.thermal.run.v1`
+completion/abort evidence indexed with size and SHA-256. No-Communication
+execution is labeled simulated and says no furnace was controlled.
 
-Verify that finding against the complete active VB6 project before editing.
-Search by project membership and call graph, not just filenames. Keep AF coil
-sensor protection distinct from specimen thermal treatment. If no additional
-authoritative furnace protocol is found, do **not** infer commands from UI
-labels, generic serial conventions, manuals for an unknown controller, or the
-planning model.
+Live mode remains fail-closed. Without a production `apply_thermal` adapter, a
+compiled thermal plan aborts during treatment-plan validation, writes its run
+evidence, and issues no ordinary hardware preflight or treatment call. Focused
+and full-suite tests cover schema/decision agreement, atomic publication,
+handoff/invalidation, UI wording, exact label identity, blocked-call ordering,
+and artifact linkage. No port, furnace, motion device, or SQUID was opened.
 
-Then close the software boundary without pretending to automate the furnace:
+### Immediate assignment: automated susceptibility mechanics and run evidence
 
-1. create a versioned, machine-readable thermal integration/retirement decision
-   record that cites the searched VB6 source, records whether treatment is
-   external/manual/retired, names the missing controller/protocol/interlocks,
-   and states the exact evidence needed to reopen automated integration;
-2. keep live queue preflight fail-closed with a specific operator-facing reason
-   and prove that a blocked thermal plan issues no hardware-preflight,
-   treatment, motion, or measurement calls;
-3. make the existing thermal planner publish atomically and preserve exact
-   routine identity through the Sequence/main-shell boundary where practical;
-4. emit an immutable aborted thermal run record for a blocked compiled routine,
-   linked through provenance/workflow summary/artifact index with run, sample,
-   operator, software/config, requested labels, blocker, final phase, and
-   real/simulated status. Never describe a plan estimate as a treatment result;
-5. make the UI say clearly that thermal treatment is planning/manual-external
-   only unless a production adapter is configured. Do not expose a button or
-   status that implies furnace control; and
-6. add focused tests for schema validation, atomic publication, identity
-   invalidation after manual sequence edits, blocked-call ordering, artifact
-   linkage/digests, simulation isolation, interruption/error outcomes, and
-   truthful UI wording.
+Do not rebuild the completed susceptibility bridge diagnostic. The typed serial
+boundary already sends exact legacy `Z`/`M` + CRLF commands, requires strict
+CR-terminated finite numeric replies, applies the configured scale, migrates
+legacy settings, exposes immutable communication events, and has its own glass
+dialog. Hardware-mode `SUSC` queue labels correctly remain blocked.
 
-If and only if additional authoritative source or operator-supplied controller
-documentation establishes a real production furnace protocol, stop and present
-the discovered controller, command set, readback, limit/interlock, ownership,
-safe-abort/return, and acceptance requirements before enabling live dispatch.
-Implement that path with a typed adapter and fake/replay tests, but leave
-physical thermal acceptance pending until signed hardware evidence exists.
+Trace the active VB6 susceptibility call graph and physical sequence before
+editing. Determine the authoritative coil positions, motion controller/axis,
+zero/empty-coil reading order, holder correction, standard/calibration checks,
+sample reading order, retries, abort behavior, and safe return. Then implement
+one typed, ownership-safe state machine only where source evidence supports it:
+
+1. validate configuration, bridge identity/readiness, motion readiness,
+   calibration/standard state, and holder-correction state before movement;
+2. acquire bridge zero, move to each verified position, collect exact raw
+   replies, apply the documented holder/calibration math, and return to the
+   documented safe position on success, halt, timeout, or error;
+3. retain exact commands/replies, positions, timestamps, calibration and holder
+   identities, values, errors, retries, and final safe-state outcome in an
+   immutable susceptibility run artifact linked from the measurement bundle;
+4. prevent a rejected/partial reading from becoming zero or accepted output,
+   and never update holder/calibration state until the complete block passes;
+5. add deterministic fake/replay and fault-injection coverage for every state,
+   ownership conflict, malformed/partial reply, motion mismatch, timeout,
+   interruption, safe-return failure, and artifact-index path; and
+6. keep `SUSC` live preflight blocked until the entire state machine and its
+   required configuration are present. If VB6 source or hardware identity is
+   insufficient, record the exact integration/retirement blocker rather than
+   guessing mechanics.
+
+No hardware actuation is authorized by this prompt. Produce the physical
+acceptance procedure and evidence schema, but leave live bridge/coil/standard
+acceptance pending.
 
 The truthful empty Plots/Sample Selection/Queue states, real `.sam`/`.csv`
 sample-index-to-queue workflow, No-Communication-only AF examples, atomic
@@ -516,10 +529,16 @@ Read these files first:
 - `VB6/modPaleomag.bas`
 - `VB6/frmMeasure.frm`
 - `VB6/frmPlots.frm`
+- `VB6/modSusceptibility.bas`
+- `VB6/frmSusceptibilityMeter.frm`
+- `VB6/frmMagnetometerControl.frm`
+- `VB6/frmCalRod.frm`
 - `VB6/MeasurementBlock.cls`
 - `RapidPy/rapid_main/rapid_main/thermal.py`
 - `RapidPy/rapid_main/rapid_main/queue_hardware_backend.py`
 - `RapidPy/rapid_main/rapid_main/panels/calibration.py`
+- `RapidPy/rapid_main/rapid_main/susceptibility_transport.py`
+- `RapidPy/rapid_main/rapid_main/diagnostic_services.py`
 - `RapidPy/rapid_main/rapid_main/magnetometer.py`
 - `RapidPy/rapid_main/rapid_main/measurement_worker.py`
 - `RapidPy/rapid_main/rapid_main/diagnostic_services.py`
@@ -782,9 +801,9 @@ Document every intentional difference from VB6 and why it is safer or required.
 ## Remaining live acceptance work
 
 After the P0 path is complete in software, work through the P1/P2 inventory in
-`docs/rapidpy_transition_readiness_2026-08-29.md`: the explicit thermal
-integration/retirement boundary, automated susceptibility mechanics, physical
-VRM and rockmag acceptance, remaining retained auxiliaries, installer/config
+`docs/rapidpy_transition_readiness_2026-08-29.md`: automated susceptibility
+mechanics, physical manual-external thermal result reconciliation, physical VRM
+and rockmag acceptance, remaining retained auxiliaries, installer/config
 migration, and physical acceptance. Vacuum, AF/IRM ADwin, and DC motor software
 behavior is complete as described above; remaining work for those paths is
 physical acceptance, including independent pressure integration if retained,

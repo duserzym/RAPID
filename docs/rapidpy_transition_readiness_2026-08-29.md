@@ -242,9 +242,12 @@ explicit hardware operation, never a silent accept.
   gating is retained (the legacy controller itself has no pressure telemetry);
 - IRM/ARM physical execution, safe-abort, ADwin, DAC, and MCC
   calibration/loopback evidence;
-- furnace/oven control and thermal safety acceptance. The planning path is
-  software-verified, while hardware-mode queues now block during treatment-plan
-  preflight unless a typed furnace/oven adapter is configured;
+- specimen thermal treatment acceptance. Source audit proves VB6 `modThermal`
+  guards AF coil sensors rather than controlling a furnace; the versioned
+  integration decision therefore makes treatment manual/external-only. Planning,
+  plan identity, and abort evidence are software-verified, while hardware-mode
+  queues block before ordinary preflight unless an authoritative typed adapter
+  is configured;
 - susceptibility automated acquisition with validated coil motion, holder
   subtraction, and reproducible bundles. Exact bridge Z/M transport,
   configuration migration, fail-closed replies, transcript evidence, and a
@@ -265,7 +268,7 @@ explicit hardware operation, never a silent accept.
   partial replies; transport failures return to zero, clear/reset, back off,
   and reacquire a fresh whole block, with bounded exhaustion and structured run
   evidence. Vacuum, AF/IRM ADwin, and DC motor software evidence are also
-  integrated. Live thermal, automated susceptibility, and unknown treatment
+  integrated. Automated thermal, automated susceptibility, and unknown treatment
   labels now fail plan preflight
   instead of reaching the generic measurement shim; equivalent retained-
   auxiliary integration plus physical transcript acceptance remain open.
@@ -311,7 +314,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **546 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **552 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - Treatment-route coverage proves plan preflight occurs before hardware
@@ -336,6 +339,13 @@ summary:
   runs write deterministic routine artifacts, and the artifact index carries
   run ID, size, and SHA-256. Unsupported backfield/SUSC/mixed live plans still
   block before hardware preflight or treatment dispatch.
+- Thermal coverage proves the source-backed manual/external decision record
+  matches its code schema, planning artifacts publish atomically, Calibration
+  Center loads reviewed labels with explicit non-automation wording, manual
+  edits invalidate compiled identity, and `rapidpy.thermal.run.v1` is linked
+  through provenance, workflow summary, and the hashed artifact index. A blocked
+  live plan issues no ordinary hardware-preflight or treatment call. Simulated
+  execution remains isolated and never claims furnace control.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
   and faults (22), live transport and backend facade (21), holder state and
   holder command (19), queue-level fail-closed and holder behavior (13),

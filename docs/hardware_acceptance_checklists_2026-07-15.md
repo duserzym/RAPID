@@ -42,10 +42,12 @@ Each workflow below must have:
 - [ ] Thermal workflow parity
   - [x] Software evidence: `RapidPy/rapid_main/rapid_main/thermal.py` defines validated thermal treatment steps, safety limits, ramp/hold/cool estimates, and queue-block conversion, covered by `RapidPy/rapid_main/tests/test_thermal.py`.
   - [x] Software evidence: `QueueHardwareBackend` recognizes `TT`/`TH`/`TEMP` labels and routes them to an optional live `apply_thermal(temperature_c, label)` backend hook, covered by `RapidPy/rapid_main/tests/test_queue_and_bundle.py`.
-  - [x] Software evidence: Calibration Center exposes `Thermal Routine Planning` with operator/run context, safety limits, target list, queue-compatible labels, and timestamped JSON planning artifacts, covered by `RapidPy/rapid_main/tests/test_thermal.py` and `RapidPy/rapid_main/tests/test_calibration_panel.py`.
-  - [ ] Thermal controls are live-integrated or explicit retirement decision recorded with rationale.
+  - [x] Software evidence: Calibration Center exposes truthful manual/external thermal planning with operator/run context, safety limits, target list, atomic versioned artifacts, and direct reviewed-plan handoff into Sequence; manual edits invalidate compiled identity (`test_thermal.py`, `test_calibration_panel.py`, `test_sequence_thermal.py`, `test_sequence_ui_smoke.py`).
+  - [x] Software evidence: `docs/thermal_integration_decision.json` records the source-backed manual/external-only decision, distinguishes VB6 `modThermal` AF coil sensor protection from specimen furnace control, names missing inputs, and defines reopening criteria.
+  - [x] Software evidence: completed simulated or preflight-blocked plans write `rapidpy.thermal.run.v1` with exact identity/outcome and hashed artifact-index linkage; a blocked live plan makes no ordinary hardware-preflight or treatment call (`test_measurement_worker.py`).
+  - [x] Thermal automation is explicitly blocked with recorded rationale until an authoritative controller/protocol/interlock package is supplied.
   - [x] If active: software planning has preheat/ramp/hold/cool thresholds and rejects unsafe targets before queue conversion.
-  - [ ] **Hardware-only evidence required:** thermal routine run with safe abort and alarm handling.
+  - [ ] **Hardware-only evidence required:** approve and reconcile a manual-external thermal routine against physical treatment records. If automation is later reopened, also prove readback, interlocks, safe abort, alarms, and cooldown.
 - [ ] Rockmag routines
   - [x] `RockmagStep`/`RockmagSteps` model is represented in queue/compiler path.
   - [x] Software evidence: `RapidPy/rapid_main/rapid_main/rockmag.py` compiles operator routine specs/templates into family-preserving blocks and runner labels, covered by `RapidPy/rapid_main/tests/test_rockmag_routine.py`.
@@ -167,6 +169,7 @@ This is software acceptance evidence only. It does not replace bench validation 
   - `RapidPy/dc_motor_control/tests/test_telemetry_ui.py`
   - `RapidPy/rapid_main/tests/test_rockmag_routine.py`
   - `RapidPy/rapid_main/tests/test_thermal.py`
+  - `RapidPy/rapid_main/tests/test_sequence_thermal.py`
   - `RapidPy/rapid_main/tests/test_calibration_panel.py`
   - `RapidPy/rapid_main/tests/test_transverse.py`
 - Gap/tracker evidence:
