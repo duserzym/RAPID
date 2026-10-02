@@ -36,6 +36,62 @@ documentation and inherited test counts. Classify every finding as implemented,
 intentionally retired, hardware-gated, or a real software gap. “Complete” does
 not mean inventing physical-system acceptance evidence.
 
+## Repository handoff checkpoint (2026-10-02)
+
+Continue from the current branch; do not restart the redesign or recreate work
+that is already committed. The following focused commits are the present
+implementation baseline:
+
+- `04cd361` — refocus this Claude handoff on main-app completion;
+- `5969d17` — build the responsive glass main workspace;
+- `5dae514` — complete main-panel actions and fallback plotting;
+- `ccb900f` — use the acquisition clock for holder records;
+- `3afc7f3` — make sequence editing stateful and atomic;
+- `676e62c` — wire the truthful responsive dashboard shell;
+- `cc61ffe` — align transition evidence with verified application state.
+
+Before the current uncommitted edits, the complete RapidPy test run reported
+**411 passing tests**. Treat that number only as a historical checkpoint: rerun
+the suite and report the actual count after your changes.
+
+At handoff time the working tree may contain deliberate, unfinished edits in:
+
+- `RapidPy/rapid_main/rapid_main/dialogs/plots.py`; and
+- `RapidPy/rapid_main/rapid_main/dialogs/sample_select.py`.
+
+Those edits remove implicit demo data from operator-facing dialogs, add an
+explicit and unmistakable simulated-example path for plots, validate plot
+vector lengths and finite values, and make sample-index loading report whether
+real rows were loaded. Inspect and preserve them. Finish their tests and commit
+them as a focused truthfulness change; do not discard them or mix them into an
+unrelated commit.
+
+The main shell, Dashboard, Sample Queue, Sequence editor, Live Measure panel,
+Settings, Calibration Center, and reachable dialogs already share the
+responsive glass design system. Dashboard cards are backed by real snapshots,
+sequence import/save is atomic and dirty-state aware, the primary menu actions
+are wired, shutdown ordering is controlled, and fallback plotting is present.
+Verify these claims, fix regressions, and extend the system only where evidence
+shows a remaining gap.
+
+Work in this priority order:
+
+1. finish and test the truthful empty states in Plots and Sample Selection;
+2. connect the real `SampleSelectDialog` to the Sample Queue or main workflow so
+   “Load Sample” loads an operator-selected `.sam`/`.csv` index instead of only
+   navigating or prompting for a bare name;
+3. audit every visible “demo” action, especially AF diagnostics, and ensure it
+   cannot actuate live hardware or create evidence that looks production-valid;
+4. complete Settings backup/restore and restart-required behavior, Calibration
+   audit/version workflows, transition help, and clean-environment packaging;
+5. reconcile the parity/readiness documents only after the corresponding code
+   and tests exist.
+
+Do not represent placeholder thermal estimates, simulated plots, demo samples,
+or No-Communication results as hardware evidence. An explicit simulation tool
+may remain when it is visibly marked, isolated from production outputs, and
+disabled from live actuation.
+
 Read these files first:
 
 - `docs/rapidpy_transition_readiness_2026-08-29.md`
@@ -61,9 +117,10 @@ Preserve all current user changes and existing commits. Inspect `git status`, `g
 
 ## Primary workstream: glassmorphism and operator usability
 
-The current UI contains scattered translucent stylesheet rules, but it is not
-yet a unified glassmorphism product. Build one centralized, testable design
-system rather than layering more page-local CSS onto it.
+The UI now has a centralized, testable glass design system and a responsive
+main workspace. Audit and finish it rather than replacing it or layering more
+page-local CSS onto it. Preserve the existing token/helper direction unless a
+verified defect requires a compatible change.
 
 Use the existing Berkeley/RAPID identity as the anchor: deep maroon, restrained
 gold, warm neutral foregrounds, and high-contrast semantic colors. The result
@@ -100,7 +157,9 @@ not clip.
 
 Apply the design consistently to the application shell, Dashboard, Sample
 Queue, Sequence, Live Measure, Settings, Calibration Center, and every dialog
-reachable from the main application. Do not redesign unrelated standalone apps
+reachable from the main application. Most of this pass is already committed;
+look first for omissions, regressions, and dialogs that still use local styling.
+Do not redesign unrelated standalone apps
 unless a shared-theme change requires a compatibility fix; keep shared-theme
 changes backward-compatible or create an explicit main-app variant.
 
