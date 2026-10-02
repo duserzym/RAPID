@@ -417,6 +417,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Runtime estimator — initialised from config step times
         self._estimator = RuntimeEstimator(self.config.sequence.as_estimator_dict())
         self._sequence_labels: list[str] = []  # current loaded sequence step labels
+        self._rockmag_routine_plan: object | None = None
         self._queue_plan: list[QueueCommand] = []
         self._queue_pos: int = 0
         self._queue_resume_pos: int = 0
@@ -860,7 +861,22 @@ class MainWindow(QtWidgets.QMainWindow):
     def load_sequence_labels(self, labels: list[str]) -> None:
         """Set the sequence step labels and update the status bar estimate."""
         self._sequence_labels = list(labels)
+        if self._rockmag_routine_plan is not None:
+            planned = getattr(self._rockmag_routine_plan, "to_queue_labels", lambda: [])()
+            if list(planned) != self._sequence_labels:
+                self._rockmag_routine_plan = None
         self._update_runtime_display(running=False)
+
+    def set_rockmag_routine_plan(self, plan: object | None) -> None:
+        """Associate the current labels with their compiled rockmag identity."""
+
+        if plan is None:
+            self._rockmag_routine_plan = None
+            return
+        labels = getattr(plan, "to_queue_labels", lambda: [])()
+        if list(labels) != self._sequence_labels:
+            raise ValueError("rockmag routine plan does not match the active sequence labels")
+        self._rockmag_routine_plan = plan
 
     def start_queue_run(self, samples: list[QueueSample], options: QueueOptions) -> bool:
         """Start a queue-driven measurement run.

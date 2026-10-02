@@ -568,6 +568,14 @@ class MeasurementPanel(QtWidgets.QWidget):
             else run_output_dir
         )
         run_id = f"{meta.name}-{datetime.now().strftime('%Y%m%dT%H%M%S')}"
+        routine_context = None
+        rockmag_plan = getattr(mw, "_rockmag_routine_plan", None)
+        if rockmag_plan is not None:
+            routine_context = rockmag_plan.to_artifact(
+                run_context=run_id,
+                operator=op,
+                notes="Compiled sequence executed by MeasurementWorker.",
+            )
         try:
             calibration_records = CalibrationRegistry.default().provenance_refs()
         except CalibrationRegistryError as exc:
@@ -598,6 +606,7 @@ class MeasurementPanel(QtWidgets.QWidget):
                 getattr(mw, "_vacuum_backend", None),
                 getattr(mw, "_susceptibility_backend", None),
             ),
+            routine_context=routine_context,
             parent=self,
         )
         self._worker.step_started.connect(self._on_step_started)

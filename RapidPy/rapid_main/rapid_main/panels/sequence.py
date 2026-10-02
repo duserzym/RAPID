@@ -5,10 +5,12 @@ from pathlib import Path
 
 from PySide6 import QtCore, QtWidgets
 
-from rapid_main.rockmag import compile_rockmag_routine, rockmag_the_works
-
-
-_HAWAIIAN_AF_LABELS = ["NRM", "AF25", "AF50", "AF100", "AF200", "AF400", "AF800"]
+from rapid_main.rockmag import (
+    RockmagRoutinePlan,
+    compile_rockmag_routine,
+    rockmag_af_demag,
+    rockmag_the_works,
+)
 
 
 @dataclass
@@ -45,6 +47,7 @@ class SequencePanel(QtWidgets.QWidget):
         super().__init__(parent)
         self._cfg = SequenceConfig()
         self._compiled_routine_labels: list[str] | None = None
+        self._compiled_routine_plan: RockmagRoutinePlan | None = None
         self._applying_preset = False
         self._current_path: Path | None = None
         self._dirty = False
@@ -351,6 +354,7 @@ class SequencePanel(QtWidgets.QWidget):
     def _rebuild_preview(self) -> None:
         if not self._applying_preset and self.sender() is not None:
             self._compiled_routine_labels = None
+            self._compiled_routine_plan = None
             self._set_dirty(True)
         labels = self.generate_labels()
         self._render_labels(labels)
@@ -371,6 +375,8 @@ class SequencePanel(QtWidgets.QWidget):
         mw = self.window()
         if hasattr(mw, "load_sequence_labels"):
             mw.load_sequence_labels(labels)
+        if hasattr(mw, "set_rockmag_routine_plan"):
+            mw.set_rockmag_routine_plan(self._compiled_routine_plan)
 
     def _set_dirty(self, dirty: bool) -> None:
         self._dirty = bool(dirty)
@@ -471,6 +477,7 @@ class SequencePanel(QtWidgets.QWidget):
     def load_labels(self, labels: list[str], *, source_path: Path | None = None) -> None:
         """Install imported labels as the active executable and saveable sequence."""
         self._compiled_routine_labels = list(labels)
+        self._compiled_routine_plan = None
         self._current_path = source_path
         self._set_dirty(False)
         self._render_labels(list(labels), loaded=source_path is not None)
@@ -492,13 +499,21 @@ class SequencePanel(QtWidgets.QWidget):
         finally:
             self._applying_preset = False
         self._compiled_routine_labels = None
+        self._compiled_routine_plan = None
         self._current_path = None
         self._set_dirty(False)
         self._rebuild_preview()
 
     # ── Preset loaders ────────────────────────────────────────────────────────
     def _preset_hawaiian(self) -> None:
-        self._compiled_routine_labels = list(_HAWAIIAN_AF_LABELS)
+        plan = compile_rockmag_routine(
+            rockmag_af_demag(
+                (25.0, 50.0, 100.0, 200.0, 400.0, 800.0),
+                name="Hawaiian AF Preset",
+            )
+        )
+        self._compiled_routine_plan = plan
+        self._compiled_routine_labels = plan.to_queue_labels()
         self._applying_preset = True
         try:
             for chk in (self._chk_nrm, self._chk_rrm, self._chk_arm,
@@ -513,6 +528,7 @@ class SequencePanel(QtWidgets.QWidget):
 
     def _preset_works(self) -> None:
         plan = compile_rockmag_routine(rockmag_the_works())
+        self._compiled_routine_plan = plan
         self._compiled_routine_labels = plan.to_queue_labels()
         self._applying_preset = True
         try:

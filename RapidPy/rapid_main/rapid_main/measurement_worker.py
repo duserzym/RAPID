@@ -32,6 +32,7 @@ Usage::
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+import hashlib
 import json
 import threading
 from concurrent.futures import Future
@@ -59,6 +60,7 @@ from rapid_main.magnetometer import (
 )
 from rapid_main.status_codes import OperatorStatus, error_status, status_for_phase, warning_status
 from rapid_main.susceptibility import write_susceptibility_summary_json
+from rapid_main.rockmag import write_rockmag_run_artifact
 from rapid_main.workflow import WorkflowPhase, WorkflowStateMachine
 from rapid_main import software_version
 from rapid_main.io.measurement_bundle import (
@@ -141,6 +143,7 @@ class MeasurementWorker(QtCore.QThread):
         allow_simulated_production_output: bool = False,
         calibration_records: Sequence[Mapping[str, Any]] | None = None,
         communication_sources: Sequence[object] | None = None,
+        routine_context: Mapping[str, Any] | None = None,
         parent: Optional[QtCore.QObject] = None,
     ) -> None:
         super().__init__(parent)
@@ -159,6 +162,7 @@ class MeasurementWorker(QtCore.QThread):
         self._resume = bool(resume)
         self._allow_simulated_production_output = bool(allow_simulated_production_output)
         self._calibration_records = [dict(record) for record in (calibration_records or ())]
+        self._routine_context = dict(routine_context) if routine_context is not None else None
         # A backend that declares itself simulated taints every artifact it
         # produces: the run is labelled and kept out of the production path.
         self._simulated = bool(getattr(self._backend, "simulated", False))
@@ -167,6 +171,8 @@ class MeasurementWorker(QtCore.QThread):
         self._holder_record_id = ""
         self._holder_recorded_iso = ""
         self._skipped_labels: list[str] = []
+        self._completed_labels: list[str] = []
+        self._error_messages: list[str] = []
         self._recovery_count = 0
         self._published_paths: dict[str, str] = {}
         self._publish_dir = (
@@ -442,6 +448,7 @@ class MeasurementWorker(QtCore.QThread):
                 holder_status=self._backend_holder_status(),
             )
             self.step_complete.emit(result)
+            self._completed_labels.append(label)
 
         # Publish only a complete, accepted run. An abort discards the staged
         # copy so the production output path is never partially updated.
@@ -585,6 +592,7 @@ class MeasurementWorker(QtCore.QThread):
         self.preflight_warning.emit(message)
 
     def _emit_error(self, message: str, *, phase: WorkflowPhase | None = None) -> None:
+        self._error_messages.append(str(message))
         if self._comm_logger is not None:
             self._comm_logger.error(message)
         self.status_event.emit(error_status(message, phase=phase))
@@ -763,6 +771,7 @@ class MeasurementWorker(QtCore.QThread):
                 if record.get("record_id")
             ],
             "calibration_records": list(self._calibration_records),
+            "rockmag_routine": dict(self._routine_context) if self._routine_context else None,
         }
 
     def _run_provenance(self) -> dict[str, object]:
@@ -858,6 +867,17 @@ class MeasurementWorker(QtCore.QThread):
             "sample": self._meta.name,
             "operator": self._operator,
             "labels": list(self._labels),
+            "completed_labels": list(self._completed_labels),
+            "errors": list(self._error_messages),
+            "rockmag_routine": (
+                {
+                    "procedure_id": self._routine_context.get("procedure_id", ""),
+                    "routine_name": self._routine_context.get("routine_name", ""),
+                    "queue_labels": list(self._routine_context.get("queue_labels", ())),
+                }
+                if self._routine_context is not None
+                else None
+            ),
             "aborted": bool(aborted),
             "simulated": self._simulated,
             "simulation_statement": (
@@ -924,8 +944,40 @@ class MeasurementWorker(QtCore.QThread):
     def _finish_run(self, *, aborted: bool) -> None:
         self._write_workflow_summary(aborted=aborted)
         self._write_communication_transcript()
+        self._write_rockmag_run_artifact(aborted=aborted)
         self._write_artifact_index(aborted=aborted)
         self.run_finished.emit(aborted)
+
+    def _write_rockmag_run_artifact(self, *, aborted: bool) -> None:
+        if self._routine_context is None:
+            return
+        try:
+            write_rockmag_run_artifact(
+                self._publish_dir / "rockmag_run.json",
+                self._routine_context,
+                run_id=self._run_id,
+                sample=self._meta.name,
+                operator=self._operator,
+                labels_requested=self._labels,
+                completed_labels=self._completed_labels,
+                skipped_duplicate_labels=self._skipped_labels,
+                errors=self._error_messages,
+                aborted=aborted,
+                simulated=self._simulated,
+                final_phase=(
+                    str(self._phase_history[-1]["phase"]) if self._phase_history else ""
+                ),
+                software_version=software_version(),
+                config_hash=(
+                    str(self._last_block_audit.config_hash)
+                    if self._last_block_audit is not None
+                    else ""
+                ),
+            )
+        except Exception as exc:
+            self._error_messages.append(f"rockmag run artifact write failed: {exc}")
+            if self._comm_logger is not None:
+                self._comm_logger.error(self._error_messages[-1])
 
     def _write_artifact_index(self, *, aborted: bool) -> None:
         artifact_path = self._publish_dir / "artifact_index.json"
@@ -940,18 +992,27 @@ class MeasurementWorker(QtCore.QThread):
         ) -> dict[str, object]:
             exists = path.exists()
             size = path.stat().st_size if exists else 0
+            digest = ""
+            if exists:
+                sha256 = hashlib.sha256()
+                with path.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        sha256.update(chunk)
+                digest = sha256.hexdigest()
             return {
                 "name": name,
                 "relative_path": self._relative_artifact_path(path),
                 "required": required,
                 "exists": exists,
                 "size_bytes": size,
+                "sha256": digest,
                 "producer": producer,
                 "description": description,
             }
 
         payload = {
             "schema": "rapidpy.measurement.artifact_index.v1",
+            "run_id": self._run_id,
             "sample": self._meta.name,
             "operator": self._operator,
             "aborted": bool(aborted),
@@ -960,6 +1021,11 @@ class MeasurementWorker(QtCore.QThread):
                 SIMULATION_STATEMENT.strip() if self._simulated else ""
             ),
             "published_paths": dict(self._published_paths),
+            "rockmag_routine": (
+                str(self._routine_context.get("routine_name", ""))
+                if self._routine_context is not None
+                else ""
+            ),
             "calibration_record_ids": [
                 str(record.get("record_id", ""))
                 for record in self._calibration_records
@@ -1030,6 +1096,19 @@ class MeasurementWorker(QtCore.QThread):
                 "association and physical safe-state behavior require bench acceptance testing."
             ),
         }
+        if self._routine_context is not None:
+            payload["artifacts"].append(
+                entry(
+                    "rockmag_run",
+                    self._publish_dir / "rockmag_run.json",
+                    required=True,
+                    producer="MeasurementWorker",
+                    description=(
+                        "Compiled rockmag routine identity, requested/completed labels, "
+                        "outcome, failures, and simulation/hardware acceptance boundary."
+                    ),
+                )
+            )
         try:
             self._publish_dir.mkdir(parents=True, exist_ok=True)
             artifact_path.write_text(

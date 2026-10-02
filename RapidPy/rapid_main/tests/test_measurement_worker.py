@@ -16,6 +16,7 @@ from rapid_main.acquisition import RecoveryRecord
 from rapid_main.hardware_contracts import PreflightResult
 from rapid_main.magnetometer import BracketedMeasurementBlock, CommandEvent, ZeroPairValidation
 from rapid_main.measurement_worker import MeasurementWorker
+from rapid_main.rockmag import RockmagRoutineSpec, compile_rockmag_routine, rockmag_af_demag
 from rapid_main.workflow import WorkflowPhase
 
 
@@ -298,6 +299,92 @@ def _meta(name: str = "MEASURE_WORKER") -> SpecimenMeta:
 
 
 class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
+    def test_completed_rockmag_run_is_indexed_with_compiled_routine_identity(self) -> None:
+        plan = compile_rockmag_routine(rockmag_af_demag((10.0, 20.0)))
+        context = plan.to_artifact(
+            run_context="run-rockmag-1",
+            operator="opr",
+            timestamp_iso="2026-10-02T12:00:00+00:00",
+        )
+        readings = [(label, 1.0 + i, 2.0 + i, 3.0 + i) for i, label in enumerate(plan.labels)]
+        backend = DeterministicBackend(readings)
+        backend.simulated = True
+
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out"
+            published = out / "SIMULATED"
+            worker = MeasurementWorker(
+                meta=_meta("ROCKMAG_OK"),
+                labels=plan.labels,
+                output_dir=out,
+                backend=backend,
+                operator="opr",
+                run_id="run-rockmag-1",
+                routine_context=context,
+            )
+            worker.run()
+            run_payload = json.loads((published / "rockmag_run.json").read_text(encoding="utf-8"))
+            workflow = json.loads((published / "workflow_summary.json").read_text(encoding="utf-8"))
+            artifact_index = json.loads((published / "artifact_index.json").read_text(encoding="utf-8"))
+            provenance = json.loads((published / "provenance.json").read_text(encoding="utf-8"))
+            root_rockmag_exists = (out / "rockmag_run.json").exists()
+
+        self.assertEqual(run_payload["status"], "COMPLETED")
+        self.assertTrue(run_payload["simulated"])
+        self.assertFalse(root_rockmag_exists)
+        self.assertEqual(run_payload["labels_completed"], plan.labels)
+        self.assertEqual(workflow["rockmag_routine"]["routine_name"], "Rockmag AF demag")
+        rockmag_entries = [
+            item for item in artifact_index["artifacts"] if item["name"] == "rockmag_run"
+        ]
+        self.assertEqual(len(rockmag_entries), 1)
+        self.assertTrue(rockmag_entries[0]["exists"])
+        self.assertEqual(len(rockmag_entries[0]["sha256"]), 64)
+        self.assertEqual(provenance["rockmag_routine"]["queue_labels"], plan.labels)
+
+    def test_blocked_rockmag_plan_writes_aborted_evidence_before_hardware_preflight(self) -> None:
+        class _BlockedRockmagBackend(DeterministicBackend):
+            def validate_treatment_plan(self, labels: tuple[str, ...]) -> PreflightResult:
+                return PreflightResult.blocked(
+                    "Treatment label 'IRM-BF' cannot run in hardware mode"
+                )
+
+        plan = compile_rockmag_routine(
+            RockmagRoutineSpec("Blocked backfield", ("NRM", "IRM-BF"))
+        )
+        context = plan.to_artifact(
+            run_context="run-rockmag-2",
+            operator="opr",
+            timestamp_iso="2026-10-02T12:00:00+00:00",
+        )
+        backend = _BlockedRockmagBackend()
+
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out"
+            worker = MeasurementWorker(
+                meta=_meta("ROCKMAG_BLOCK"),
+                labels=plan.labels,
+                output_dir=out,
+                backend=backend,
+                operator="opr",
+                run_id="run-rockmag-2",
+                routine_context=context,
+            )
+            worker.run()
+            run_payload = json.loads((out / "rockmag_run.json").read_text(encoding="utf-8"))
+            artifact_index = json.loads((out / "artifact_index.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(backend.preflight_calls, 0)
+        self.assertEqual(backend.step_calls, [])
+        self.assertEqual(run_payload["status"], "ABORTED")
+        self.assertEqual(run_payload["labels_completed"], [])
+        self.assertIn("IRM-BF", run_payload["errors"][0])
+        rockmag_entry = next(
+            item for item in artifact_index["artifacts"] if item["name"] == "rockmag_run"
+        )
+        self.assertTrue(rockmag_entry["required"])
+        self.assertTrue(rockmag_entry["exists"])
+
     def test_treatment_plan_preflight_blocks_before_hardware_preflight(self) -> None:
         class _PlanningOnlyBackend(DeterministicBackend):
             def __init__(self) -> None:

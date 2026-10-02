@@ -9,10 +9,12 @@ with the existing RapidPy queue/measurement path.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from rapid_main.data_model import MeasurementBlock, MeasurementBlocks, RockmagStep, RockmagSteps
 
@@ -80,10 +82,8 @@ def compile_rockmag_routine(spec: RockmagRoutineSpec) -> RockmagRoutinePlan:
     """Compile a routine spec into steps and family-preserving blocks."""
 
     expanded_labels: list[str] = []
-    for repeat_index in range(spec.repeats):
+    for _repeat_index in range(spec.repeats):
         expanded_labels.extend(spec.labels)
-        if repeat_index < spec.repeats - 1:
-            expanded_labels.append(f"REPEAT{repeat_index + 2}")
 
     steps = RockmagSteps.from_labels(expanded_labels, routine_name=spec.name)
     blocks = MeasurementBlocks(_blocks_by_family(steps.steps, spec))
@@ -146,7 +146,6 @@ def write_rockmag_routine_artifact(
     """Write a Rockmag routine planning artifact for operator review."""
 
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
     payload = rockmag_routine_artifact(
         plan,
         run_context=run_context,
@@ -154,7 +153,77 @@ def write_rockmag_routine_artifact(
         notes=notes,
         timestamp_iso=timestamp_iso,
     )
-    target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _atomic_write_json(target, payload)
+    return target
+
+
+def rockmag_run_artifact(
+    routine_context: Mapping[str, Any],
+    *,
+    run_id: str,
+    sample: str,
+    operator: str,
+    labels_requested: Sequence[str],
+    completed_labels: Sequence[str],
+    skipped_duplicate_labels: Sequence[str] = (),
+    errors: Sequence[str] = (),
+    aborted: bool,
+    simulated: bool,
+    final_phase: str,
+    software_version: str = "",
+    config_hash: str = "",
+    timestamp_iso: str | None = None,
+) -> dict[str, Any]:
+    """Build execution evidence tied to one compiled rockmag plan."""
+
+    context = dict(routine_context)
+    if context.get("procedure_id") != "rockmag/routine-planning":
+        raise ValueError("rockmag run context must be a routine-planning artifact")
+    planned = [str(label) for label in context.get("queue_labels", ())]
+    requested = [str(label) for label in labels_requested]
+    if planned != requested:
+        raise ValueError("rockmag run labels do not match the compiled routine context")
+    completed = [str(label) for label in completed_labels]
+    if completed != requested[: len(completed)]:
+        raise ValueError("completed rockmag labels are not a prefix of the requested plan")
+    timestamp = timestamp_iso or datetime.now(timezone.utc).isoformat()
+    return {
+        "schema": "rapidpy.rockmag.run.v1",
+        "status": "ABORTED" if aborted else "COMPLETED",
+        "timestamp_iso": timestamp,
+        "run_id": str(run_id),
+        "sample": str(sample),
+        "operator": str(operator),
+        "software_version": str(software_version),
+        "config_hash": str(config_hash),
+        "simulated": bool(simulated),
+        "simulation_statement": (
+            "Simulated rockmag execution; not hardware evidence." if simulated else ""
+        ),
+        "routine": context,
+        "labels_requested": requested,
+        "labels_completed": completed,
+        "skipped_duplicate_labels": [str(label) for label in skipped_duplicate_labels],
+        "errors": [str(error) for error in errors],
+        "final_phase": str(final_phase),
+        "hardware_validation_required": True,
+        "hardware_validation_statement": (
+            "Software run-bundle evidence only; every live treatment family, SQUID "
+            "measurement, interlock, and safe-return path requires physical acceptance."
+        ),
+    }
+
+
+def write_rockmag_run_artifact(
+    path: str | Path,
+    routine_context: Mapping[str, Any],
+    **run_evidence: Any,
+) -> Path:
+    """Atomically publish one rockmag execution artifact."""
+
+    target = Path(path)
+    payload = rockmag_run_artifact(routine_context, **run_evidence)
+    _atomic_write_json(target, payload)
     return target
 
 
@@ -249,3 +318,31 @@ def _format_field(value: float) -> str:
     if value == round(value):
         return str(int(round(value)))
     return f"{value:.3f}".rstrip("0").rstrip(".")
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(dict(payload), handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
