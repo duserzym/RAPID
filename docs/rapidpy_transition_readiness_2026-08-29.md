@@ -245,7 +245,12 @@ explicit hardware operation, never a silent accept.
 - furnace/oven control and thermal safety acceptance. The planning path is
   software-verified, while hardware-mode queues now block during treatment-plan
   preflight unless a typed furnace/oven adapter is configured;
-- susceptibility, VRM, and rock-magnetic acquisition with reproducible bundles;
+- susceptibility automated acquisition with validated coil motion, holder
+  subtraction, and reproducible bundles. Exact bridge Z/M transport,
+  configuration migration, fail-closed replies, transcript evidence, and a
+  dedicated glass diagnostic window are software-verified; queue SUSC remains
+  blocked until the mechanical/calibration lifecycle is complete;
+- VRM and rock-magnetic acquisition with reproducible bundles;
 - interrupted-queue recovery and physical safe-state acceptance;
 - DC motor physical encoder, torque/current, stall, limit, direction, sample
   transfer, safe-abort, and transcript verification;
@@ -254,7 +259,8 @@ explicit hardware operation, never a silent accept.
   partial replies; transport failures return to zero, clear/reset, back off,
   and reacquire a fresh whole block, with bounded exhaustion and structured run
   evidence. Vacuum, AF/IRM ADwin, and DC motor software evidence are also
-  integrated. Live thermal and unknown treatment labels now fail plan preflight
+  integrated. Live thermal, automated susceptibility, and unknown treatment
+  labels now fail plan preflight
   instead of reaching the generic measurement shim; equivalent retained-
   auxiliary integration plus physical transcript acceptance remain open.
 
@@ -299,7 +305,7 @@ summary:
 
 ## Current software verification
 
-- Full RapidMain test suite: **519 passed** (`python -m unittest discover -s
+- Full RapidMain test suite: **531 passed** (`python -m unittest discover -s
   tests -p 'test_*.py'` from `RapidPy/rapid_main`); the pre-existing baseline
   was 261.
 - Treatment-route coverage proves plan preflight occurs before hardware
@@ -307,6 +313,11 @@ summary:
   malformed/unsupported live labels cannot be silently acknowledged, failed
   routes preserve the last accepted treatment context, and explicit
   no-communication simulation remains available.
+- Susceptibility coverage proves exact Z/M commands, CR-terminated replies,
+  malformed/partial response rejection, scale application, immutable evidence,
+  VB6 settings migration, truthful glass diagnostics, explicit-only SUSC reads,
+  and abort-on-requested-read-failure. It also proves the SQUID magnetic-moment
+  path cannot masquerade as susceptibility.
 - New coverage added in this pass (121 tests): bracketed acquisition sequence
   and faults (22), live transport and backend facade (21), holder state and
   holder command (19), queue-level fail-closed and holder behavior (13),

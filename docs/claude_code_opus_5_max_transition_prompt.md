@@ -83,8 +83,9 @@ implementation baseline:
 - `319d467` — make ADwin treatments fail closed and auditable.
 - `23d666b` — make DC motor transport auditable and fail closed.
 - `b71ffa9` — block unimplemented live treatment routes.
+- `d8d984c` — make susceptibility diagnostics truthful and auditable.
 
-The complete RapidPy suite now reports **519 passing tests** using
+The complete RapidPy suite now reports **531 passing tests** using
 `python -m unittest discover -s tests -p 'test_*.py'` from
 `RapidPy/rapid_main`. Preserve or increase that count, but treat the repository
 and current test discovery as authoritative if later commits add tests.
@@ -102,8 +103,9 @@ Work in this priority order:
 1. extend raw communication evidence and deterministic fault handling to the
    remaining retained auxiliary live adapters without touching hardware.
    SQUID recovery, vacuum acknowledgment behavior, AF/IRM ADwin treatment
-   evidence, DC motor transport/state safety, and treatment-route preflight are
-   already complete; do not duplicate those implementations;
+   evidence, DC motor transport/state safety, treatment-route preflight, and
+   susceptibility bridge diagnostics are already complete; do not duplicate
+   those implementations;
 2. finish the remaining evidence-backed software parity rows and testable
    protocol/replay boundaries for thermal, susceptibility, VRM, rockmag, and
    retained auxiliaries; keep physical SQUID, vacuum, AF/IRM, ADwin/DAC/MCC,
@@ -278,15 +280,39 @@ treatment context unchanged. No-communication mode remains explicitly
 simulator-permissive.
 
 Focused queue/worker/thermal verification passes 51 tests; the complete suite
-passes 519 tests. No furnace, port, board, motor, or other hardware was opened
-or actuated. Do not recreate this path. Live furnace/oven protocol integration,
+passes 519 tests at that checkpoint. No furnace, port, board, motor, or other
+hardware was opened or actuated. Do not recreate this path. Live furnace/oven protocol integration,
 temperature readback, safety interlocks, safe abort, and physical acceptance
 remain open.
 
+### Completed assignment: truthful and auditable susceptibility diagnostics
+
+Commit `d8d984c` removes the false susceptibility path and implements the
+VB6-evidenced bridge diagnostic boundary. `SquidBackendAdapter` no longer
+returns magnetic moment as susceptibility. `MeasurementWorker` requests a
+reading only for an explicit `SUSC` label, validates finiteness, and aborts a
+requested bridge failure instead of silently writing `0.0`.
+
+The new typed serial transport sends exact `Z`/`M` + CRLF commands, requires a
+CR-terminated ASCII response, rejects empty, partial, non-ASCII, non-numeric,
+and non-finite replies, applies the configured scale factor, and retains exact
+TX/RX/error events. Port, framing, scale, moment factor, coil position, and
+enabled state migrate from the real VB6 INI into the Settings panel and config
+backups. The Susceptibility Bridge menu now opens its own accessible glass
+diagnostic dialog rather than the SQUID dialog. No physical port was opened.
+
+Do not misstate this as automated acquisition parity. Hardware-mode SUSC queue
+plans intentionally block because safe coil positioning, holder
+susceptibility subtraction, calibrated standard acceptance, and mechanical
+safe return are not implemented. Complete those as one coherent state machine
+before allowing `SUSC` through live plan preflight; do not call the diagnostic
+transport at an arbitrary lift position.
+
 For the next implementation assignment, take the highest-priority retained
-auxiliary path actually used in production—likely susceptibility, VRM, or
-rockmag—and trace it from queue/UI entry to protocol, evidence, output, and
-failure state.
+auxiliary path actually used in production—VRM or rockmag—and trace it from
+queue/UI entry to protocol, evidence, output, and failure state. If automated
+susceptibility is the lab's priority, complete its motion/holder/calibration
+lifecycle first instead.
 Add a typed, fail-closed live adapter and current-run evidence only where the
 repository contains a truthful transport contract. If no production protocol
 exists, preserve planning or launch behavior, block unsupported live execution
