@@ -1402,9 +1402,18 @@ class MainWindow(QtWidgets.QMainWindow):
         dm.addAction("&Vacuum",       self._launch_vacuum)
         dm.addSeparator()
         af_sub = dm.addMenu("AF &Demagnetizer")
-        af_sub.addAction("AF Demag Window",     self._launch_af)
-        af_sub.addAction("Run AF Demo Sequence", self._launch_af_demo)
-        af_sub.addAction("Run AF Demo Queue", self._launch_af_queue_demo)
+        af_sub.addAction("Set Up AF Sequence", self._launch_af)
+        self._af_demo_action = af_sub.addAction(
+            "Run SIMULATED AF Example", self._launch_af_demo
+        )
+        self._af_queue_demo_action = af_sub.addAction(
+            "Run SIMULATED AF Queue Example", self._launch_af_queue_demo
+        )
+        for action in (self._af_demo_action, self._af_queue_demo_action):
+            action.setEnabled(bool(self.config.general.nocomm))
+            action.setToolTip(
+                "Available only in No-Communication mode; never runs live hardware."
+            )
         af_sub.addAction("AF Tuner / ClipTest", self._launch_af_tuner)
         af_sub.addAction("AF Field Calibration", self._launch_af_tuner)
         irm_sub = dm.addMenu("&IRM / ARM")
@@ -1471,6 +1480,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.set_flow_state(self._workflow_state)
         mode = "No-Comm simulation" if on else "hardware"
         self.set_status(f"Operating mode changed to {mode}.")
+        for name in ("_af_demo_action", "_af_queue_demo_action"):
+            action = getattr(self, name, None)
+            if action is not None:
+                action.setEnabled(bool(on))
         if hasattr(self, "_dashboard"):
             self._refresh_dashboard_diagnostics()
 
@@ -1510,12 +1523,14 @@ class MainWindow(QtWidgets.QMainWindow):
         """Run the AF demo sequence as a queue sample for automated handling."""
         self._prepare_af_workflow(auto_start=True, queue_mode=True)
 
-    def _build_af_demo_queue_samples(self, *, sample_name: str = "AF_DEMO") -> list[QueueSample]:
+    def _build_af_demo_queue_samples(
+        self, *, sample_name: str = "SIMULATED_AF_EXAMPLE"
+    ) -> list[QueueSample]:
         """Build a single synthetic queue sample for AF demo automation."""
         return [
             QueueSample(
                 sample_name=sample_name,
-                file_id="AF_DEMO",
+                file_id="SIMULATED_AF_EXAMPLE",
                 hole=1,
                 do_up=True,
                 do_both=False,
@@ -1525,21 +1540,39 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _prepare_af_workflow(self, *, auto_start: bool, queue_mode: bool = False) -> bool:
         """Load AF sequence defaults and optionally auto-start the run."""
+        if auto_start and not bool(getattr(self.config.general, "nocomm", False)):
+            message = (
+                "The simulated AF example is disabled in hardware mode. "
+                "Use Set Up AF Sequence with an operator-selected specimen, or "
+                "explicitly enable No-Communication mode for a simulation."
+            )
+            self.set_status(message)
+            QtWidgets.QMessageBox.warning(self, "Simulated AF Example", message)
+            return False
+
         self.load_sequence_labels(self._af_demo_labels())
-        self.set_current_sample("AF_DEMO")
-        if hasattr(self._measurement, "set_specimen_context"):
+        sample_name = "SIMULATED_AF_EXAMPLE" if auto_start else self._current_sample
+        if auto_start:
+            self.set_current_sample(sample_name)
+        if sample_name and sample_name != "UNKNOWN" and hasattr(
+            self._measurement, "set_specimen_context"
+        ):
             self._measurement.set_specimen_context(
-                sample="AF_DEMO",
+                sample=sample_name,
                 depth="—",
-                treatment="AF workflow",
+                treatment=(
+                    "SIMULATED AF example — not hardware evidence"
+                    if auto_start
+                    else "AF workflow"
+                ),
             )
         if queue_mode:
-            self.set_status("AF demo loaded into queue workflow.")
+            self.set_status("SIMULATED AF example loaded into queue workflow.")
             self._nav_select(1)
             if hasattr(self._measurement, "start_measurement_for_sample"):
                 # Measurement panel context is prepared so the queued run uses AF labels
                 # without requiring user intervention.
-                self.set_status("AF demo queue started.")
+                self.set_status("SIMULATED AF example queue started.")
             samples = self._build_af_demo_queue_samples()
             options = QueueOptions(
                 ascending=True,
@@ -1551,24 +1584,32 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             if self.start_queue_run(samples, options):
                 return True
-            self.set_status("Unable to start AF demo queue. Check automation readiness.")
+            self.set_status("Unable to start simulated AF example queue. Check readiness.")
             return False
 
-        self.set_status("AF workflow loaded in Live Measurement.")
+        if auto_start:
+            self.set_status("SIMULATED AF example loaded in Live Measurement.")
+        elif sample_name and sample_name != "UNKNOWN":
+            self.set_status(f"AF sequence loaded for {sample_name}; review before starting.")
+        else:
+            self.set_status("AF sequence loaded. Select a real sample before starting.")
         self._nav_select(3)
         if not auto_start:
             return True
 
         started = bool(
             hasattr(self._measurement, "start_measurement_for_sample")
-            and self._measurement.start_measurement_for_sample("AF_DEMO")
+            and self._measurement.start_measurement_for_sample(sample_name)
         )
         if not started:
-            self.set_status("Unable to auto-start AF demo. Manual start is available in Live Measurement.")
+            self.set_status(
+                "Unable to auto-start simulated AF example. Manual controls remain available."
+            )
             return False
 
         self.set_status(
-            "AF demo sequence started. Use Pause/Resume and Halt in Live Measurement to control."
+            "SIMULATED AF example started — not hardware evidence. "
+            "Use Pause/Resume and Halt in Live Measurement to control."
         )
         return True
 

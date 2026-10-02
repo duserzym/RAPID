@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from PySide6 import QtWidgets
 
@@ -65,7 +65,10 @@ class TestAfWorkflowQueue(_AfWorkflowMixin, unittest.TestCase):
 
         self.assertTrue(mw._prepare_af_workflow(auto_start=True, queue_mode=True))
         self.assertEqual(mw._sequence_labels, mw._af_demo_labels())
-        self.assertEqual(started["samples"][0].sample_name, "AF_DEMO")  # type: ignore[index]
+        self.assertEqual(  # type: ignore[index]
+            started["samples"][0].sample_name,
+            "SIMULATED_AF_EXAMPLE",
+        )
         self.assertIsInstance(started["samples"][0], QueueSample)  # type: ignore[index]
         self.assertEqual(started["options"].samples_between_holder, 8)  # type: ignore[index]
         self.assertEqual(started_measurements, [])
@@ -85,3 +88,45 @@ class TestAfWorkflowQueue(_AfWorkflowMixin, unittest.TestCase):
         mw._measurement = _PanelStub()  # type: ignore[assignment]
 
         self.assertFalse(mw._prepare_af_workflow(auto_start=True, queue_mode=True))
+
+    def test_simulated_af_example_is_refused_in_hardware_mode(self) -> None:
+        try:
+            from rapid_main.app import MainWindow
+        except ModuleNotFoundError as exc:  # pragma: no cover - optional-dependency CI environments
+            self.skipTest(f"Skipping AF workflow app test: {exc}")
+
+        mw = MainWindow()
+        mw.config.general.nocomm = False
+        mw.start_queue_run = Mock(return_value=True)
+        original_labels = list(mw._sequence_labels)
+        original_sample = mw._current_sample
+
+        with patch.object(QtWidgets.QMessageBox, "warning") as warning:
+            started = mw._prepare_af_workflow(auto_start=True, queue_mode=True)
+
+        self.assertFalse(started)
+        mw.start_queue_run.assert_not_called()
+        self.assertEqual(mw._sequence_labels, original_labels)
+        self.assertEqual(mw._current_sample, original_sample)
+        warning.assert_called_once()
+
+    def test_hardware_af_setup_uses_current_real_sample_without_autostart(self) -> None:
+        try:
+            from rapid_main.app import MainWindow
+        except ModuleNotFoundError as exc:  # pragma: no cover - optional-dependency CI environments
+            self.skipTest(f"Skipping AF workflow app test: {exc}")
+
+        mw = MainWindow()
+        mw.config.general.nocomm = False
+        mw._current_sample = "SPEC-REAL"
+        panel = Mock()
+        mw._measurement = panel  # type: ignore[assignment]
+
+        self.assertTrue(mw._prepare_af_workflow(auto_start=False))
+
+        panel.set_specimen_context.assert_called_once_with(
+            sample="SPEC-REAL",
+            depth="—",
+            treatment="AF workflow",
+        )
+        panel.start_measurement_for_sample.assert_not_called()
