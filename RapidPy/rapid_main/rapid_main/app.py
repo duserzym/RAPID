@@ -60,6 +60,11 @@ from .panels import (
 from .queue_compiler import QueueCommand, QueueOptions, QueueSample, compile_queue
 from .runtime_estimator import RuntimeEstimator
 from .vrm import VRM_CONTEXT_ENV, build_vrm_launch_context, write_vrm_launch_context
+from .glass_theme import (
+    GlassBackdrop,
+    apply_main_glass_theme,
+    install_glass_elevation,
+)
 
 
 # ── Extra stylesheet (appended to shared theme) ───────────────────────────────
@@ -264,13 +269,17 @@ _NAV_ITEMS: list[tuple[str, str, int]] = [
 ]
 
 
-_DEFAULT_WINDOW_SIZE = (460, 380)
-_DEFAULT_SIDEBAR_WIDTH = 64
-_MIN_SIDEBAR_WIDTH = 48
-_MAX_SIDEBAR_WIDTH = 72
-_SIDEBAR_RESTORE_RATIO = 0.08
-_MAIN_MAX_WIDTH_RATIO = 0.12
-_MAIN_MIN_WIDTH = 200
+_DEFAULT_WINDOW_SIZE = (1320, 820)
+_DEFAULT_SIDEBAR_WIDTH = 252
+_MIN_SIDEBAR_WIDTH = 240
+_MAX_SIDEBAR_WIDTH = 288
+_SIDEBAR_RESTORE_RATIO = 0.25
+_MAIN_MAX_WIDTH_RATIO = 0.94
+_MAIN_MAX_WIDTH = 1680
+_MAIN_MAX_HEIGHT_RATIO = 0.92
+_MAIN_MAX_HEIGHT = 1100
+_MAIN_MIN_WIDTH = 900
+_MAIN_MIN_HEIGHT = 640
 _MAIN_FIXED_MIN_WIDTH_THRESHOLD = 1024
 _QSETTINGS_ORG = "RAPID"
 _QSETTINGS_APP = "RapidPy-rapid_main"
@@ -293,28 +302,28 @@ def clamp_window_size_for_screen(available: QtCore.QRect, requested: tuple[int, 
 def _clamp_main_window_size(available: QtCore.QRect, requested: tuple[int, int]) -> tuple[int, int]:
     requested_width, requested_height = requested
     available_width = max(1, int(available.width()))
-    ratio_cap = max(1, int(available_width * _MAIN_MAX_WIDTH_RATIO))
-    tiny_profile = available_width < _MAIN_FIXED_MIN_WIDTH_THRESHOLD
-    minimum_width = (
-        max(_MIN_SIDEBAR_WIDTH, ratio_cap)
-        if tiny_profile
-        else _MAIN_MIN_WIDTH
+    available_height = max(1, int(available.height()))
+    width_cap = min(
+        available_width,
+        _MAIN_MAX_WIDTH,
+        max(1, int(available_width * _MAIN_MAX_WIDTH_RATIO)),
     )
-    width_cap = max(minimum_width, ratio_cap)
-    width_cap = min(width_cap, available_width, 960)
+    height_cap = min(
+        available_height,
+        _MAIN_MAX_HEIGHT,
+        max(1, int(available_height * _MAIN_MAX_HEIGHT_RATIO)),
+    )
+    tiny_profile = available_width < _MAIN_FIXED_MIN_WIDTH_THRESHOLD
+    if tiny_profile:
+        minimum_width = min(width_cap, max(MIN_WINDOW_WIDTH, int(available_width * 0.82)))
+    else:
+        minimum_width = min(width_cap, _MAIN_MIN_WIDTH)
+    minimum_height = min(height_cap, _MAIN_MIN_HEIGHT)
     requested_width = max(1, int(requested_width))
     requested_height = max(1, int(requested_height))
-
-    # Keep shared height behavior (including minimum insets) while letting
-    # smaller startup requests remain responsive for compact startup widths.
-    _, clamped_height = clamp_window_geometry(
-        available,
-        (requested_width, requested_height),
-    )
-    minimum_width = min(minimum_width, available_width)
     width = max(minimum_width, min(requested_width, width_cap))
-    width = min(width, available_width)
-    return width, clamped_height
+    height = max(minimum_height, min(requested_height, height_cap))
+    return min(width, available_width), min(height, available_height)
 
 
 def clamp_sidebar_target(
@@ -331,8 +340,6 @@ def clamp_sidebar_target(
 
 
 def _sidebar_button_label(icon: str, label: str) -> str:
-    if _DEFAULT_SIDEBAR_WIDTH <= 92:
-        return f"{icon}"
     return f"  {icon}  {label}"
 
 
@@ -366,6 +373,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
+        self.setObjectName("rapidMainWindow")
         self.setWindowTitle("RAPID v4 — Paleomagnetics Control System")
         self.resize(*_DEFAULT_WINDOW_SIZE)
         self._sidebar_min_width = _MIN_SIDEBAR_WIDTH
@@ -405,6 +413,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._build_header()
         self._build_central()
+        QtCore.QTimer.singleShot(0, lambda: install_glass_elevation(self))
         self._build_statusbar()
         self._build_menu()
         self._restore_layout_state()
@@ -499,7 +508,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ── Central widget: sidebar + stacked panels ──────────────────────────────
     def _build_central(self) -> None:
-        root = QtWidgets.QWidget()
+        root = GlassBackdrop()
         layout = QtWidgets.QHBoxLayout(root)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -539,7 +548,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtWidgets.QSizePolicy.Policy.Expanding,
                 QtWidgets.QSizePolicy.Policy.Fixed,
             )
-            btn.setMinimumHeight(28)
+            btn.setMinimumHeight(40)
             btn.setToolTip(label)
             sidebar_fit_width = max(sidebar_fit_width, btn.sizeHint().width() + 20)
             btn.clicked.connect(lambda _checked, i=idx: self._nav_select(i))
@@ -564,7 +573,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtWidgets.QSizePolicy.Policy.Expanding,
                 QtWidgets.QSizePolicy.Policy.Fixed,
             )
-            btn.setMinimumHeight(28)
+            btn.setMinimumHeight(40)
             btn.setToolTip(label)
             sidebar_fit_width = max(sidebar_fit_width, btn.sizeHint().width() + 16)
             btn.clicked.connect(slot)
@@ -664,11 +673,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def _clamp_window_to_work_area(self, available: QtCore.QRect | None = None) -> tuple[int, int]:
         work_area = available or self._resolved_work_area()
         fitted_w, fitted_h = _clamp_main_window_size(work_area, (self.width(), self.height()))
-        # Keep startup and restore geometry compact on every screen transition.
-        # Without this cap, stale saved geometries can briefly re-expand the
-        # top-level window after monitor changes.
-        self.setMaximumWidth(fitted_w)
-        self.setMaximumHeight(fitted_h)
+        maximum_w, maximum_h = _clamp_main_window_size(
+            work_area,
+            (_MAIN_MAX_WIDTH, _MAIN_MAX_HEIGHT),
+        )
+        # Bound the resizable workspace to the current monitor without locking
+        # it to the restored/current size.
+        self.setMaximumWidth(maximum_w)
+        self.setMaximumHeight(maximum_h)
         if self.isMaximized():
             self.showNormal()
 
@@ -2209,6 +2221,7 @@ def main() -> int:
     apply_window_bounds_guard(app)
     apply_liquid_glass_theme(app)
     app.setStyleSheet(app.styleSheet() + _EXTRA_CSS)
+    apply_main_glass_theme(app)
     assets_dir = Path(__file__).resolve().parent.parent / "assets"
     icon_candidates = (
         "rapid_main_icon.ico",
@@ -2233,7 +2246,11 @@ def main() -> int:
             screen.availableGeometry(),
             (window.width(), window.height()),
         )
-        window.setMaximumSize(compact_w, compact_h)
+        maximum_w, maximum_h = _clamp_main_window_size(
+            screen.availableGeometry(),
+            (_MAIN_MAX_WIDTH, _MAIN_MAX_HEIGHT),
+        )
+        window.setMaximumSize(maximum_w, maximum_h)
         window.resize(min(window.width(), compact_w), min(window.height(), compact_h))
         window._fit_window_to_current_screen()
         QtCore.QTimer.singleShot(75, window._fit_window_to_current_screen)
@@ -2250,8 +2267,12 @@ def main() -> int:
             active.availableGeometry(),
             (window.width(), window.height()),
         )
+        maximum_w, maximum_h = _clamp_main_window_size(
+            active.availableGeometry(),
+            (_MAIN_MAX_WIDTH, _MAIN_MAX_HEIGHT),
+        )
         window.setWindowState(QtCore.Qt.WindowState.WindowNoState)
-        window.setMaximumSize(compact_w, compact_h)
+        window.setMaximumSize(maximum_w, maximum_h)
         if window.isMaximized() or window.isFullScreen():
             window.showNormal()
         window.resize(min(window.width(), compact_w), min(window.height(), compact_h))

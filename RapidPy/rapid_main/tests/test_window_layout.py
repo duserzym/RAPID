@@ -14,6 +14,9 @@ from rapid_main.app import (
     _MAIN_FIXED_MIN_WIDTH_THRESHOLD,
     _MAX_SIDEBAR_WIDTH,
     _MIN_SIDEBAR_WIDTH,
+    _MAIN_MAX_HEIGHT,
+    _MAIN_MAX_HEIGHT_RATIO,
+    _MAIN_MAX_WIDTH,
     _MAIN_MAX_WIDTH_RATIO,
     _MAIN_MIN_WIDTH,
     _SIDEBAR_RESTORE_RATIO,
@@ -339,47 +342,27 @@ class TestWindowLayoutHelpers(unittest.TestCase):
             (960, 3456),
         )
 
-    def test_main_window_width_caps_keep_compact_ratio(self) -> None:
+    def test_main_window_preserves_requested_desktop_workspace(self) -> None:
         self.assertEqual(
             _clamp_main_window_size(
                 QtCore.QRect(0, 0, 1920, 1080),
                 (1280, 900),
             ),
-            (
-                min(
-                    clamp_window_size_for_screen(
-                        QtCore.QRect(0, 0, 1920, 1080),
-                        (1280, 900),
-                    )[0],
-                    max(_MAIN_MIN_WIDTH, int(1920 * _MAIN_MAX_WIDTH_RATIO)),
-                ),
-                864,
-            ),
+            (1280, 900),
         )
 
-    def test_main_window_width_caps_large_displays_without_full_width_startup(self) -> None:
+    def test_main_window_caps_large_displays_without_full_width_startup(self) -> None:
         high_resolution = QtCore.QRect(0, 0, 2560, 1440)
         compacted = _clamp_main_window_size(high_resolution, (5000, 4500))
-        shared = clamp_window_size_for_screen(high_resolution, (5000, 4500))
-        self.assertEqual(
-            compacted,
-            (
-                min(
-                    shared[0],
-                    max(_MAIN_MIN_WIDTH, int(high_resolution.width() * _MAIN_MAX_WIDTH_RATIO)),
-                ),
-                shared[1],
-            ),
-        )
-        self.assertEqual(shared, (896, 1152))
+        self.assertEqual(compacted, (_MAIN_MAX_WIDTH, _MAIN_MAX_HEIGHT))
         self.assertLess(compacted[0], high_resolution.width())
-        self.assertLessEqual(compacted[0], 960)
+        self.assertLess(compacted[1], high_resolution.height())
 
     def test_main_window_cap_never_exceeds_minimal_work_area(self) -> None:
         compact = _clamp_main_window_size(QtCore.QRect(0, 0, 160, 120), (5000, 3000))
         self.assertLessEqual(compact[0], 160)
-        self.assertGreaterEqual(compact[0], _MIN_SIDEBAR_WIDTH)
-        self.assertEqual(compact[1], clamp_window_size_for_screen(QtCore.QRect(0, 0, 160, 120), (5000, 3000))[1])
+        self.assertGreater(compact[0], 0)
+        self.assertLessEqual(compact[1], 120)
 
     def test_main_window_tiny_profiles_follow_compact_ratio_not_fixed_floor(self) -> None:
         for available in (
@@ -536,7 +519,7 @@ class TestWindowLayoutHelpers(unittest.TestCase):
             compact[0],
             max(_MAIN_MIN_WIDTH, int(tiny_offset_screen.width() * _MAIN_MAX_WIDTH_RATIO)),
         )
-        self.assertEqual(compact[1], clamp_window_size_for_screen(tiny_offset_screen, (3000, 2200))[1])
+        self.assertEqual(compact[1], int(tiny_offset_screen.height() * _MAIN_MAX_HEIGHT_RATIO))
 
     def test_sidebar_width_respects_compact_ratio_caps(self) -> None:
         self.assertEqual(
@@ -561,7 +544,7 @@ class TestWindowLayoutHelpers(unittest.TestCase):
         )
         self.assertEqual(
             clamp_sidebar_target(
-                128,
+                500,
                 window_width=2000,
                 minimum=_MIN_SIDEBAR_WIDTH,
                 maximum=_MAX_SIDEBAR_WIDTH,
@@ -581,21 +564,25 @@ class TestWindowLayoutHelpers(unittest.TestCase):
         ]
         for available, requested in profile_data:
             with self.subTest(available=available.size(), requested=requested):
-                shared = clamp_window_size_for_screen(available, requested)
                 compact = _clamp_main_window_size(available, requested)
                 max_main_width = min(
                     available.width(),
-                    960,
-                    max(_MAIN_MIN_WIDTH, int(available.width() * _MAIN_MAX_WIDTH_RATIO)),
+                    _MAIN_MAX_WIDTH,
+                    int(available.width() * _MAIN_MAX_WIDTH_RATIO),
                 )
                 self.assertLessEqual(compact[0], max_main_width)
-                self.assertLessEqual(compact[0], max_main_width)
                 if available.width() < _MAIN_FIXED_MIN_WIDTH_THRESHOLD:
-                    self.assertGreaterEqual(compact[0], _MIN_SIDEBAR_WIDTH)
+                    self.assertGreater(compact[0], 0)
                 else:
                     self.assertGreaterEqual(compact[0], min(_MAIN_MIN_WIDTH, available.width()))
-                self.assertLessEqual(compact[0], max(shared[0], _MAIN_MIN_WIDTH))
-                self.assertLessEqual(compact[1], available.height())
+                self.assertLessEqual(
+                    compact[1],
+                    min(
+                        available.height(),
+                        _MAIN_MAX_HEIGHT,
+                        int(available.height() * _MAIN_MAX_HEIGHT_RATIO),
+                    ),
+                )
 
     def test_clamp_window_handles_offscreen_and_scaled_profiles(self) -> None:
         for available in (
@@ -622,18 +609,21 @@ class TestWindowLayoutHelpers(unittest.TestCase):
                     compact[0],
                     min(
                         available.width(),
-                        960,
-                        max(_MAIN_MIN_WIDTH, int(available.width() * _MAIN_MAX_WIDTH_RATIO)),
+                        _MAIN_MAX_WIDTH,
+                        int(available.width() * _MAIN_MAX_WIDTH_RATIO),
                     ),
                 )
                 if available.width() < _MAIN_FIXED_MIN_WIDTH_THRESHOLD:
                     self.assertGreaterEqual(compact[0], _MIN_SIDEBAR_WIDTH)
                 else:
                     self.assertGreaterEqual(compact[0], min(_MAIN_MIN_WIDTH, available.width()))
-                self.assertLessEqual(compact[1], max(240, int(available.height() * 0.80)))
+                self.assertLessEqual(
+                    compact[1],
+                    min(_MAIN_MAX_HEIGHT, int(available.height() * _MAIN_MAX_HEIGHT_RATIO)),
+                )
 
-                # Ensure requested values are never used when they exceed compact-safe bounds.
-                self.assertLess(compact[0], 1000)
+                # A requested desktop size remains valid when it fits the work area.
+                self.assertLessEqual(compact[0], 1000)
                 self.assertLessEqual(compact[1], 1000)
 
     def test_sidebar_ratio_caps_track_profile(self) -> None:
