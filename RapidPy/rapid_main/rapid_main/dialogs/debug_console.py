@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import html
 from collections.abc import Callable, Sequence
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -20,7 +21,9 @@ class DebugConsoleDialog(QtWidgets.QDialog):
     ) -> None:
         super().__init__(parent)
         self._snapshot_provider = snapshot_provider
+        self.setObjectName("glassDialog")
         self.setWindowTitle("Debug Console")
+        self.setAccessibleName("RAPID diagnostic debug console")
         self.resize(740, 460)
         self.setWindowFlags(
             self.windowFlags()
@@ -88,12 +91,14 @@ class DebugConsoleDialog(QtWidgets.QDialog):
             "ERROR": "#b91c1c",
         }
         color = colors.get(level.upper(), "#2f2827")
-        html = (
+        safe_text = html.escape(str(text))
+        safe_level = html.escape(level.upper())
+        line_html = (
             f'<span style="color:#9a8885">{ts}</span> '
-            f'<b style="color:{color}">[{level.upper():7s}]</b> '
-            f'<span style="color:#2f2827">{text}</span>'
+            f'<b style="color:{color}">[{safe_level:7s}]</b> '
+            f'<span style="color:#2f2827">{safe_text}</span>'
         )
-        self._console.appendHtml(html)
+        self._console.append(line_html)
 
     # ── UI ─────────────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
@@ -101,34 +106,51 @@ class DebugConsoleDialog(QtWidgets.QDialog):
         vl.setContentsMargins(10, 10, 10, 10)
         vl.setSpacing(6)
 
+        title = QtWidgets.QLabel("Diagnostic Debug Console")
+        title.setObjectName("dialogTitle")
+        title.setAccessibleName("Diagnostic debug console")
+        vl.addWidget(title)
+
+        subtitle = QtWidgets.QLabel(
+            "Review timestamped application and hardware-status messages. "
+            "Log severity is always written in words."
+        )
+        subtitle.setObjectName("dialogSubtitle")
+        subtitle.setWordWrap(True)
+        vl.addWidget(subtitle)
+
         # Toolbar row
         tb = QtWidgets.QHBoxLayout()
         tb.setSpacing(6)
 
         level_lbl = QtWidgets.QLabel("Show:")
-        level_lbl.setStyleSheet("color: #9a8885; font-size: 11px;")
+        level_lbl.setObjectName("dialogSubtitle")
         tb.addWidget(level_lbl)
 
         self._level_checks: dict[str, QtWidgets.QCheckBox] = {}
         for level in ("DEBUG", "INFO", "WARNING", "ERROR"):
             chk = QtWidgets.QCheckBox(level.capitalize())
             chk.setChecked(True)
+            chk.setAccessibleName(f"Show {level.lower()} messages")
             self._level_checks[level] = chk
             tb.addWidget(chk)
 
         tb.addStretch()
 
-        clear_btn = QtWidgets.QPushButton("Clear")
-        clear_btn.clicked.connect(self._console.clear if hasattr(self, "_console") else lambda: None)
-        tb.addWidget(clear_btn)
+        self._clear_btn = QtWidgets.QPushButton("Clear")
+        self._clear_btn.setAccessibleName("Clear debug console")
+        tb.addWidget(self._clear_btn)
 
-        copy_btn = QtWidgets.QPushButton("Copy All")
-        copy_btn.clicked.connect(self._copy_all)
-        tb.addWidget(copy_btn)
+        self._copy_btn = QtWidgets.QPushButton("Copy All")
+        self._copy_btn.setAccessibleName("Copy all debug console messages")
+        self._copy_btn.clicked.connect(self._copy_all)
+        tb.addWidget(self._copy_btn)
 
-        refresh_btn = QtWidgets.QPushButton("Refresh Snapshot")
-        refresh_btn.clicked.connect(self._refresh_snapshot)
-        tb.addWidget(refresh_btn)
+        self._refresh_btn = QtWidgets.QPushButton("Refresh Snapshot")
+        self._refresh_btn.setObjectName("accent")
+        self._refresh_btn.setAccessibleName("Refresh hardware diagnostic snapshot")
+        self._refresh_btn.clicked.connect(self._refresh_snapshot)
+        tb.addWidget(self._refresh_btn)
 
         vl.addLayout(tb)
 
@@ -137,18 +159,22 @@ class DebugConsoleDialog(QtWidgets.QDialog):
         self._console.setObjectName("console")
         self._console.setReadOnly(True)
         self._console.setFont(_mono_font())
+        self._console.setAccessibleName("Timestamped diagnostic messages")
+        self._console.setAccessibleDescription(
+            "Read-only application and hardware diagnostic log with written severity labels."
+        )
         vl.addWidget(self._console, 1)
 
         # Wire clear after console is created
-        clear_btn.clicked.disconnect()
-        clear_btn.clicked.connect(self._console.clear)
+        self._clear_btn.clicked.connect(self._console.clear)
 
         # Buttons
-        close_btn = QtWidgets.QPushButton("Close")
-        close_btn.clicked.connect(self.close)
+        self._close_btn = QtWidgets.QPushButton("Close")
+        self._close_btn.setAccessibleName("Close debug console")
+        self._close_btn.clicked.connect(self.close)
         btn_row = QtWidgets.QHBoxLayout()
         btn_row.addStretch()
-        btn_row.addWidget(close_btn)
+        btn_row.addWidget(self._close_btn)
         vl.addLayout(btn_row)
 
         # Seed with a startup message

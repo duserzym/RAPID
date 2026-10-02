@@ -13,6 +13,7 @@ from rapid_main.diagnostic_services import (
     build_backend_or_unavailable,
     build_dcmotor_backend,
 )
+from rapid_main.glass_theme import set_semantic_status
 from rapidpy_common.hardware import MotorTelemetry
 from rapidpy_common.ui import clamp_window_geometry
 
@@ -167,7 +168,9 @@ class DCMotorDialog(QtWidgets.QDialog):
         baud: int = 9600,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("glassDialog")
         self.setWindowTitle("DC Motor Control")
+        self.setAccessibleName("QuickSilver DC motor diagnostics and control")
         self.setMinimumWidth(self._MIN_WINDOW_SIZE[0])
         self.setMinimumHeight(self._MIN_WINDOW_SIZE[1])
         self.resize(*self._MIN_WINDOW_SIZE)
@@ -181,6 +184,10 @@ class DCMotorDialog(QtWidgets.QDialog):
             port=port,
             baud=int(baud),
             nocomm=False,
+        )
+        availability_check = getattr(self._backend, "is_available", None)
+        self._backend_available = (
+            bool(availability_check()) if callable(availability_check) else True
         )
         self._axes = self._discover_axes()
         self._connected = False
@@ -244,21 +251,23 @@ class DCMotorDialog(QtWidgets.QDialog):
         header = QtWidgets.QHBoxLayout()
         heading = QtWidgets.QVBoxLayout()
         title = QtWidgets.QLabel("Quicksilver Motor Control")
-        title.setObjectName("title")
+        title.setObjectName("dialogTitle")
+        title.setAccessibleName("QuickSilver motor control")
         subtitle = QtWidgets.QLabel(
             "Live command, encoder, velocity, and torque feedback for any selected QuickSilver axis."
         )
-        subtitle.setObjectName("subtitle")
+        subtitle.setObjectName("dialogSubtitle")
         subtitle.setWordWrap(True)
         heading.addWidget(title)
         heading.addWidget(subtitle)
         header.addLayout(heading)
         header.addStretch(1)
 
-        self._status = QtWidgets.QLabel("Disconnected")
-        self._status.setObjectName("valuePill")
+        self._status = QtWidgets.QLabel()
+        self._status.setWordWrap(True)
         self._axis_summary = QtWidgets.QLabel("Monitoring axis: --")
         self._axis_summary.setObjectName("valuePill")
+        self._axis_summary.setAccessibleName("Monitored motor axis")
         header.addWidget(self._status)
         header.addWidget(self._axis_summary)
         root.addLayout(header)
@@ -287,6 +296,48 @@ class DCMotorDialog(QtWidgets.QDialog):
         self.pickup_btn.clicked.connect(self._sample_pickup)
         self.dropoff_btn.clicked.connect(self._sample_dropoff)
         self.clear_plot_btn.clicked.connect(self._clear_traces)
+        self._configure_accessibility()
+
+    def _configure_accessibility(self) -> None:
+        controls = (
+            (self.port_edit, "Motor controller serial port", "Serial port used only when Connect is pressed."),
+            (self.baud_combo, "Motor controller baud rate", "Baud rate used only when Connect is pressed."),
+            (self.connect_btn, "Connect motor controller", "Opens the configured motor-controller connection; it does not move an axis."),
+            (self.disconnect_btn, "Disconnect motor controller", "Stops live telemetry and closes the motor-controller connection."),
+            (self.axis_combo, "Active motor axis", "Selects the axis monitored and used by Move Axis."),
+            (self.pos_spin, "Target motor position", "Target encoder position for the selected axis."),
+            (self.speed_spin, "Motor velocity", "Requested controller velocity for Move Axis."),
+            (self.move_btn, "Move selected motor axis", "Moves physical hardware when a live backend is connected."),
+            (self.spin_rps, "Turning motor rotations per second", "Requested turning speed."),
+            (self.spin_btn, "Spin turning motor", "Moves physical turning hardware for the configured duration when connected."),
+            (self.hole_spin, "Target sample changer hole", "Target changer position from hole 1 through 101."),
+            (self.goto_hole_btn, "Move changer to target hole", "Moves physical changer hardware when connected."),
+            (self.read_hole_btn, "Read current changer hole", "Reads changer encoder position without commanding motion."),
+            (self.home_top_btn, "Home vertical axis to top", "Homes physical vertical hardware when connected."),
+            (self.home_xy_btn, "Home XY axes to center", "Homes physical XY hardware when connected."),
+            (self.corner_btn, "Move XY axes to corner", "Moves physical XY hardware when connected."),
+            (self.pickup_btn, "Run sample pickup", "Runs the connected vertical sample-pickup motion."),
+            (self.dropoff_btn, "Run sample dropoff", "Runs the connected sample-dropoff motion."),
+            (self.pause_plot, "Pause motor telemetry plots", "Pauses plot rendering without stopping telemetry acquisition."),
+            (self.history_combo, "Motor telemetry history duration", "Selects the visible trace duration."),
+            (self.clear_plot_btn, "Clear motor telemetry", "Clears current traces and live readouts."),
+            (self._console, "Motor connection and motion event log", "Read-only diagnostic events; not proof of hardware acceptance by itself."),
+        )
+        for widget, name, description in controls:
+            widget.setAccessibleName(name)
+            widget.setAccessibleDescription(description)
+
+        readouts = {
+            self.target_value: "Motor input command",
+            self.actual_value: "Motor output feedback",
+            self.io_delta_value: "Motor input-output delta",
+            self.error_value: "Motor position error",
+            self.velocity_value: "Motor velocity filter one",
+            self.velocity2_value: "Motor velocity filter two",
+            self.torque_value: "Motor torque feedback",
+        }
+        for widget, name in readouts.items():
+            widget.setAccessibleName(name)
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:
         super().showEvent(event)
@@ -479,8 +530,7 @@ class DCMotorDialog(QtWidgets.QDialog):
         r.setSpacing(10)
 
         legend = QtWidgets.QLabel("Live Controller Feedback")
-        legend.setObjectName("title")
-        legend.setStyleSheet("font-size:20px;")
+        legend.setObjectName("dialogTitle")
         r.addWidget(legend)
 
         trace_controls = QtWidgets.QHBoxLayout()
@@ -588,7 +638,7 @@ class DCMotorDialog(QtWidgets.QDialog):
 
         graph = pg.GraphicsLayoutWidget()
         graph.setBackground("#fffdf8")
-        graph.setMinimumHeight(260)
+        graph.setMinimumHeight(220)
 
         position_plot = graph.addPlot(row=0, col=0, title="Input command vs output feedback")
         error_plot = graph.addPlot(row=1, col=0, title="Position error")
@@ -733,8 +783,26 @@ class DCMotorDialog(QtWidgets.QDialog):
             status = f"{status} (simulated)"
         return status
 
-    def _set_status(self, text: str) -> None:
-        self._status.setText(self._annotate_status(text))
+    def _set_status(self, text: str, level: str | None = None) -> None:
+        annotated = self._annotate_status(text)
+        normalized = annotated.lower()
+        if level is None:
+            if not self._backend_available:
+                level = "unavailable"
+            elif self._backend.simulated:
+                level = "simulated"
+            elif "error" in normalized or "failed" in normalized:
+                level = "error"
+            elif self._connected and self._backend.is_connected():
+                level = "ready"
+            else:
+                level = "neutral"
+        set_semantic_status(
+            self._status,
+            annotated,
+            level,
+            accessible_name="DC motor connection status",
+        )
 
     def _selected_axis(self) -> str:
         current = self.axis_combo.currentText().strip()
@@ -780,6 +848,7 @@ class DCMotorDialog(QtWidgets.QDialog):
             self._connected = False
             QtWidgets.QMessageBox.critical(self, "Connection Error", str(exc))
             self._refresh_connection_state()
+            self._set_status(f"Connection failed: {exc}", "error")
             self._refresh_axis_summary()
             return
         self._refresh_connection_state()
@@ -793,6 +862,7 @@ class DCMotorDialog(QtWidgets.QDialog):
             self._telemetry_thread.set_axis("")
             self._clear_traces()
             self._log("Disconnected")
+            self._refresh_connection_state()
             self._refresh_axis_summary()
 
     def _log(self, text: str) -> None:
@@ -806,8 +876,10 @@ class DCMotorDialog(QtWidgets.QDialog):
         return True
 
     def _refresh_connection_state(self) -> None:
-        self.connect_btn.setEnabled(not self._connected)
+        self.connect_btn.setEnabled(self._backend_available and not self._connected)
         self.disconnect_btn.setEnabled(self._connected)
+        self.port_edit.setEnabled(self._backend_available and not self._connected)
+        self.baud_combo.setEnabled(self._backend_available and not self._connected)
         self.axis_combo.setEnabled(self._connected)
         for widget in (
             self.move_btn,
@@ -821,7 +893,9 @@ class DCMotorDialog(QtWidgets.QDialog):
             self.dropoff_btn,
         ):
             widget.setEnabled(self._connected)
-        if self._connected and self._backend.is_connected():
+        if not self._backend_available:
+            self._set_status(self._backend.status(), "unavailable")
+        elif self._connected and self._backend.is_connected():
             self._set_status(self._backend.status())
         else:
             self._set_status("Disconnected")
