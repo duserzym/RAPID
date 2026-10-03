@@ -1440,7 +1440,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             with store.operation_lease():
                 pending = store.pending()
                 if pending:
-                    if pending["family"] not in {"af_diagnostic", "motion_diagnostic"}:
+                    if pending["family"] not in {"af_diagnostic", "motion_diagnostic", "station_diagnostic"}:
                         pending = store.pending(self._safety_profile())
                     self._recover_durable_treatment(pending)
         records = getattr(self,"_pulse_treatment_records",())
@@ -1516,6 +1516,8 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             raise HardwareError("An unfinished ADwin helper diagnostic requires recovery in its original helper using its original board settings.")
         if pending["family"] == "motion_diagnostic":
             raise HardwareError("An unfinished motor helper diagnostic requires verified stop recovery in its original helper using its original port and axis settings.")
+        if pending["family"] == "station_diagnostic":
+            raise HardwareError("A held vacuum/lift diagnostic requires recovery in Up/Down Control with its original participating ports before main-app motion or treatment.")
         sample_id, run_id = pending["sample_id"], pending["run_id"]
         token = pending["token"]
         if pending["family"] == "pulse":

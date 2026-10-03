@@ -1805,8 +1805,13 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
             self._communication_logger.info(detail or payload)
 
     def _connect(self) -> None:
-        controller = VacuumController(trace=self._trace)
-        controller.connect(self._cfg.port, baudrate=int(self._cfg.baud or 9600))
+        from rapidpy_common.hardware_safety import HardwareSafetyStore, default_safety_path
+        store = HardwareSafetyStore(default_safety_path())
+        with store.operation_lease():
+            if store.pending() is not None:
+                raise HardwareUnavailableError('Recover the original unfinished hardware operation before connecting vacuum controls.')
+            controller = VacuumController(trace=self._trace)
+            controller.connect(self._cfg.port, baudrate=int(self._cfg.baud or 9600))
         if not controller.is_connected:
             raise HardwareUnavailableError(
                 f"Vacuum controller did not connect on {self._cfg.port}:{self._cfg.baud}."
@@ -1830,12 +1835,17 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
         return self._status
 
     def set_pump(self, on: bool) -> None:
-        controller = self._require_controller()
-        controller.set_enabled(on)
-        if bool(controller.is_enabled) != bool(on):
-            raise HardwareError(
-                f"Vacuum controller did not confirm pump {'on' if on else 'off'} state."
-            )
+        from rapidpy_common.hardware_safety import HardwareSafetyStore, default_safety_path
+        store = HardwareSafetyStore(default_safety_path())
+        with store.operation_lease():
+            if store.pending() is not None:
+                raise HardwareUnavailableError('Recover the original unfinished hardware operation before changing vacuum outputs.')
+            controller = self._require_controller()
+            controller.set_enabled(on)
+            if bool(controller.is_enabled) != bool(on):
+                raise HardwareError(
+                    f"Vacuum controller did not confirm pump {'on' if on else 'off'} state."
+                )
 
     def is_pump_on(self) -> bool:
         return bool(self._require_controller().is_enabled)

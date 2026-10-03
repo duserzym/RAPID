@@ -946,3 +946,33 @@ lift safety regressions. Six-panel/six-helper source smoke passes. The actual li
 window was constructed with instrument discovery disabled, and its compact
 connections, axis profile and motion/recovery views were inspected at 736x720.
 No physical instruments were actuated. The portable pilot still needs rebuilding.
+
+### Shared vacuum hold and lift diagnostic lifetime — 3 October 2026
+
+Up/Down Control now retains one station_diagnostic lease while vacuum is commanded
+on, supporting vacuum-only use and later lift participation. Original resource
+bindings are persisted before first I/O and cannot be rebound. Lift moves and
+scans publish checked checkpoints without releasing a held specimen. A failed
+lift stop withholds vacuum release; valve-off and pump-off acknowledgements are
+otherwise attempted independently. Failed release remains owned and pending.
+Restart recovery matches both original ports/profiles and never enables outputs
+or replays motion. Close retains the window/connections if release is unverified.
+
+Station evidence preserves bindings and raw acknowledgements, distinguishes
+intentional held checkpoints, and names the command-response evidence basis.
+Vacuum pressure telemetry remains unavailable; commanded state does not prove
+physical pressure or grip. Connecting the helper no longer resets outputs, and
+saved checkbox state never proves outputs or re-enables them on startup. Native
+main-app vacuum connection/output paths refuse work while this station is held
+or pending recovery. See docs/vacuum-diagnostic-safety.md.
+
+The full-system goal remains active. Other embedded output lifetimes, other motor
+helpers, durable main-app acquisition and non-treatment motion recovery,
+calibration/probe tooling, portable rebuilding and physical/scientific station
+acceptance remain required. No physical instruments were actuated by these checks.
+
+Verification: 814 isolated main-app tests pass in 100.777 seconds, including 16
+held-vacuum regressions. Source smoke passes six panels and six helper imports.
+The compact Connections & Status view was inspected at 736x720 with the held
+vacuum/lift recovery control visible. Tests use injected native interfaces;
+physical instruments were not actuated. The portable pilot requires rebuilding.

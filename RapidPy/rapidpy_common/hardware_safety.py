@@ -85,7 +85,7 @@ class HardwareSafetyStore:
             if envelope["sha256"] != hashlib.sha256(_canonical(state)).hexdigest():
                 raise ValueError("checksum mismatch")
             if (state["schema"] != self.schema or state["status"] not in {"pending", "verified"}
-                    or state["family"] not in {"pulse", "rrm", "af", "arm", "af_diagnostic", "motion_diagnostic"}
+                    or state["family"] not in {"pulse", "rrm", "af", "arm", "af_diagnostic", "motion_diagnostic", "station_diagnostic"}
                     or not isinstance(state["token"], str) or len(state["token"]) != 32
                     or not isinstance(state["profile"], dict) or not isinstance(state["plan"], dict)):
                 raise ValueError("unsupported or incomplete state")
@@ -126,7 +126,7 @@ class HardwareSafetyStore:
                 temporary.unlink()
 
     def begin(self, family, plan, profile, *, sample_id="", run_id=""):
-        if family not in {"pulse", "rrm", "af", "arm", "af_diagnostic", "motion_diagnostic"}:
+        if family not in {"pulse", "rrm", "af", "arm", "af_diagnostic", "motion_diagnostic", "station_diagnostic"}:
             raise HardwareSafetyError("Unsupported treatment safety family.")
         # Round-trip makes a detached, strict JSON snapshot before file I/O.
         plan, profile = json.loads(_canonical(plan)), json.loads(_canonical(profile))
@@ -154,6 +154,28 @@ class HardwareSafetyStore:
                 state["status"] = "verified"
             state["updated_at"] = datetime.now(timezone.utc).isoformat()
             self._write(state)
+
+    def join_diagnostic_resource(self, token, name, binding):
+        """Persist a newly participating station resource before its first I/O.
+
+        Existing bindings can never be replaced, including after a crash. This
+        is limited to the held-vacuum/lift station lifecycle, not treatments.
+        """
+        if name not in {'lift', 'vacuum'}:
+            raise HardwareSafetyError('Unsupported station diagnostic resource.')
+        binding = json.loads(_canonical(binding))
+        with self._locked():
+            state = self.read()
+            if not state or state['status'] != 'pending' or state['token'] != token or state['family'] != 'station_diagnostic':
+                raise HardwareSafetyError('Stale station diagnostic resource token.')
+            resources = state['profile'].get('resources')
+            if not isinstance(resources, dict):
+                raise HardwareSafetyError('Station diagnostic resource profile is invalid.')
+            if name in resources and _canonical(resources[name]) != _canonical(binding):
+                raise HardwareSafetyError('The original station resource binding cannot be changed while outputs are held.')
+            resources[name] = binding
+            self._write(state)
+            return json.loads(_canonical(state['profile']))
 
     def pending(self, profile=None):
         state = self.read()

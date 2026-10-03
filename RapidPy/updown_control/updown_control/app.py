@@ -36,6 +36,7 @@ from rapidpy_common.ui import apply_card_shadow, apply_liquid_glass_theme, apply
 from rapidpy_common.resources import asset_directory  # noqa: E402
 from rapidpy_common.hardware_safety import HardwareSafetyError, HardwareSafetyStore, default_safety_path
 from rapidpy_common.motor_diagnostic_safety import motor_diagnostic_operation, recover_motor_diagnostic
+from rapidpy_common.vacuum_diagnostic_safety import VacuumHoldSession, vacuum_binding
 
 
 APP_SETTINGS_PATH = Path.home() / ".rapidpy_updown_settings.json"
@@ -1123,6 +1124,13 @@ class VacuumController:
         self._motor_powered = False
         self._trace = trace
         self._last_command = ""
+        self._port = ''
+        self._baud = 9600
+        self._acknowledgements = []
+
+    @property
+    def acknowledgements(self):
+        return tuple(dict(item) for item in self._acknowledgements)
 
     def _emit_trace(self, direction: str, payload: str = "", detail: str = "") -> None:
         if self._trace is None:
@@ -1143,6 +1151,7 @@ class VacuumController:
 
     def connect(self, port: str, baudrate: int = 9600) -> None:
         self.disconnect()
+        self._port, self._baud = port, baudrate
         self._serial = serial.Serial(
             port=port,
             baudrate=baudrate,
@@ -1221,6 +1230,7 @@ class VacuumController:
         self._emit_trace(
             "RX", response, f"vacuum response to {self._last_command or 'unknown'}"
         )
+        self._acknowledgements.append({'command': self._last_command, 'reply': response})
         return response
 
     def reset(self) -> None:
@@ -1258,8 +1268,14 @@ class VacuumController:
             self.set_motor_power(True)
             self.set_valve_connect(True)
         else:
-            self.set_valve_connect(False)
-            self.set_motor_power(False)
+            errors = []
+            for action in (self.set_valve_connect, self.set_motor_power):
+                try:
+                    action(False)
+                except Exception as exc:
+                    errors.append(str(exc))
+            if errors:
+                raise VacuumCommunicationError('Vacuum release acknowledgements failed: ' + '; '.join(errors))
 
 
 def _guarded_lift_motion(method):
@@ -1284,6 +1300,7 @@ class UpDownController:
         self._observations = None
         self._abort_allowed = False
         self._port = ''
+        self.held_station = None
 
     @property
     def operation_active(self):
@@ -1311,7 +1328,10 @@ class UpDownController:
             yield self._observations
             return
         try:
-            with motor_diagnostic_operation(self.motor, self.profile.updown_axis, operation, self.safety_profile(), store=self._safety_store) as observations:
+            operation_scope = (self.held_station.motion_operation(self, operation)
+                               if self.held_station is not None and self.held_station.active
+                               else motor_diagnostic_operation(self.motor, self.profile.updown_axis, operation, self.safety_profile(), store=self._safety_store))
+            with operation_scope as observations:
                 self._observations = observations
                 self._abort_allowed = True
                 try:
@@ -1330,11 +1350,14 @@ class UpDownController:
                 raise HardwareSafetyError('Wait for the active scan to settle before recovery.')
             if not self.is_connected:
                 raise HardwareSafetyError('Connect the original lift controller before recovery.')
+            if self.held_station is not None and self.held_station.active:
+                self.held_station.verify_lift()
+                return self.held_station._publish()
             return recover_motor_diagnostic(self.motor, self.profile.updown_axis, self.safety_profile(), store=self._safety_store)
 
     def apply_settings_profile(self, profile: SettingsProfile) -> None:
         with self._binding_lock:
-            if self.operation_active:
+            if self.operation_active or (self.held_station is not None and self.held_station.active):
                 raise HardwareSafetyError('Wait for the active lift diagnostic before changing settings.')
             self.profile = profile
             self.motor.config = profile.motion_defaults
@@ -1347,18 +1370,27 @@ class UpDownController:
         with self._binding_lock:
             if self.operation_active:
                 raise HardwareSafetyError('Wait for the active lift diagnostic before changing connections.')
+            if self.held_station is not None and self.held_station.active:
+                self.held_station.bind_lift(self, port)
+                self.motor.connect(port, baudrate=57600)
+                self._port = port
+                return
             with self._safety_store.operation_lease():
                 pending = self._safety_store.pending()
                 if pending:
-                    if pending['family'] != 'motion_diagnostic':
+                    if pending['family'] == 'station_diagnostic':
+                        if pending['profile'].get('resources', {}).get('lift') != self.safety_profile(port):
+                            raise HardwareSafetyError('Restore the original participating lift before vacuum recovery.')
+                    elif pending['family'] != 'motion_diagnostic':
                         raise HardwareSafetyError('Recover the unfinished operation in its original app before connecting the lift helper.')
-                    self._safety_store.pending(self.safety_profile(port))
+                    else:
+                        self._safety_store.pending(self.safety_profile(port))
                 self.motor.connect(port, baudrate=57600)
                 self._port = port
 
     def disconnect(self) -> None:
         with self._binding_lock:
-            if self.operation_active:
+            if self.operation_active or (self.held_station is not None and self.held_station.active):
                 raise HardwareSafetyError('Wait for verified scan cleanup before disconnecting the lift.')
             self.motor.disconnect()
 
@@ -1593,6 +1625,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.controller = UpDownController(self.settings_profile)
         self.squid = SquidMomentReader()
         self.vacuum = VacuumController()
+        self._vacuum_session = None
+        self._vacuum_command_known = False
         self._calibration = read_calibration_from_settings(self.settings_profile.path)
         self._baseline_raw: tuple[float, float, float] | None = None
         self._scan_worker: ScanWorker | None = None
@@ -1898,6 +1932,9 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(self.vacuum_connect_btn, 2, 2)
         layout.addWidget(self.vacuum_disconnect_btn, 2, 3)
         layout.addWidget(self.vacuum_toggle_btn, 2, 4)
+        self.recover_vacuum_btn = QtWidgets.QPushButton('Recover Held Vacuum / Lift Outputs')
+        self.recover_vacuum_btn.clicked.connect(self._recover_vacuum_station)
+        layout.addWidget(self.recover_vacuum_btn, 4, 0, 1, 5)
         self.connections_status = QtWidgets.QLabel()
         self.connections_status.setObjectName("tableHint")
         self.connections_status.setWordWrap(True)
@@ -2559,54 +2596,105 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._update_connections_status()
 
+    def _station_outputs_held(self):
+        session = getattr(self, '_vacuum_session', None)
+        return session is not None and session.active
+
+    def _release_vacuum_station(self):
+        if self._station_outputs_held():
+            return self._vacuum_session.close()
+        self._vacuum_session = VacuumHoldSession(self.vacuum, store=self.controller._safety_store)
+        self.controller.held_station = self._vacuum_session
+        pending = self.controller._safety_store.pending()
+        if pending is not None and pending['family'] == 'station_diagnostic':
+            return self._vacuum_session.recover(self.controller)
+        return self._vacuum_session.start(self.controller, enabled=False)
+
+    def _recover_vacuum_station(self):
+        self._toggle_vacuum(False)
+
     def _connect_vacuum(self) -> None:
+        if self._scan_worker is not None:
+            self._append('Release held outputs and wait for scan cleanup before changing vacuum connections.')
+            return
         port = self.vacuum_port_combo.currentText().strip()
         if not port:
-            QtWidgets.QMessageBox.warning(self, "Missing Port", "Select the vacuum COM port first.")
+            self._append('Select the original vacuum COM port first.')
             return
         try:
-            self.vacuum.connect(port)
-            self.vacuum.reset()
+            store = self.controller._safety_store
+            if self._station_outputs_held():
+                if self._vacuum_session.profile['resources']['vacuum'] != vacuum_binding(self.vacuum, port, 9600):
+                    raise HardwareSafetyError('Reconnect only the original held vacuum port.')
+                self._vacuum_session.verify_lift()
+                self.vacuum.connect(port)
+                self._vacuum_session.vacuum_unverified = True
+                self._vacuum_session.faulted = True
+            else:
+                with store.operation_lease():
+                    pending = store.pending()
+                    if pending and (pending['family'] != 'station_diagnostic' or
+                            pending['profile'].get('resources', {}).get('vacuum') != vacuum_binding(self.vacuum, port, 9600)):
+                        raise HardwareSafetyError('Recover the original unfinished operation before connecting this vacuum controller.')
+                    self.vacuum.connect(port)
         except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, "Vacuum Connection Error", str(exc))
+            self._append('Vacuum connection failed: ' + str(exc))
             return
         self._settings.vacuum_port = port
-        self._append(f"Connected vacuum on {port}")
+        self._vacuum_command_known = False
+        self._append(f'Vacuum connected on {port}; no reset or output command was issued. Pressure telemetry is unavailable.')
         self._update_vacuum_status()
 
     def _disconnect_vacuum(self) -> None:
-        if self.vacuum.is_connected:
-            try:
-                if self.vacuum_toggle_btn.isChecked():
-                    self.vacuum.set_enabled(False)
-            except Exception:
-                pass
-        self.vacuum.disconnect()
+        if self._scan_worker is not None:
+            self._append('Wait for scan cleanup before releasing vacuum and disconnecting.')
+            return
+        try:
+            if self.vacuum.is_connected:
+                self._release_vacuum_station()
+            self.vacuum.disconnect()
+        except Exception as exc:
+            self._append('Vacuum disconnect withheld; recovery remains pending: ' + str(exc))
+            return
+        self._settings.vacuum_enabled = False
+        self._vacuum_command_known = True
         with QtCore.QSignalBlocker(self.vacuum_toggle_btn):
             self.vacuum_toggle_btn.setChecked(False)
-        self._settings.vacuum_enabled = False
         self._set_vacuum_toggle_visual(False)
-        self._append("Disconnected vacuum")
+        self._append('Vacuum outputs acknowledged off; disconnected.')
         self._update_vacuum_status()
 
     def _toggle_vacuum(self, enabled: bool) -> None:
-        if not self.vacuum.is_connected:
+        if self._scan_worker is not None:
             with QtCore.QSignalBlocker(self.vacuum_toggle_btn):
-                self.vacuum_toggle_btn.setChecked(False)
-            self._set_vacuum_toggle_visual(False)
-            QtWidgets.QMessageBox.warning(self, "Vacuum Not Connected", "Connect the vacuum COM port first.")
+                self.vacuum_toggle_btn.setChecked(self._station_outputs_held())
+            self._append('Stop the scan and wait for cleanup before changing held vacuum outputs.')
             return
         try:
-            self.vacuum.set_enabled(enabled)
+            if enabled:
+                if self._station_outputs_held():
+                    raise HardwareSafetyError('Vacuum is already held; recover or release the original station.')
+                self._vacuum_session = VacuumHoldSession(self.vacuum, store=self.controller._safety_store)
+                self.controller.held_station = self._vacuum_session
+                self._vacuum_session.start(self.controller)
+            else:
+                self._release_vacuum_station()
         except Exception as exc:
+            held = self._station_outputs_held()
+            self._vacuum_command_known = False
             with QtCore.QSignalBlocker(self.vacuum_toggle_btn):
-                self.vacuum_toggle_btn.setChecked(not enabled)
-            self._set_vacuum_toggle_visual(not enabled)
-            QtWidgets.QMessageBox.warning(self, "Vacuum Error", str(exc))
+                self.vacuum_toggle_btn.setChecked(held)
+            self._set_vacuum_toggle_visual(held)
+            if held:
+                self.vacuum_toggle_btn.setText('Vacuum recovery pending')
+            self._append('Vacuum state requires review: ' + str(exc))
             return
         self._settings.vacuum_enabled = enabled
+        self._vacuum_command_known = True
+        with QtCore.QSignalBlocker(self.vacuum_toggle_btn):
+            self.vacuum_toggle_btn.setChecked(enabled)
         self._set_vacuum_toggle_visual(enabled)
-        self._append("Vacuum enabled" if enabled else "Vacuum disabled")
+        self._append('Vacuum hold acknowledged; station ownership retained.' if enabled else 'Vacuum release acknowledged; station ownership released.')
         self._update_vacuum_status()
 
     def _load_settings_into_widgets(self) -> None:
@@ -2645,7 +2733,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scan_half_range_spin.setValue(self._settings.scan_half_range_cm)
         self.scan_step_spin.setValue(self._settings.scan_step_cm)
         self.scan_settle_spin.setValue(self._settings.scan_settle_s)
-        self.vacuum_toggle_btn.setChecked(bool(self._settings.vacuum_enabled))
+        self.vacuum_toggle_btn.setChecked(False)
+        self._settings.vacuum_enabled = False  # A saved checkbox is not output evidence.
         self._set_vacuum_toggle_visual(bool(self._settings.vacuum_enabled))
         self._update_vacuum_status()
         del blockers
@@ -2774,6 +2863,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._scan_worker is not None or self.controller.operation_active:
             self._append('Wait for scan cleanup before reloading motor settings.')
             return
+        if self._station_outputs_held():
+            self._append('Release the held vacuum station before changing motor settings.')
+            return
         path = Path(self.settings_path_edit.text().strip())
         if not path.exists():
             QtWidgets.QMessageBox.warning(self, "Missing Settings", f"Could not find settings file:\n{path}")
@@ -2792,6 +2884,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _save_settings_file(self) -> None:
         if self._scan_worker is not None or self.controller.operation_active:
             self._append('Wait for scan cleanup before saving motor settings.')
+            return
+        if self._station_outputs_held():
+            self._append('Release the held vacuum station before saving motor settings.')
             return
         path = Path(self.settings_path_edit.text().strip())
         if not path.suffix:
@@ -2842,6 +2937,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _disconnect_motor(self) -> None:
         if self._scan_worker is not None or self.controller.operation_active:
             self._append('Stop the scan and wait for verified cleanup before disconnecting the motor.')
+            return
+        if self._station_outputs_held():
+            self._append('Release the held vacuum station before disconnecting its lift.')
             return
         self.controller.disconnect()
         self._append("Disconnected motor")
@@ -2989,7 +3087,9 @@ class MainWindow(QtWidgets.QMainWindow):
         motor_status = "connected" if self.controller.is_connected else "disconnected"
         squid_status = "connected" if self.squid.is_connected else "disconnected"
         vacuum_status = "connected" if self.vacuum.is_connected else "disconnected"
-        vacuum_state = "ON" if self.vacuum.is_connected and self.vacuum.is_enabled else "OFF"
+        vacuum_state = ('commanded ON' if self.vacuum.is_enabled else 'commanded OFF') if self._vacuum_command_known else 'unverified'
+        if self._station_outputs_held() and self._vacuum_session.faulted:
+            vacuum_state = 'recovery pending'
         self.connections_status.setText(
             f"Motor {motor_status}; SQUID {squid_status}; Vacuum comm {vacuum_status}, vacuum {vacuum_state}. Top switch reads status bit 4."
         )
@@ -3552,6 +3652,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self._append('Stopping the scan; waiting for verified lift cleanup before closing.')
             event.ignore()
             return
+        if self._station_outputs_held():
+            try:
+                self._release_vacuum_station()
+            except Exception as exc:
+                self._append('Close waits for held station recovery: ' + str(exc))
+                if self._station_outputs_held():
+                    event.ignore()
+                    return
         try:
             self._settings = UpDownSettings(
                 motor_port=self.motor_port_combo.currentText().strip(),

@@ -43,15 +43,16 @@ def _record(operation, error, cleanup_error, *, recovery=False, observations=())
 
 
 def publish_diagnostic_record(store, record, *, family="af"):
-    if family not in {"af", "motion"} or not re.fullmatch(family + r"-[0-9a-f]{32}", record.treatment_id):
+    if family not in {"af", "motion", "station"} or not re.fullmatch(family + r"-[0-9a-f]{32}", record.treatment_id):
         raise HardwareSafetyError("Invalid AF diagnostic evidence identity.")
     folder = store.path.parent / "hardware_diagnostics" / record.treatment_id
     try:
         folder.mkdir(parents=True, exist_ok=False)
         path = folder / "record.json"
         payload = (json.dumps(record.to_dict(), indent=2, sort_keys=True, allow_nan=False) + "\n").encode("utf-8")
+        held = family == 'station' and record.outputs_held and not record.error and not record.cleanup_error
         index = {"schema": f"rapidpy.{family}.diagnostic_artifact_index.v1",
-                 "state": "verified" if record.safe_state_confirmed else "unsafe",
+                 "state": "held" if held else ("verified" if record.safe_state_confirmed else "unsafe"),
                  "artifacts": [{"relative_path": path.name, "sha256": hashlib.sha256(payload).hexdigest(), "required": True}]}
         for name, content in (("record.json", payload), ("artifact_index.json", (json.dumps(index, indent=2) + "\n").encode("utf-8"))):
             with (folder / name).open("xb") as handle:
