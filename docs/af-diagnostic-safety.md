@@ -45,13 +45,38 @@ compact windows offer Controls/Plots tabs. Recovery buttons remain accessible at
 736×720, and switching layouts preserves both widgets. Narrower viewports may
 scroll instead of silently clipping controls.
 
-Remaining full-system work includes guarded ownership for the clipping/comms/motor
+Clipping scans hold one guarded operation across both scan directions. The
+operator's scan maximum is an explicit diagnostic ceiling (at most 10 V), separate
+from accepted treatment calibration. Zero-voltage baseline measurements are
+supported only with that explicit trial ceiling. Scan evidence preserves each
+request and raw returned capture; completing a scan does not accept new treatment
+limits. Invalid scan ranges fail before instrument initialization.
+
+ADwin communications startup and ordinary Connect only probe. Force reboot boots
+the configured firmware under a guarded operation and verifies outputs off before
+reporting connection. It does not try alternative firmware files. Loopback and
+self-test own the board until checked cleanup. Manual DAC/digital writes first
+stop existing processes and clear outputs, then retain the lifetime lease across
+clicks. Recover Outputs Off or closing the window verifies cleanup and releases
+ownership. Board bindings cannot change while manual outputs or workers are
+active. A partial boot retains the controller for recovery even if connection
+fails. Cancellation never emits a success signal; close waits for actual thread
+completion without terminating a worker or discarding a running thread.
+
+Both helpers use Controls/Plots tabs on compact screens, preserving their widgets
+and recovery actions. DAC channels are 1..2 and ADC channels 1..16 for the supported
+ADwin-light-16 hardware. Native DAC writes reject unsupported channels, nonfinite
+voltages and values outside +/-10 V before DLL output calls.
+
+Remaining full-system work includes guarded ownership for motor
 helpers and embedded direct diagnostics, non-treatment motion/acquisition restart
 recovery, calibration acceptance tooling, probe workflows, rebuilding the portable
 pilot, and physical/scientific acceptance. No actual instruments were actuated by
 the development checks.
 
-Validation: 760 isolated main-app tests pass in 91.928 seconds, including
-helper/main ownership, worker cancellation/signal ordering, native capture and
-compact-control visibility regressions. Six-panel/six-helper source UI smoke
-passes. Native interfaces are injected fakes in development checks.
+Validation includes helper/main ownership, manual output lifetime and original
+board cleanup, explicit boot versus read-only probe, the complete clipping range,
+worker cancellation/signal ordering, native capture and compact-control visibility
+regressions. Six-panel/six-helper source UI smoke passes. Native interfaces are
+injected fakes in development checks; compact screenshots were inspected at
+736x720. See ROADMAP.md for the latest complete suite checkpoint.

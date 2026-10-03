@@ -43,6 +43,10 @@ from rapidpy_common.ui import (  # noqa: E402
     apply_window_bounds_guard,
     set_app_icon,
 )
+from rapidpy_common.af_diagnostic_safety import (  # noqa: E402
+    af_diagnostic_operation, recover_af_diagnostic, ManualAdwinDiagnostic,
+)
+from rapidpy_common.hardware_safety import HardwareSafetyError  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +142,7 @@ class SineLoopbackWorker(QtCore.QObject):
 
     capture_ready = QtCore.Signal(object)
     finished = QtCore.Signal()
+    settled = QtCore.Signal()
     failed = QtCore.Signal(str)
 
     def __init__(
@@ -167,26 +172,23 @@ class SineLoopbackWorker(QtCore.QObject):
     @QtCore.Slot()
     def run(self) -> None:
         try:
-            result = self._ctrl.run_dense_loopback(
-                AdwinDenseCaptureRequest(
-                    sine_freq_hz=self._freq,
-                    amplitude_v=self._amp,
-                    io_rate_hz=self._io_rate,
-                    duration_s=self._duration,
-                    dac_chan=self._dac_chan,
-                    adc_chan=self._adc_chan,
-                ),
-                timeout_s=max(30.0, self._duration + 10.0),
-                should_stop=lambda: self._stop,
+            if self._stop:
+                raise InterruptedError("Loopback cancelled before output initialization.")
+            request = AdwinDenseCaptureRequest(
+                sine_freq_hz=self._freq, amplitude_v=self._amp, io_rate_hz=self._io_rate,
+                duration_s=self._duration, dac_chan=self._dac_chan, adc_chan=self._adc_chan,
             )
-            if not self._stop:
-                self.capture_ready.emit(result)
+            with af_diagnostic_operation(self._ctrl, {"action": "sine_loopback", "request": asdict(request)}) as observations:
+                result = self._ctrl.run_dense_loopback(request, should_stop=lambda: self._stop)
+                observations.append({"capture": asdict(result)})
+            if self._stop:
+                raise InterruptedError("Loopback stopped; output cleanup verified.")
+            self.capture_ready.emit(result)
             self.finished.emit()
         except Exception as exc:  # noqa: BLE001
-            if self._stop:
-                self.finished.emit()
-                return
             self.failed.emit(str(exc))
+        finally:
+            self.settled.emit()
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +211,8 @@ class SelfTestWorker(QtCore.QObject):
     progress = QtCore.Signal(str)           # one-line status message
     step_done = QtCore.Signal(str, bool)    # (name, passed)
     all_done = QtCore.Signal(int, int)      # (passed, total)
+    failed = QtCore.Signal(str)
+    settled = QtCore.Signal()
 
     def __init__(
         self,
@@ -228,123 +232,137 @@ class SelfTestWorker(QtCore.QObject):
 
     def _step(self, name: str, fn) -> bool:  # type: ignore[type-arg]
         if self._stop:
-            return False
+            raise InterruptedError("ADwin self-test stopped by operator.")
         self.progress.emit(f"  Testing: {name}…")
         try:
             ok, detail = fn()
+            self._observations.append({"step": name, "passed": bool(ok), "detail": detail})
             self.step_done.emit(f"{'PASS' if ok else 'FAIL'}  {name}: {detail}", ok)
             return ok
         except Exception as exc:
+            self._observations.append({"step": name, "passed": False, "error": str(exc)})
             self.step_done.emit(f"FAIL  {name}: exception — {exc}", False)
             return False
 
     @QtCore.Slot()
     def run(self) -> None:
-        passed = 0
-        total = 0
+        try:
+            if self._stop:
+                raise InterruptedError("Self-test cancelled before output initialization.")
+            with af_diagnostic_operation(self._ctrl, {"action": "io_self_test", "dac_channel": self._dac_ch, "adc_channel": self._adc_ch}) as observations:
+                self._observations = observations
+                self._ctrl.recover_safe_field()
+                passed = 0
+                total = 0
 
-        # ── Test 1: DLL loaded ──────────────────────────────────────────────
-        def t_dll():
-            return True, "DLL loaded"
-        total += 1
-        if self._step("DLL / driver", t_dll):
-            passed += 1
+                # ── Test 1: DLL loaded ──────────────────────────────────────────────
+                def t_dll():
+                    return True, "DLL loaded"
+                total += 1
+                if self._step("DLL / driver", t_dll):
+                    passed += 1
 
-        # ── Test 2: Board communication / digital-I/O readiness ───────────
-        def t_ver():
-            ver = self._ctrl.test_version()
-            dig = self._ctrl.get_digout() & 0x3F
-            if ver != 0:
-                return True, f"Test_Version={ver}; Get_Digout=0x{dig:02X}"
-            return True, f"Test_Version=0; digital I/O still responds (Get_Digout=0x{dig:02X})"
-        total += 1
-        if self._step("Board communication / I/O", t_ver):
-            passed += 1
+                # ── Test 2: Board communication / digital-I/O readiness ───────────
+                def t_ver():
+                    ver = self._ctrl.test_version()
+                    dig = self._ctrl.get_digout() & 0x3F
+                    if ver != 0:
+                        return True, f"Test_Version={ver}; Get_Digout=0x{dig:02X}"
+                    return True, f"Test_Version=0; digital I/O still responds (Get_Digout=0x{dig:02X})"
+                total += 1
+                if self._step("Board communication / I/O", t_ver):
+                    passed += 1
 
-        # ── Test 3a: DAC → ADC loopback at +5 V ────────────────────────────
-        def t_dac_pos():
-            self._ctrl.set_dac(self._dac_ch, 5.0)
-            time.sleep(0.05)
-            v = self._ctrl.get_adc(self._adc_ch)
-            self._ctrl.set_dac(self._dac_ch, 0.0)
-            ok = abs(v - 5.0) < 0.5
-            hint = ""
-            if abs(v) < 0.05:
-                hint = "  Likely no DAC→ADC loopback cable, wrong ADC channel, or open input."
-            return ok, f"wrote +5.000V  read {v:+.3f}V  (Δ={v-5:.3f}V){hint}"
-        total += 1
-        if self._step("DAC→ADC loopback +5V", t_dac_pos):
-            passed += 1
+                # ── Test 3a: DAC → ADC loopback at +5 V ────────────────────────────
+                def t_dac_pos():
+                    self._ctrl.set_dac(self._dac_ch, 5.0)
+                    time.sleep(0.05)
+                    v = self._ctrl.get_adc(self._adc_ch)
+                    self._ctrl.set_dac(self._dac_ch, 0.0)
+                    ok = abs(v - 5.0) < 0.5
+                    hint = ""
+                    if abs(v) < 0.05:
+                        hint = "  Likely no DAC→ADC loopback cable, wrong ADC channel, or open input."
+                    return ok, f"wrote +5.000V  read {v:+.3f}V  (Δ={v-5:.3f}V){hint}"
+                total += 1
+                if self._step("DAC→ADC loopback +5V", t_dac_pos):
+                    passed += 1
 
-        # ── Test 3b: DAC → ADC loopback at −5 V ────────────────────────────
-        def t_dac_neg():
-            self._ctrl.set_dac(self._dac_ch, -5.0)
-            time.sleep(0.05)
-            v = self._ctrl.get_adc(self._adc_ch)
-            self._ctrl.set_dac(self._dac_ch, 0.0)
-            ok = abs(v - (-5.0)) < 0.5
-            hint = ""
-            if abs(v) < 0.05:
-                hint = "  Likely no DAC→ADC loopback cable, wrong ADC channel, or open input."
-            return ok, f"wrote -5.000V  read {v:+.3f}V  (Δ={v+5:.3f}V){hint}"
-        total += 1
-        if self._step("DAC→ADC loopback −5V", t_dac_neg):
-            passed += 1
+                # ── Test 3b: DAC → ADC loopback at −5 V ────────────────────────────
+                def t_dac_neg():
+                    self._ctrl.set_dac(self._dac_ch, -5.0)
+                    time.sleep(0.05)
+                    v = self._ctrl.get_adc(self._adc_ch)
+                    self._ctrl.set_dac(self._dac_ch, 0.0)
+                    ok = abs(v - (-5.0)) < 0.5
+                    hint = ""
+                    if abs(v) < 0.05:
+                        hint = "  Likely no DAC→ADC loopback cable, wrong ADC channel, or open input."
+                    return ok, f"wrote -5.000V  read {v:+.3f}V  (Δ={v+5:.3f}V){hint}"
+                total += 1
+                if self._step("DAC→ADC loopback −5V", t_dac_neg):
+                    passed += 1
 
-        # ── Test 3c: DAC → ADC at 0 V ──────────────────────────────────────
-        def t_dac_zero():
-            self._ctrl.set_dac(self._dac_ch, 0.0)
-            time.sleep(0.05)
-            v = self._ctrl.get_adc(self._adc_ch)
-            ok = abs(v) < 0.3
-            return ok, f"wrote 0.000V   read {v:+.3f}V"
-        total += 1
-        if self._step("DAC→ADC loopback 0V", t_dac_zero):
-            passed += 1
+                # ── Test 3c: DAC → ADC at 0 V ──────────────────────────────────────
+                def t_dac_zero():
+                    self._ctrl.set_dac(self._dac_ch, 0.0)
+                    time.sleep(0.05)
+                    v = self._ctrl.get_adc(self._adc_ch)
+                    ok = abs(v) < 0.3
+                    return ok, f"wrote 0.000V   read {v:+.3f}V"
+                total += 1
+                if self._step("DAC→ADC loopback 0V", t_dac_zero):
+                    passed += 1
 
-        # ── Test 4: Digital output set/get round-trip ───────────────────────
-        def t_digout():
-            # VB6 only uses relay bits 0..5, so keep test patterns within 0x00..0x3F.
-            initial = self._ctrl.get_digout() & 0x3F
-            results = []
-            ok = True
-            for pattern in (0x2A, 0x15, 0x00):
-                self._ctrl.set_digout(pattern)
-                time.sleep(0.02)
-                got = self._ctrl.get_digout() & 0x3F
-                ok = ok and (got == pattern)
-                results.append(f"set 0x{pattern:02X} got 0x{got:02X}")
-            self._ctrl.set_digout(initial)
-            return ok, " | ".join(results) + f" | restored 0x{initial:02X}"
-        total += 1
-        if self._step("Digout set/get", t_digout):
-            passed += 1
+                # ── Test 4: Digital output set/get round-trip ───────────────────────
+                def t_digout():
+                    # VB6 only uses relay bits 0..5, so keep test patterns within 0x00..0x3F.
+                    initial = self._ctrl.get_digout() & 0x3F
+                    results = []
+                    ok = True
+                    for pattern in (0x2A, 0x15, 0x00):
+                        self._ctrl.set_digout(pattern)
+                        time.sleep(0.02)
+                        got = self._ctrl.get_digout() & 0x3F
+                        ok = ok and (got == pattern)
+                        results.append(f"set 0x{pattern:02X} got 0x{got:02X}")
+                    self._ctrl.set_digout(initial)
+                    return ok, " | ".join(results) + f" | restored 0x{initial:02X}"
+                total += 1
+                if self._step("Digout set/get", t_digout):
+                    passed += 1
 
-        # ── Test 5: PAR write/read round-trip ───────────────────────────────
-        def t_par():
-            self._ctrl.set_par(79, 0xDEAD)
-            got = self._ctrl.get_par(79)
-            ok = got == 0xDEAD
-            self._ctrl.set_par(79, 0)
-            return ok, f"wrote 0xDEAD={57005}  read {got}"
-        total += 1
-        if self._step("PAR[79] write/read", t_par):
-            passed += 1
+                # ── Test 5: PAR write/read round-trip ───────────────────────────────
+                def t_par():
+                    self._ctrl.set_par(79, 0xDEAD)
+                    got = self._ctrl.get_par(79)
+                    ok = got == 0xDEAD
+                    self._ctrl.set_par(79, 0)
+                    return ok, f"wrote 0xDEAD={57005}  read {got}"
+                total += 1
+                if self._step("PAR[79] write/read", t_par):
+                    passed += 1
 
-        # ── Test 6: FPAR write/read round-trip ──────────────────────────────
-        def t_fpar():
-            import ctypes
-            test_val = 3.14159
-            self._ctrl.set_fpar(79, test_val)
-            got = self._ctrl.get_fpar(79)
-            self._ctrl.set_fpar(79, 0.0)
-            ok = abs(got - test_val) < 0.001
-            return ok, f"wrote {test_val:.5f}  read {got:.5f}  (Δ={got-test_val:.6f})"
-        total += 1
-        if self._step("FPAR[79] write/read", t_fpar):
-            passed += 1
+                # ── Test 6: FPAR write/read round-trip ──────────────────────────────
+                def t_fpar():
+                    import ctypes
+                    test_val = 3.14159
+                    self._ctrl.set_fpar(79, test_val)
+                    got = self._ctrl.get_fpar(79)
+                    self._ctrl.set_fpar(79, 0.0)
+                    ok = abs(got - test_val) < 0.001
+                    return ok, f"wrote {test_val:.5f}  read {got:.5f}  (Δ={got-test_val:.6f})"
+                total += 1
+                if self._step("FPAR[79] write/read", t_fpar):
+                    passed += 1
 
-        self.all_done.emit(passed, total)
+            if self._stop:
+                raise InterruptedError("Self-test stopped; output cleanup verified.")
+            self.all_done.emit(passed, total)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        finally:
+            self.settled.emit()
 
 
 # ---------------------------------------------------------------------------
@@ -496,142 +514,38 @@ class AdwinConnectWorker(QtCore.QThread):
         self.ctrl: AdwinAFController | None = None
 
     def run(self) -> None:
-        import struct
-        dll_name = "adwin32.dll" if struct.calcsize("P") == 4 else "adwin64.dll"
-
-        # ── Step 1: Load DLL ───────────────────────────────────────────────
-        self.log_msg.emit(f"Loading {dll_name}…")
+        self.log_msg.emit("Loading ADwin driver and probing the configured board...")
         try:
             cfg = self._cfg
-            bin_folder, boot_file = _split_btl_path(
-                self._btl_override or cfg.btl_file, cfg.bin_folder, cfg.boot_file
-            )
-            board = AdwinBoardConfig(
-                board_num=cfg.board_num,
-                bin_folder=bin_folder,
-                boot_file=boot_file,
-            )
-            ctrl = AdwinAFController(board=board)
-            self.log_msg.emit(f"  {dll_name} loaded OK.")
-        except AdwinError as exc:
-            from rapidpy_common.adwin_af import _find_adwin_dll
-            found = _find_adwin_dll()
-            self.failed.emit(
-                str(exc),
-                [
-                    f"Install ADwin software (includes {dll_name}):",
-                    "  https://www.adwin.de/us/produkte/adbasic.html",
-                    "Run the installer as Administrator.",
-                    "Restart this application after installing.",
-                    f"If already installed, verify {dll_name} exists in C:\\Windows\\",
-                    f"  Currently found at: {found or '(not found)'}",
-                ],
-            )
-            return
-
-        # ── Step 2: Check if already booted ───────────────────────────────
-        try:
-            ver = ctrl.test_version()
+            bin_folder, boot_file = _split_btl_path(self._btl_override or cfg.btl_file, cfg.bin_folder, cfg.boot_file)
+            ctrl = AdwinAFController(board=AdwinBoardConfig(board_num=cfg.board_num, bin_folder=bin_folder, boot_file=boot_file))
+            ctrl.board.process_file = _default_process_file() or ctrl.board.process_file
+            self.ctrl = ctrl  # Recovery remains available after a partial boot.
+            if self.isInterruptionRequested():
+                raise InterruptedError("Connection cancelled before output initialization.")
+            if self._force_reboot:
+                with af_diagnostic_operation(ctrl, {"action": "explicit_board_boot", "boot_file": boot_file, "bin_folder": bin_folder}) as observations:
+                    ctrl.boot_board()
+                    if self.isInterruptionRequested():
+                        raise InterruptedError("Connection stopped after boot; verifying outputs off.")
+                    version, word = ctrl.test_version(), ctrl.get_digout()
+                    if not 0 <= word <= 63:
+                        raise AdwinError("Boot returned an unsupported digital output word.")
+                    observations.append({"version": version, "digital_word": word})
+                used_file = str(Path(bin_folder) / boot_file) if bin_folder else boot_file
+            else:
+                # Startup and ordinary Connect are read-only. Firmware is
+                # selected explicitly; never try unrelated BTL files in turn.
+                version, word = ctrl.test_version(), ctrl.get_digout()
+                if not 0 <= word <= 63:
+                    raise AdwinError("Probe returned an unsupported digital output word.")
+                used_file = ""
+            self.log_msg.emit(f"Configured board responds: version={version}, digital word=0x{word:02X}.")
+            self.connected.emit(version, used_file)
         except Exception as exc:
-            self.log_msg.emit(f"  Test_Version raised: {exc} — treating as 0")
-            ver = 0
-
-        if ver != 0 and not self._force_reboot:
-            self.log_msg.emit(f"  Board already running (Test_Version → {ver}).")
-            self.ctrl = ctrl
-            self.connected.emit(ver, "")
-            return
-
-        if ver != 0 and self._force_reboot:
-            self.log_msg.emit(f"  Board running (v{ver}) — force-reflash requested.")
-
-        # ── Step 3: Check USB device presence before attempting ADboot ─────
-        self.log_msg.emit("  Checking USB device presence…")
-        if not _check_adwin_usb_present():
-            self.failed.emit(
-                "No ADwin device found in Windows Device Manager.",
-                [
-                    "Check the USB cable — unplug and re-plug the ADwin.",
-                    "Make sure the ADwin power switch is ON (green LED lit).",
-                    "Try a different USB port or cable.",
-                    "Open Device Manager → look for 'ADWINDevice' class.",
-                    "  Yellow warning ⚠ → right-click → Update driver.",
-                    "Restart Windows, then retry.",
-                ],
-            )
-            return
-
-        # ── Step 4: Try each BTL file in priority order ────────────────────
-        btl_files = find_btl_files(self._btl_override or ctrl.board.bin_folder)
-        # Always try the currently configured file first (user may have browsed)
-        current = self._btl_override or (
-            str(Path(ctrl.board.bin_folder) / ctrl.board.boot_file)
-            if ctrl.board.bin_folder else ""
-        )
-        if current and current not in btl_files:
-            btl_files.insert(0, current)
-        if not btl_files:
-            self.failed.emit(
-                "No .btl firmware files found.",
-                [
-                    "Use the Browse… button to locate your ADwin firmware file.",
-                    "Typical location: C:\\ADwin\\ADwin9.btl",
-                    "Install ADwin software if no .btl files are present.",
-                ],
-            )
-            return
-
-        tried: list[str] = []
-        for btl_path in btl_files:
-            btl_name = Path(btl_path).name
-            hint = self._BTL_HINTS.get(btl_name.lower(), "")
-            label = f"{btl_name}  ({hint})" if hint else btl_name
-            self.log_msg.emit(f"  Trying {label}…")
-            ctrl.board.bin_folder = str(Path(btl_path).parent)
-            ctrl.board.boot_file = btl_name
-            try:
-                ctrl.boot_board()
-                try:
-                    ver2 = ctrl.test_version()
-                except AdwinError as exc:
-                    self.log_msg.emit(f"  Test_Version after boot raised: {exc}")
-                    ver2 = 0
-
-                # Legacy VB6 RAPID logic treats ADboot() returning success as the
-                # key signal. On this machine, Test_Version remains 0 even though
-                # digital I/O is immediately usable after boot, so verify readiness
-                # using a benign read operation instead of requiring ver2 != 0.
-                ready_word = ctrl.get_digout()
-                if ver2 != 0:
-                    self.log_msg.emit(f"  ✓ Booted with {btl_name}  (Test_Version → {ver2})")
-                else:
-                    self.log_msg.emit(
-                        f"  ✓ Booted with {btl_name}; Test_Version stayed 0, "
-                        f"but digital I/O is ready (Get_Digout → 0x{ready_word:02X})."
-                    )
-                self.ctrl = ctrl
-                self.connected.emit(ver2, btl_path)
-                return
-            except AdwinError as exc:
-                short = str(exc).split("\n")[0]
-                tried.append(f"{label}: {short}")
-                self.log_msg.emit(f"  ✗ {btl_name}: {short}")
-
-        # ── All BTL files failed ───────────────────────────────────────────
-        hints = "\n".join(
-            f"  {n}  →  {h}" for n, h in self._BTL_HINTS.items() if not n.startswith("adwin1")
-        )
-        tried_str = "\n".join(f"  • {t}" for t in tried)
-        self.failed.emit(
-            f"USB device detected but firmware boot failed.\n\nAttempted:\n{tried_str}",
-            [
-                "Select the correct BTL file for your hardware using Browse…",
-                f"Hardware → BTL file mapping:\n{hints}",
-                "Check Device Manager → ADWINDevice — reinstall driver if yellow ⚠.",
-                "Power-cycle the ADwin, wait 5 s, then retry.",
-                "Tick 'Force reboot' and retry if the board may be in an odd state.",
-            ],
-        )
+            self.failed.emit(str(exc), ["Check the configured board, cable, driver and firmware path.",
+                                       "Connect probes only; select explicit firmware boot when initialization is required.",
+                                       "If an operation is unfinished, recover its original board/profile before retrying output work."])
 
 
 class AdwinCommsApp(QtWidgets.QMainWindow):
@@ -644,6 +558,8 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         self._worker_thread: Optional[QtCore.QThread] = None
         self._selftest_thread: Optional[QtCore.QThread] = None
         self._selftest_worker: Optional[SelfTestWorker] = None
+        self._manual_diagnostic = None
+        self._close_after_cleanup = False
         self._digout_state: int = 0  # tracked locally
 
         # Rolling data buffers for plot
@@ -654,6 +570,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
 
         self._build_ui()
         self._restore_geometry()
+        self._fit_to_screen()
 
         # Timer to flush accumulated samples to the plot
         self._plot_timer = QtCore.QTimer(self)
@@ -685,8 +602,8 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         if self._connect_worker is not None:
             try:
                 if self._connect_worker.isRunning():
-                    self._connect_worker.quit()
-                    self._connect_worker.wait(500)
+                    self._log("A connection probe is already running.")
+                    return
             except RuntimeError:
                 pass  # C++ object already deleted — nothing to stop
             self._connect_worker = None
@@ -703,6 +620,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         worker.failed.connect(
             lambda reason, tips: self._on_connect_failed(reason, tips, startup=startup)
         )
+        worker.finished.connect(self._on_connect_settled)
         # NOTE: do NOT connect finished→deleteLater; parent=self keeps Qt ownership
         # safe, and deleteLater would invalidate the Python reference before we
         # access worker.ctrl in _on_connected.
@@ -729,7 +647,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         self, reason: str, suggestions: list, *, startup: bool
     ) -> None:
         """Slot \u2014 called from worker when all connection attempts failed."""
-        self._ctrl = None
+        self._ctrl = self._connect_worker.ctrl if self._connect_worker is not None else None
         self._booted = False
         self._lbl_boot_status.setText("\u25cf Not connected")
         self._lbl_boot_status.setStyleSheet("color: #cc0000;")
@@ -744,7 +662,13 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
             title = "ADwin Firmware Boot Failed"
         else:
             title = "ADwin Connection Failed"
-        self._show_adwin_error_dialog(title, reason, suggestions)
+        if not self._close_after_cleanup:
+            self._show_adwin_error_dialog(title, reason, suggestions)
+
+    def _on_connect_settled(self):
+        self._set_manual_binding_controls()
+        if self._close_after_cleanup:
+            QtCore.QTimer.singleShot(0, self.close)
 
     def _show_adwin_error_dialog(
         self,
@@ -793,6 +717,29 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         vl.addWidget(btns)
         dlg.exec()
 
+    def _outputs_owned(self) -> bool:
+        return self._manual_diagnostic is not None and self._manual_diagnostic.active
+
+    def _has_active_work(self) -> bool:
+        return any(thread is not None and thread.isRunning() for thread in
+                   (self._worker_thread, self._selftest_thread, self._connect_worker))
+
+    def _set_manual_binding_controls(self) -> None:
+        available = not self._outputs_owned() and not self._has_active_work() and not self._close_after_cleanup
+        for widget in (self._spin_board, self._edit_btl, self._chk_force_reboot, self._btn_boot):
+            widget.setEnabled(available)
+        self._btn_recover_outputs.setEnabled(self._ctrl is not None and not self._has_active_work())
+
+    def _manual_write(self, request, action):
+        if self._has_active_work() or self._close_after_cleanup:
+            raise HardwareSafetyError("Wait for the active diagnostic to settle before changing outputs.")
+        if not self._outputs_owned():
+            self._manual_diagnostic = ManualAdwinDiagnostic(self._ctrl)
+        try:
+            return self._manual_diagnostic.write(request, action)
+        finally:
+            self._set_manual_binding_controls()
+
     def _update_hw_enabled(self) -> None:
         enabled = self._ctrl is not None
         booted = enabled and self._booted
@@ -800,11 +747,48 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
             w.setEnabled(enabled)
         for w in self._booted_widgets:
             w.setEnabled(booted)
-        self._btn_boot.setEnabled(True)   # always enabled so user can retry
+        self._set_manual_binding_controls()
 
     # -----------------------------------------------------------------------
     # UI construction
     # -----------------------------------------------------------------------
+    def _fit_to_screen(self, screen=None) -> None:
+        screen = screen or self.screen() or QtWidgets.QApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        width, height = max(1, min(1680, int(area.width() * .92))), max(1, min(940, int(area.height() * .90)))
+        self.setMinimumSize(min(800, width), min(620, height))
+        self.setMaximumSize(width, height)
+        self.resize(width, height)
+        frame = self.frameGeometry()
+        self.move(max(area.left(), min(frame.left(), area.right() - frame.width() + 1)),
+                  max(area.top(), min(frame.top(), area.bottom() - frame.height() + 1)))
+        self._set_compact_layout(self.width() < 1240)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_compact_tabs"):
+            self._set_compact_layout(self.width() < 1240)
+
+    def _set_compact_layout(self, compact) -> None:
+        if self._compact_layout == compact:
+            return
+        self._compact_layout = compact
+        if compact:
+            self._compact_tabs.addTab(self._controls_scroll, "Controls")
+            self._compact_tabs.addTab(self._plot_card, "Plots")
+            self._splitter.hide()
+            self._compact_tabs.show()
+        else:
+            while self._compact_tabs.count():
+                self._compact_tabs.removeTab(0)
+            self._splitter.addWidget(self._controls_scroll)
+            self._splitter.addWidget(self._plot_card)
+            self._compact_tabs.hide()
+            self._splitter.show()
+            self._splitter.setSizes([720, 900])
+
     def _build_ui(self) -> None:
         self.setWindowTitle("ADwin Communication Tester")
         self.setMinimumSize(1100, 650)
@@ -825,6 +809,11 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         h_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         h_splitter.setHandleWidth(6)
         h_splitter.setChildrenCollapsible(False)
+        self._splitter = h_splitter
+        self._compact_layout = False
+        self._compact_tabs = QtWidgets.QTabWidget()
+        self._compact_tabs.hide()
+        root_layout.addWidget(self._compact_tabs)
         root_layout.addWidget(h_splitter)
 
         # ── LEFT: vertical splitter — 2×3 card grid (top) + console (bottom) ──
@@ -879,6 +868,8 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         v_splitter.setStretchFactor(0, 3)
         v_splitter.setStretchFactor(1, 2)
 
+        self._controls_scroll = left_vsplitter
+        self._plot_card = v_splitter
         h_splitter.addWidget(v_splitter)
 
         # Left controls ~640px, right plot+selftest fills rest
@@ -956,8 +947,8 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         row_boot = QtWidgets.QHBoxLayout()
         self._btn_boot = QtWidgets.QPushButton("Connect / Boot")
         self._btn_boot.setToolTip(
-            "Connect to an already-running board, or flash firmware if not yet booted.\n"
-            "Check \"Force reboot\" to always reflash (slow)."
+            "Probe the configured board without changing outputs.\n"
+            "Select Force reboot to explicitly boot the configured firmware and verify outputs off."
         )
         self._btn_boot.clicked.connect(self._boot_board)
         row_boot.addWidget(self._btn_boot)
@@ -976,7 +967,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         layout.addWidget(self._chk_force_reboot)
 
         # Self-test button
-        self._btn_selftest = QtWidgets.QPushButton("▶  Run Self-Test")
+        self._btn_selftest = QtWidgets.QPushButton("Run Self-Test")
         self._btn_selftest.setToolTip(
             "Runs automated hardware verification tests.\n"
             "Requires: board booted + DAC→ADC loopback cable."
@@ -1028,7 +1019,8 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         btn_read_dig.clicked.connect(self._read_digout)
         self._booted_widgets.append(btn_read_dig)
         row.addWidget(btn_read_dig)
-        btn_all_off = QtWidgets.QPushButton("All OFF")
+        btn_all_off = QtWidgets.QPushButton("Recover Outputs Off")
+        self._btn_recover_outputs = btn_all_off
         btn_all_off.setMinimumWidth(70)
         btn_all_off.setStyleSheet("font-size: 10px;")
         btn_all_off.clicked.connect(self._all_relays_off)
@@ -1093,8 +1085,9 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
 
         note = QtWidgets.QLabel(
             "No process file required — works immediately after board boot.\n"
-            "DAC = digital-to-analog output. Write a voltage on channel 1–8 in the range -10 V to +10 V.\n"
-            "ADC = analog-to-digital input. Read back the measured voltage on channel 1–8, also in roughly -10 V to +10 V."
+            "DAC = digital-to-analog output. Write channel 1–2 within -10 V to +10 V.\n"
+            "ADC = analog-to-digital input. Read channel 1–16 within roughly -10 V to +10 V. "
+            "Manual outputs remain owned until Recover Outputs Off verifies cleanup."
         )
         note.setStyleSheet("font-size: 10px; color: #666;")
         note.setWordWrap(True)
@@ -1104,7 +1097,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         dac_row = QtWidgets.QHBoxLayout()
         dac_row.addWidget(QtWidgets.QLabel("DAC:"))
         self._spin_dac_direct = QtWidgets.QSpinBox()
-        self._spin_dac_direct.setRange(1, 8)
+        self._spin_dac_direct.setRange(1, 2)
         self._spin_dac_direct.setValue(self._cfg.dac_chan_direct)
         self._spin_dac_direct.setFixedWidth(42)
         dac_row.addWidget(self._spin_dac_direct)
@@ -1127,7 +1120,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         adc_row = QtWidgets.QHBoxLayout()
         adc_row.addWidget(QtWidgets.QLabel("ADC:"))
         self._spin_adc_direct = QtWidgets.QSpinBox()
-        self._spin_adc_direct.setRange(1, 8)
+        self._spin_adc_direct.setRange(1, 16)
         self._spin_adc_direct.setValue(self._cfg.adc_chan_direct)
         self._spin_adc_direct.setFixedWidth(42)
         adc_row.addWidget(self._spin_adc_direct)
@@ -1217,14 +1210,14 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         ch_row = QtWidgets.QHBoxLayout()
         ch_row.addWidget(QtWidgets.QLabel("DAC Ch:"))
         self._spin_dac_sig = QtWidgets.QSpinBox()
-        self._spin_dac_sig.setRange(1, 8)
+        self._spin_dac_sig.setRange(1, 2)
         self._spin_dac_sig.setValue(self._cfg.dac_chan_sig)
         self._spin_dac_sig.setMaximumWidth(44)
         ch_row.addWidget(self._spin_dac_sig)
         ch_row.addSpacing(8)
         ch_row.addWidget(QtWidgets.QLabel("ADC Ch:"))
         self._spin_adc_sig = QtWidgets.QSpinBox()
-        self._spin_adc_sig.setRange(1, 8)
+        self._spin_adc_sig.setRange(1, 16)
         self._spin_adc_sig.setValue(self._cfg.adc_chan_sig)
         self._spin_adc_sig.setMaximumWidth(44)
         ch_row.addWidget(self._spin_adc_sig)
@@ -1417,6 +1410,9 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         self._update_device_diag_buttons()
 
     def _apply_selected_device_number(self) -> None:
+        if self._outputs_owned() or self._has_active_work():
+            self._log("Recover outputs and wait for the active diagnostic before selecting a different board.")
+            return
         row = self._tbl_diag.currentRow()
         if row < 0:
             return
@@ -1473,17 +1469,22 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
     # Board operations
     # -----------------------------------------------------------------------
     def _apply_board_cfg(self) -> None:
+        if self._outputs_owned() or self._has_active_work():
+            self._log("Recover manual outputs or wait for the active operation before changing board settings.")
+            return False
         if self._ctrl is None:
-            return
+            return True
         self._ctrl.board.board_num = self._spin_board.value()
         btl = self._edit_btl.text().strip()
         bin_folder, boot_file = _split_btl_path(btl, "", "ADwin9.btl")
         self._ctrl.board.bin_folder = bin_folder
         self._ctrl.board.boot_file = boot_file
+        return True
 
     def _boot_board(self) -> None:
         """Connect / Boot button handler — launches background worker."""
-        self._apply_board_cfg()
+        if not self._apply_board_cfg():
+            return
         force = self._chk_force_reboot.isChecked()
         self._lbl_boot_status.setText("● Connecting…")
         self._lbl_boot_status.setStyleSheet("color: #b45309; font-weight: bold;")
@@ -1503,12 +1504,19 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
             self._digout_state &= ~(1 << bit)
         self._digout_state &= 0x3F
         try:
-            self._ctrl.set_digout(self._digout_state)
+            target = self._digout_state
+            def write():
+                self._ctrl.set_digout(target)
+                actual = self._ctrl.get_digout()
+                if actual != target:
+                    raise AdwinError("Manual relay readback did not match the requested word.")
+                return actual
+            self._manual_write({"action": "digital_output", "word": target}, write)
             self._lbl_digout.setText(f"Digout: 0x{self._digout_state:02X}")
             label = self._cfg.bit_labels.get(str(bit), f"Bit {bit}")
             self._log(f"Bit {bit} ({label}) → {'ON' if checked else 'OFF'}  (word=0x{self._digout_state:02X})")
             self._refresh_relay_buttons()
-        except AdwinError as exc:
+        except Exception as exc:
             self._digout_state = prev_state
             btn = self._relay_btns[bit]
             btn.blockSignals(True)
@@ -1543,8 +1551,15 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
     def _all_relays_off(self) -> None:
         if self._ctrl is None:
             return
+        if self._has_active_work():
+            self._log("Stop the active diagnostic and wait for cleanup before recovering outputs.")
+            return
         try:
-            self._ctrl.set_digout(0)
+            if self._outputs_owned():
+                self._manual_diagnostic.close()
+                self._manual_diagnostic = None
+            else:
+                recover_af_diagnostic(self._ctrl)
             self._digout_state = 0
             self._lbl_digout.setText("Digout: 0x00")
             for btn in self._relay_btns:
@@ -1552,22 +1567,24 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
                 btn.setChecked(False)
                 btn.blockSignals(False)
             self._refresh_relay_buttons()
-            self._log("All relays OFF  (digout = 0x00).")
-        except AdwinError as exc:
+            self._log("Processes stopped, both DAC outputs zeroed and relay clear verified.")
+        except Exception as exc:
             self._log(f"[ERROR] {exc}")
+        finally:
+            self._set_manual_binding_controls()
 
     # -----------------------------------------------------------------------
     # Direct DAC / ADC
     # -----------------------------------------------------------------------
     def _write_dac(self) -> None:
-        if self._ctrl is None:
+        if self._ctrl is None or not self._booted:
             return
         ch = self._spin_dac_direct.value()
         v = self._spin_dac_v.value()
         try:
-            self._ctrl.set_dac(ch, v)
+            self._manual_write({"action": "dac_output", "channel": ch, "voltage": v}, lambda: self._ctrl.set_dac(ch, v))
             self._log(f"DAC ch{ch} → {v:+.3f} V")
-        except AdwinError as exc:
+        except Exception as exc:
             self._log(f"[ERROR] {exc}")
 
     def _read_adc(self) -> None:
@@ -1576,9 +1593,11 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         ch = self._spin_adc_direct.value()
         try:
             v = self._ctrl.get_adc(ch)
+            if self._outputs_owned():
+                self._manual_diagnostic.observe({"action": "adc_readback", "channel": ch, "voltage": v})
             self._lbl_adc_result.setText(f"{v:+.4f} V")
             self._log(f"ADC ch{ch} → {v:+.4f} V")
-        except AdwinError as exc:
+        except Exception as exc:
             self._log(f"[ERROR] {exc}")
 
 
@@ -1589,8 +1608,8 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
     def _run_sig(self) -> None:
         if self._ctrl is None or not self._booted:
             return
-        if self._worker_thread is not None and self._worker_thread.isRunning():
-            self._log("Signal generation already running.")
+        if self._has_active_work() or self._outputs_owned() or self._close_after_cleanup:
+            self._log("Reset held outputs and wait for the active diagnostic before starting capture.")
             return
 
         freq = self._spin_freq.value()
@@ -1622,6 +1641,8 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         self._worker.capture_ready.connect(self._on_capture_ready)
         self._worker.finished.connect(self._on_sig_finished)
         self._worker.failed.connect(self._on_sig_failed)
+        self._worker.settled.connect(self._worker_thread.quit)
+        self._worker_thread.finished.connect(self._cleanup_worker)
 
         self._btn_run_sig.setEnabled(False)
         self._btn_stop_sig.setEnabled(True)
@@ -1638,6 +1659,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
             f"DAC→ch{dac_ch} ADC←ch{adc_ch} ({points_per_cycle:.1f} samples/cycle)"
         )
         self._worker_thread.start()
+        self._set_manual_binding_controls()
 
     def _stop_sig(self) -> None:
         if self._worker is not None:
@@ -1664,24 +1686,26 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
 
     @QtCore.Slot()
     def _on_sig_finished(self) -> None:
-        self._cleanup_worker()
         self._lbl_sig_status.setText("Done.")
         self._log("Dense ADwin capture finished.")
 
     @QtCore.Slot(str)
     def _on_sig_failed(self, msg: str) -> None:
-        self._cleanup_worker()
         self._lbl_sig_status.setText("Error.")
         self._log(f"[ERROR] Dense ADwin capture: {msg}")
 
     def _cleanup_worker(self) -> None:
+        if self._worker_thread is not None and self._worker_thread.isRunning():
+            return
         if self._worker_thread is not None:
-            self._worker_thread.quit()
-            self._worker_thread.wait(3000)
-            self._worker_thread = None
+            self._worker_thread.deleteLater()
+        self._worker_thread = None
         self._worker = None
         self._btn_run_sig.setEnabled(self._booted and self._ctrl is not None)
         self._btn_stop_sig.setEnabled(False)
+        self._set_manual_binding_controls()
+        if self._close_after_cleanup:
+            QtCore.QTimer.singleShot(0, self.close)
 
     # -----------------------------------------------------------------------
     # Self-test
@@ -1690,8 +1714,8 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         if self._ctrl is None or not self._booted:
             self._log("[SELFTEST] Board must be booted before running self-test.")
             return
-        if self._selftest_thread is not None and self._selftest_thread.isRunning():
-            self._log("[SELFTEST] Self-test already in progress.")
+        if self._has_active_work() or self._outputs_owned() or self._close_after_cleanup:
+            self._log("[SELFTEST] Reset held outputs and wait for the active diagnostic.")
             return
 
         dac_ch = self._spin_dac_direct.value()
@@ -1710,7 +1734,11 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         self._selftest_worker.progress.connect(self._log)
         self._selftest_worker.step_done.connect(self._on_selftest_step)
         self._selftest_worker.all_done.connect(self._on_selftest_done)
+        self._selftest_worker.failed.connect(self._on_selftest_failed)
+        self._selftest_worker.settled.connect(self._selftest_thread.quit)
+        self._selftest_thread.finished.connect(self._cleanup_selftest)
         self._selftest_thread.start()
+        self._set_manual_binding_controls()
 
     @QtCore.Slot(str, bool)
     def _on_selftest_step(self, text: str, passed: bool) -> None:
@@ -1720,14 +1748,24 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         self._selftest_list.addItem(item)
         self._selftest_list.scrollToBottom()
 
-    @QtCore.Slot(int, int)
-    def _on_selftest_done(self, passed: int, total: int) -> None:
+    def _on_selftest_failed(self, message: str) -> None:
+        self._lbl_selftest_summary.setText("Self-test stopped or failed; cleanup checked.")
+        self._log(f"[SELFTEST] {message}")
+
+    def _cleanup_selftest(self) -> None:
+        if self._selftest_thread is not None and self._selftest_thread.isRunning():
+            return
         if self._selftest_thread is not None:
-            self._selftest_thread.quit()
-            self._selftest_thread.wait(3000)
-            self._selftest_thread = None
+            self._selftest_thread.deleteLater()
+        self._selftest_thread = None
         self._selftest_worker = None
         self._btn_selftest.setEnabled(self._booted and self._ctrl is not None)
+        self._set_manual_binding_controls()
+        if self._close_after_cleanup:
+            QtCore.QTimer.singleShot(0, self.close)
+
+    @QtCore.Slot(int, int)
+    def _on_selftest_done(self, passed: int, total: int) -> None:
         summary_color = "#2e8b57" if passed == total else "#b91c1c"
         self._lbl_selftest_summary.setStyleSheet(f"font-size: 11px; color: {summary_color};")
         self._lbl_selftest_summary.setText(f"Self-test complete: {passed}/{total} passed.")
@@ -1869,13 +1907,22 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
                 self.resize(max_w, max_h)
 
     def closeEvent(self, event: QtCore.QEvent) -> None:
+        self._close_after_cleanup = True
         if self._worker is not None:
             self._worker.stop()
         if self._selftest_worker is not None:
             self._selftest_worker.stop()
-        if self._selftest_thread is not None:
-            self._selftest_thread.quit()
-            self._selftest_thread.wait(1000)
+        if self._connect_worker is not None and self._connect_worker.isRunning():
+            self._connect_worker.requestInterruption()
+        if self._has_active_work():
+            event.ignore()
+            self._set_manual_binding_controls()
+            return
+        if self._outputs_owned():
+            try:
+                self._manual_diagnostic.close()
+            except Exception as exc:
+                self._log(f"[ERROR] Output recovery remains pending: {exc}")
         self._sync_cfg()
         _save_config(self._cfg)
         super().closeEvent(event)

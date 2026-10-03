@@ -889,3 +889,32 @@ portable rebuilding and station/scientific acceptance still require completion.
 Verification: 760 isolated main-app tests pass in 91.928 seconds; source UI smoke
 passes six panels and six helpers. Compact control/plot rendering was inspected
 at 736x720, including accessible recovery controls and wrapped plot headings.
+
+### Clipping and communications diagnostic ownership — 3 October 2026
+
+AF clipping holds one durable operation across the complete up/down scan, records
+raw captures and verifies output cleanup before results. An explicit diagnostic
+ceiling preserves the zero-to-10 V calibration trial without changing accepted
+treatment limits. Results still require deliberate calibration acceptance.
+
+ADwin communications uses read-only connection probes and explicit guarded boots
+of the configured firmware. Loopback/self-test workers retain ownership through
+cleanup. Manual DAC/relay outputs hold an operation lease across clicks, lock
+station bindings, and clear only through checked recovery or window closure.
+Partial boot failures retain the controller for recovery. Closing waits for actual
+worker settlement; stopped work never reports success. Native DAC validation
+rejects unsupported outputs and checks the runtime error channel even on a zero
+return code. Both helpers expose Controls/Plots tabs on compact screens.
+
+The full-system goal remains active. Motor helper ownership, embedded direct
+diagnostics, durable non-treatment motion/acquisition recovery, calibration/probe
+tooling, portable rebuilding and physical/scientific station acceptance remain
+open. This checkpoint was developed against injected native interfaces; physical
+instruments were not actuated. Pushes remain pending the destination/payload
+approval requested after automatic approval review rejected the first checkpoint.
+
+Verification: 777 isolated main-app tests pass in 92.511 seconds, including 17
+auxiliary diagnostic regressions. Source UI smoke passes six panels and six helper
+imports. The clipping and communications windows were also constructed and their
+compact control/recovery layouts inspected at 736x720. The portable pilot still
+predates this source checkpoint and requires rebuilding before release.

@@ -202,6 +202,7 @@ class AdwinDenseCaptureRequest:
     ramp_down_slope_vps: float = 200.0
     ramp_down_periods: int = 2
     active_coil: str = "off"  # Loopback default; coil diagnostics must be explicit.
+    diagnostic_ceiling_v: float | None = None  # Explicit clipping trial range, separate from accepted treatment limits.
 
 
 @dataclass(slots=True)
@@ -226,9 +227,16 @@ def validate_dense_capture_request(request: AdwinDenseCaptureRequest) -> float:
     globals.inc allocates 1,000,000 points. Reject unsupported requests rather
     than silently changing their amplitude, rate or duration.
     """
+    if request.diagnostic_ceiling_v is not None:
+        ceiling = request.diagnostic_ceiling_v
+        if isinstance(ceiling, bool) or not math.isfinite(float(ceiling)) or not 0 < ceiling <= 10:
+            raise AdwinError("Diagnostic ceiling must be finite and within 0..10 V.")
+        if request.amplitude_v > ceiling:
+            raise AdwinError("Capture amplitude exceeds the explicit diagnostic ceiling.")
     for name in ("sine_freq_hz", "amplitude_v", "io_rate_hz", "duration_s", "ramp_up_slope_vps", "ramp_down_slope_vps"):
         value = getattr(request, name)
-        if isinstance(value, bool) or not math.isfinite(float(value)) or float(value) <= 0:
+        baseline = name == "amplitude_v" and request.diagnostic_ceiling_v is not None and value == 0
+        if isinstance(value, bool) or not math.isfinite(float(value)) or (float(value) <= 0 and not baseline):
             raise AdwinError(f"Dense capture {name} must be finite and positive.")
     if request.amplitude_v > 10 or not 1 <= request.io_rate_hz <= 50000:
         raise AdwinError("Dense capture exceeds the 10 V output or 50 kHz legacy process limit.")
@@ -512,10 +520,15 @@ class AdwinAFController:
 
     def set_dac(self, channel: int, voltage: float) -> None:
         """Write *voltage* (±10 V) to a DAC output channel. Board must be booted."""
+        if isinstance(channel, bool) or not isinstance(channel, int) or channel not in {1, 2}:
+            raise AdwinError("ADwin-light-16 DAC channel must be 1 or 2.")
+        if isinstance(voltage, bool) or not math.isfinite(float(voltage)) or not -10 <= voltage <= 10:
+            raise AdwinError("DAC voltage must be finite and within +/-10 V; it cannot be clipped.")
         count = self.voltage_to_count(voltage)
         ret = int(self._dll.Set_DAC(int(channel), int(count), self._dev))
         if ret != 0:
             raise AdwinError(f"Set_DAC(ch={channel}, v={voltage:.3f}V, count={count}) failed with code {ret}.")
+        self._raise_if_error(f"Set_DAC(ch={channel}, dev={self._dev})", raw_return=ret)
 
     def get_adc(self, channel: int) -> float:
         """Read ADC voltage (±10 V) from *channel*. Board must be booted."""
@@ -682,7 +695,7 @@ class AdwinAFController:
             raise AdwinError("Dense capture timeout is shorter than its planned ramp/hold/down duration.")
         if should_stop is not None and should_stop():
             raise AdwinError("Dense capture cancelled before output initialization.")
-        if request.active_coil != "off" and request.amplitude_v > self._coil_limits(request.active_coil)[0]:
+        if request.active_coil != "off" and request.diagnostic_ceiling_v is None and request.amplitude_v > self._coil_limits(request.active_coil)[0]:
             raise AdwinError("Dense capture amplitude exceeds the selected coil's configured ramp limit.")
         self.boot_board()
         self.set_af_relays(request.active_coil, one_chan_on=True)

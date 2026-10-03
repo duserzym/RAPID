@@ -33,6 +33,7 @@ from rapidpy_common.ui import (  # noqa: E402
     apply_window_bounds_guard,
     set_app_icon,
 )
+from rapidpy_common.af_diagnostic_safety import af_diagnostic_operation, recover_af_diagnostic  # noqa: E402
 
 
 @dataclass(slots=True)
@@ -204,6 +205,7 @@ class AutoClipWorker(QtCore.QObject):
     progress = QtCore.Signal(str)
     result_ready = QtCore.Signal(object)
     finished = QtCore.Signal()
+    settled = QtCore.Signal()
     failed = QtCore.Signal(str)
 
     def __init__(
@@ -227,6 +229,13 @@ class AutoClipWorker(QtCore.QObject):
     @QtCore.Slot()
     def run(self) -> None:
         try:
+            if self._stop:
+                raise InterruptedError("Clipping test cancelled before output initialization.")
+            if (not math.isfinite(self._config.min_amp_v) or not math.isfinite(self._config.max_amp_v)
+                    or not 0 <= self._config.min_amp_v < self._config.max_amp_v <= 10
+                    or isinstance(self._config.scan_points, bool) or not isinstance(self._config.scan_points, int)
+                    or not 2 <= self._config.scan_points <= 501):
+                raise AdwinError("Clipping scan requires 2..501 points and an explicit increasing voltage range within 0..10 V.")
             board = AdwinBoardConfig(
                 board_num=self._backend.board_num,
                 bin_folder=self._backend.bin_folder,
@@ -238,7 +247,6 @@ class AutoClipWorker(QtCore.QObject):
                 trans_relay_bit=self._backend.trans_relay_bit,
             )
             controller = AdwinAFController(board=board, limits=self._limits)
-            controller.set_af_relays(self._coil, one_chan_on=True)
 
             amplitudes = _linspace(self._config.min_amp_v, self._config.max_amp_v, self._config.scan_points)
             duration_s = max(
@@ -250,46 +258,49 @@ class AutoClipWorker(QtCore.QObject):
             down_points: list[ClipPoint] = []
             preview_capture: AdwinDenseCaptureResult | None = None
 
-            for pass_name, sweep in (("up", amplitudes), ("down", list(reversed(amplitudes)))):
-                point_total = len(sweep)
-                for index, amplitude in enumerate(sweep, start=1):
-                    if self._stop:
-                        raise AdwinError("Clipping test stopped by user.")
-                    capture = controller.run_dense_loopback(
-                        AdwinDenseCaptureRequest(
-                            sine_freq_hz=self._config.sine_freq_hz,
-                            amplitude_v=amplitude,
-                            io_rate_hz=self._config.io_rate_hz,
-                            duration_s=duration_s,
-                            dac_chan=board.ramp_dac_chan,
-                            adc_chan=board.monitor_adc_chan,
-                            ramp_mode=3,
-                            ramp_up_slope_vps=self._config.ramp_up_slope_vps,
-                            ramp_down_slope_vps=self._config.ramp_down_slope_vps,
-                            ramp_down_periods=max(1, self._config.ramp_down_periods),
-                            active_coil=self._coil,
-                        ),
-                        should_stop=lambda: self._stop,
-                    )
-                    monitor_amp_v, residual_rms_v = _fit_sine_metrics(
-                        capture.adc_v,
-                        capture.timestep_s,
-                        self._config.sine_freq_hz,
-                    )
-                    point = ClipPoint(amplitude, monitor_amp_v, residual_rms_v)
-                    if pass_name == "up":
-                        up_points.append(point)
-                        if index == point_total:
-                            preview_capture = capture
-                    else:
-                        down_points.append(point)
-                    self.progress.emit(
-                        f"Clip {pass_name} {index}/{point_total}: ramp {amplitude:.3f} V, "
-                        f"monitor {monitor_amp_v:.4f} V, residual {residual_rms_v:.5f} V RMS"
-                    )
+            with af_diagnostic_operation(controller, {"action": "clipping_scan", "coil": self._coil, "config": asdict(self._config)}) as observations:
+                for pass_name, sweep in (("up", amplitudes), ("down", list(reversed(amplitudes)))):
+                    point_total = len(sweep)
+                    for index, amplitude in enumerate(sweep, start=1):
+                        if self._stop:
+                            raise AdwinError("Clipping test stopped by user.")
+                        request = AdwinDenseCaptureRequest(
+                                sine_freq_hz=self._config.sine_freq_hz,
+                                amplitude_v=amplitude,
+                                io_rate_hz=self._config.io_rate_hz,
+                                duration_s=duration_s,
+                                dac_chan=board.ramp_dac_chan,
+                                adc_chan=board.monitor_adc_chan,
+                                ramp_mode=3,
+                                ramp_up_slope_vps=self._config.ramp_up_slope_vps,
+                                ramp_down_slope_vps=self._config.ramp_down_slope_vps,
+                                ramp_down_periods=self._config.ramp_down_periods,
+                                active_coil=self._coil,
+                                diagnostic_ceiling_v=self._config.max_amp_v,
+                            )
+                        capture = controller.run_dense_loopback(request, should_stop=lambda: self._stop)
+                        observations.append({"pass": pass_name, "request": asdict(request), "capture": asdict(capture)})
+                        monitor_amp_v, residual_rms_v = _fit_sine_metrics(
+                            capture.adc_v,
+                            capture.timestep_s,
+                            self._config.sine_freq_hz,
+                        )
+                        point = ClipPoint(amplitude, monitor_amp_v, residual_rms_v)
+                        if pass_name == "up":
+                            up_points.append(point)
+                            if index == point_total:
+                                preview_capture = capture
+                        else:
+                            down_points.append(point)
+                        self.progress.emit(
+                            f"Clip {pass_name} {index}/{point_total}: ramp {amplitude:.3f} V, "
+                            f"monitor {monitor_amp_v:.4f} V, residual {residual_rms_v:.5f} V RMS"
+                        )
 
             avg_points = _combine_passes(amplitudes, up_points, down_points)
             suggested_point = _suggest_limit(avg_points)
+            if self._stop:
+                raise InterruptedError("Clipping test stopped; output cleanup verified.")
             self.result_ready.emit(
                 ClipScanResult(
                     coil=self._coil,
@@ -304,7 +315,8 @@ class AutoClipWorker(QtCore.QObject):
             self.finished.emit()
         except Exception as exc:
             self.failed.emit(str(exc))
-            self.finished.emit()
+        finally:
+            self.settled.emit()
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -331,6 +343,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._connected = False
         self._last_version = 0
         self._worker_thread: QtCore.QThread | None = None
+        self._close_after_cleanup = False
         self._worker: AutoClipWorker | None = None
         self._last_result: ClipScanResult | None = None
 
@@ -351,6 +364,44 @@ class MainWindow(QtWidgets.QMainWindow):
         set_app_icon(self, "af_clip_test_icon.ico", _assets_dir())
         self.setMinimumSize(1500, 860)
         self.resize(1660, 940)
+        self._fit_to_screen()
+
+    def _fit_to_screen(self, screen=None) -> None:
+        screen = screen or self.screen() or QtWidgets.QApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        width, height = max(1, min(1680, int(area.width() * .92))), max(1, min(940, int(area.height() * .90)))
+        self.setMinimumSize(min(800, width), min(620, height))
+        self.setMaximumSize(width, height)
+        self.resize(width, height)
+        frame = self.frameGeometry()
+        self.move(max(area.left(), min(frame.left(), area.right() - frame.width() + 1)),
+                  max(area.top(), min(frame.top(), area.bottom() - frame.height() + 1)))
+        self._set_compact_layout(self.width() < 1240)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_compact_tabs"):
+            self._set_compact_layout(self.width() < 1240)
+
+    def _set_compact_layout(self, compact) -> None:
+        if self._compact_layout == compact:
+            return
+        self._compact_layout = compact
+        if compact:
+            self._compact_tabs.addTab(self._controls_scroll, "Controls")
+            self._compact_tabs.addTab(self._plot_card, "Plots")
+            self._splitter.hide()
+            self._compact_tabs.show()
+        else:
+            while self._compact_tabs.count():
+                self._compact_tabs.removeTab(0)
+            self._splitter.addWidget(self._controls_scroll)
+            self._splitter.addWidget(self._plot_card)
+            self._compact_tabs.hide()
+            self._splitter.show()
+            self._splitter.setSizes([720, 900])
 
     def _build_ui(self) -> None:
         root = QtWidgets.QWidget(self)
@@ -362,6 +413,11 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(8)
+        self._splitter = splitter
+        self._compact_layout = False
+        self._compact_tabs = QtWidgets.QTabWidget()
+        self._compact_tabs.hide()
+        layout.addWidget(self._compact_tabs, stretch=1)
         layout.addWidget(splitter, stretch=1)
 
         left_scroll = QtWidgets.QScrollArea()
@@ -389,6 +445,8 @@ class MainWindow(QtWidgets.QMainWindow):
         plot_card = self._build_plot_card()
         apply_card_shadow(plot_card)
 
+        self._controls_scroll = left_scroll
+        self._plot_card = plot_card
         splitter.addWidget(left_scroll)
         splitter.addWidget(plot_card)
         splitter.setStretchFactor(0, 0)
@@ -585,7 +643,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.quick_relay_status.setMinimumWidth(0)
         self.quick_relay_status.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Preferred)
 
-        self.quick_connect_btn = QtWidgets.QPushButton("Connect / Boot")
+        self.quick_connect_btn = QtWidgets.QPushButton("Connect / Probe")
         self.quick_connect_btn.setObjectName("connectAction")
         self.quick_check_btn = QtWidgets.QPushButton("Check Comm")
         quick_comm_row.addWidget(self.quick_backend_status, 0, 0, 1, 2)
@@ -631,7 +689,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scan_points = QtWidgets.QSpinBox()
         self.scan_points.setRange(3, 200)
         self.io_rate = QtWidgets.QDoubleSpinBox()
-        self.io_rate.setRange(500.0, 100000.0)
+        self.io_rate.setRange(500.0, 50000.0)
         self.io_rate.setDecimals(1)
         self.duration_ms = QtWidgets.QSpinBox()
         self.duration_ms.setRange(50, 5000)
@@ -757,11 +815,11 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addLayout(form)
 
         buttons = QtWidgets.QGridLayout()
-        self.connect_btn = QtWidgets.QPushButton("Connect / Boot")
+        self.connect_btn = QtWidgets.QPushButton("Connect / Probe")
         self.connect_btn.setObjectName("connectAction")
         self.check_comm_btn = QtWidgets.QPushButton("Check Communication")
-        self.apply_relay_btn = QtWidgets.QPushButton("Apply Active Relay")
-        self.relays_off_btn = QtWidgets.QPushButton("All Relays Off")
+        self.apply_relay_btn = QtWidgets.QPushButton("Test Active Relay")
+        self.relays_off_btn = QtWidgets.QPushButton("Recover Outputs Off")
         self.save_backend_btn = QtWidgets.QPushButton("Save Backend")
         buttons.addWidget(self.connect_btn, 0, 0, 1, 2)
         buttons.addWidget(self.check_comm_btn, 1, 0, 1, 2)
@@ -1065,7 +1123,7 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(
                 self,
                 "Missing Process File",
-                "Point the ADwin process file at VB6/ADwin/sineout.T91 before connecting.",
+                "The ADwin process file is not set. Point it at VB6/ADwin/sineout.T91 before connecting.",
             )
             return
         try:
@@ -1077,16 +1135,18 @@ class MainWindow(QtWidgets.QMainWindow):
                 version = controller.test_version()
             except Exception:
                 version = 0
-            relay_word = controller.set_af_relays(self._active_coil_name(), one_chan_on=True)
+            # Connecting probes the existing board. Relay/boot/output actions
+            # require a journaled diagnostic operation, never an eager connect.
+            relay_word = controller.get_digout()
+            self._last_version = version
             self._ctrl = controller
             self._connected = True
-            self._last_version = max(self._last_version, version)
             if self._last_version:
                 self._set_backend_status(f"Connected (v{self._last_version})", "#0f766e")
             else:
                 self._set_backend_status("Connected (I/O ready)", "#0f766e")
             self._append(
-                f"ADwin ready on board {self._backend_config.board_num}; active coil relay word 0x{relay_word:02X}."
+                f"ADwin probed on board {self._backend_config.board_num}; observed relay word 0x{relay_word:02X}."
             )
             self._update_comm_snapshot(log_result=False, relay_word=relay_word)
         except Exception as exc:
@@ -1096,7 +1156,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._set_backend_status("Connection failed", "#991b1b")
             self._set_comm_summary("Communication not established.", "#991b1b")
             self._set_relay_status("Relay state unavailable.", "#991b1b")
-            self._append(f"[ERROR] ADwin connect/boot failed: {exc}")
+            self._append(f"[ERROR] ADwin connection probe failed: {exc}")
 
     def _check_communication(self) -> None:
         if self._ctrl is None:
@@ -1150,9 +1210,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
         try:
             self._ctrl.board = AdwinBoardConfig(**asdict(self._build_backend_from_widgets()))
-            relay_word = self._ctrl.set_af_relays(self._active_coil_name(), one_chan_on=True)
-            self._update_comm_snapshot(log_result=False, relay_word=relay_word)
-            self._append(f"AF relays set for {self._active_coil_name()} coil (word 0x{relay_word:02X}).")
+            with af_diagnostic_operation(self._ctrl, {"action": "relay_test", "coil": self._active_coil_name()}) as observations:
+                relay_word = self._ctrl.set_af_relays(self._active_coil_name(), one_chan_on=True)
+                if self._ctrl.get_digout() != relay_word:
+                    raise RuntimeError("Selected coil relay readback did not match.")
+                observations.append({"selected_relay_word": relay_word})
+            self._update_comm_snapshot(log_result=False, relay_word=0)
+            self._append(f"AF {self._active_coil_name()} relay test completed (word 0x{relay_word:02X}); outputs cleared and verified.")
         except Exception as exc:
             self._append(f"[ERROR] Relay update failed: {exc}")
 
@@ -1162,9 +1226,9 @@ class MainWindow(QtWidgets.QMainWindow):
             if self._ctrl is None:
                 return
         try:
-            self._ctrl.set_af_relays("off", one_chan_on=True)
+            recover_af_diagnostic(self._ctrl)
             self._update_comm_snapshot(log_result=False, relay_word=0)
-            self._append("All AF relays turned off.")
+            self._append("AF processes stopped, ramp output zeroed and relay clear verified.")
         except Exception as exc:
             self._append(f"[ERROR] Failed to turn all relays off: {exc}")
 
@@ -1175,7 +1239,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.chk_lock_coils.isChecked():
             return
         self._refresh_limit_widgets()
-        self._apply_relays()
+        self._update_comm_snapshot(log_result=False)
 
     def _toggle_clip_test(self) -> None:
         if self._worker is not None:
@@ -1226,7 +1290,7 @@ class MainWindow(QtWidgets.QMainWindow):
         worker.progress.connect(self._append)
         worker.result_ready.connect(self._on_clip_result_ready)
         worker.failed.connect(self._on_worker_failed)
-        worker.finished.connect(thread.quit)
+        worker.settled.connect(thread.quit)
         thread.finished.connect(self._cleanup_worker)
 
         self._worker = worker
@@ -1275,6 +1339,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._worker_thread = None
         self._worker = None
         self._set_busy(False)
+        if self._close_after_cleanup:
+            QtCore.QTimer.singleShot(0, self.close)
+
+    def closeEvent(self, event) -> None:
+        if self._worker_thread is not None and self._worker_thread.isRunning():
+            self._close_after_cleanup = True
+            self._worker.stop()
+            self._append("Stopping clipping test; waiting for verified output cleanup before closing.")
+            event.ignore()
+            return
+        event.accept()
 
     def _refresh_clip_plot(self) -> None:
         if self._last_result is None:
