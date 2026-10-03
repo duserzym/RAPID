@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import re
 import threading
 import time
@@ -18,13 +19,14 @@ class MotorAxisConfig:
     name: str
     motor_id: int
     address: int
+    port: str = ""
 
 
 @dataclass(slots=True)
 class MotorControllerConfig:
     slot_min: int = 1
     slot_max: int = 101
-    one_step: int = -1000
+    one_step: float = -1000
     sample_hole_alignment_offset: int = 0
     changer_speed: int = 8_000_000
     turner_speed: int = 120_000_000
@@ -38,6 +40,7 @@ class MotorControllerConfig:
     sample_bottom: int = 425_000
     sample_height: int = 175_000
     updown_torque_factor: int = 15
+    updown_max_torque: int = 32000
     pickup_torque_throttle: float = 0.6
     xy_neg_homing_distance: int = -30_000_000
     xy_pos_homing_distance: int = 30_000_000
@@ -376,6 +379,13 @@ class MotorSerialClient:
         open_hold: int,
         open_move: int,
     ) -> str:
+        # VB6 SetTorques accepts percentages and converts each to controller
+        # units using the station's configured 100% torque value.
+        percentages = (closed_hold, closed_move, open_hold, open_move)
+        if any(not 0 <= value <= 100 for value in percentages) or not 0 < self.config.updown_max_torque <= 32767:
+            raise HardwareError("Torque percentages or native maximum torque are invalid.")
+        per_torque = round(.01 * self.config.updown_max_torque)
+        closed_hold, closed_move, open_hold, open_move = (round(value) * per_torque for value in percentages)
         return self.query_ascii(
             f"{self._address(axis)}149 {closed_hold} {closed_move} {open_hold} {open_move}"
         )
@@ -391,6 +401,11 @@ class MotorSerialClient:
         acceleration: int = 96637,
         relative_mode: bool = False,
     ) -> MoveResult:
+        for name, value in (("target", target), ("velocity", velocity), ("acceleration", acceleration)):
+            if not math.isfinite(value) or int(value) != value or not -(2**31) <= value < 2**31:
+                raise HardwareError(f"Motor {name} must be a signed 32-bit integer.")
+        if velocity <= 0 or acceleration <= 0:
+            raise HardwareError("Motor velocity and acceleration must be positive.")
         self.poll_motor(axis)
         self.clear_poll_status(axis)
         opcode = 135 if relative_mode else 134
@@ -504,13 +519,18 @@ class MotorSerialClient:
         speed_rps: float,
         duration_s: float = 60.0,
     ) -> MoveResult:
+        if not math.isfinite(speed_rps) or not math.isfinite(duration_s) or duration_s <= 0 or abs(speed_rps) > 40:
+            raise HardwareError("Turning speed must be finite within +/-40 rps and duration positive.")
         if speed_rps == 0:
             self.stop(axis)
+            self.wait_for_motor_stop(axis)
             pos = self.read_position(axis)
             return MoveResult(target=pos, final_position=pos, success=True)
         start = self.read_position(axis)
         target = int(start - self.config.turning_motor_full_rotation * speed_rps * duration_s)
         velocity = int(abs(self.config.turning_motor_1rps * speed_rps))
+        if not -(2**31) <= target < 2**31 or not 0 < velocity < 2**31:
+            raise HardwareError("Turning spin target/velocity exceeds native signed 32-bit limits.")
         return self.move_motor(axis, target, velocity, wait_for_stop=False, acceleration=4831)
 
     def updown_move(
@@ -732,7 +752,7 @@ class MotorSerialClient:
         return result
 
     def sample_pickup(self, updown_axis: MotorAxisConfig) -> MoveResult:
-        pickup_torque = int(self.config.pickup_torque_throttle * self.config.updown_torque_factor)
+        pickup_torque = round(self.config.pickup_torque_throttle * self.config.updown_torque_factor)
         self.set_torques(updown_axis, pickup_torque, pickup_torque, pickup_torque, pickup_torque)
         result = self.move_motor(
             updown_axis,

@@ -244,6 +244,10 @@ class SettingsPanel(QtWidgets.QWidget):
         self._irm_max_voltage.setValue(10.0)
         self._irm_max_voltage.setSuffix(" V")
         fl.addRow("DAC voltage limit:", self._irm_max_voltage)
+        self._pulse_calibration_summary = QtWidgets.QLabel()
+        self._pulse_calibration_summary.setWordWrap(True)
+        self._pulse_calibration_summary.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        fl.addRow("Capacitor pulse circuit:",self._pulse_calibration_summary)
 
         fl.addRow(_sec_hdr("ARM (Anhysteretic Remanence)"))
 
@@ -260,6 +264,10 @@ class SettingsPanel(QtWidgets.QWidget):
         self._arm_bias.setSingleStep(0.005)
         self._arm_bias.setSuffix(" mT")
         fl.addRow("Bias field:", self._arm_bias)
+        self._arm_calibration_summary = QtWidgets.QLabel()
+        self._arm_calibration_summary.setWordWrap(True)
+        self._arm_calibration_summary.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        fl.addRow("Imported bias circuit:", self._arm_calibration_summary)
 
         return w
 
@@ -308,6 +316,10 @@ class SettingsPanel(QtWidgets.QWidget):
         self._af_tumble_pause.setSuffix(" s")
         self._af_tumble_pause.setSingleStep(0.1)
         fl.addRow("Inter-axis pause:", self._af_tumble_pause)
+        self._af_calibration_summary = QtWidgets.QLabel()
+        self._af_calibration_summary.setWordWrap(True)
+        self._af_calibration_summary.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        fl.addRow("Calibrated live treatment:", self._af_calibration_summary)
 
         return w
 
@@ -491,8 +503,11 @@ class SettingsPanel(QtWidgets.QWidget):
         fl.addRow("Serial port:", self._ch_port)
 
         self._ch_baud = QtWidgets.QComboBox()
-        self._ch_baud.addItems(["9600", "19200", "38400"])
+        self._ch_baud.addItems(["9600", "19200", "38400", "57600", "115200"])
         fl.addRow("Baud rate:", self._ch_baud)
+        self._motor_station_summary = QtWidgets.QLabel()
+        self._motor_station_summary.setWordWrap(True)
+        fl.addRow("Station calibration:", self._motor_station_summary)
 
         fl.addRow(_sec_hdr("Stage Speeds"))
 
@@ -694,14 +709,32 @@ class SettingsPanel(QtWidgets.QWidget):
 
         ia = cfg.irm_arm
         self._irm_max_field.setValue(ia.irm_max_field)
-        self._irm_axis.setCurrentText(ia.irm_axis)
+        self._irm_axis.setCurrentText({"X axis":"X","Y axis":"Y","Z axis":"Z (up-axis)"}.get(ia.irm_axis,ia.irm_axis))
         self._irm_ramp.setCurrentText(ia.irm_ramp)
         self._irm_steps.setValue(ia.irm_steps)
         self._irm_voltage_slope.setValue(ia.irm_voltage_slope)
         self._irm_voltage_intercept.setValue(ia.irm_voltage_intercept)
         self._irm_max_voltage.setValue(ia.irm_max_voltage)
+        pulse = cfg.pulse_irm
+        self._pulse_calibration_summary.setText(
+            f"{pulse.system or 'Not configured'}; axial {'enabled' if pulse.axial_enabled else 'disabled'}, transverse {'enabled' if pulse.transverse_enabled else 'disabled'}, "
+            f"backfield {'enabled' if pulse.backfield_enabled else 'disabled'}.\n"
+            f"Axial field limit {pulse.axial_max_mT:g} mT; capacitor limit {pulse.axial_capacitor_max_v:g} V. "
+            f"Transverse field limit {pulse.transverse_max_mT:g} mT; capacitor limit {pulse.transverse_capacitor_max_v:g} V.\n"
+            f"MCC board {pulse.board}, DAC {pulse.dac_channel}, capacitor ADC {pulse.capacitor_adc_channel}, fire/trim bits {pulse.fire_bit}/{pulse.trim_bit}.\n"
+            f"Coil position {pulse.coil_position}; calibration: {pulse.calibration_source or 'not configured'}. "
+            "Pulse charge and discharge use calibrated readback; ramp and incremental step settings apply to simulation."
+        )
+        for control in (self._irm_ramp,self._irm_steps,self._irm_voltage_slope,self._irm_voltage_intercept,self._irm_max_voltage):
+            control.setEnabled(cfg.general.nocomm or not pulse.calibration_source)
         self._arm_peak_af.setValue(ia.arm_peak_af)
         self._arm_bias.setValue(ia.arm_bias)
+        self._arm_calibration_summary.setText(
+            f"{'Enabled' if ia.arm_enabled else 'Disabled'}; bias limit {ia.arm_bias_max_mT:g} mT; "
+            f"{ia.arm_voltage_per_mT:g} V/mT; voltage limit {ia.arm_voltage_max:g} V.\n"
+            f"MCC board {ia.arm_board}, DAC {ia.arm_dac_channel}, active-low gate {ia.arm_gate_bit}.\n"
+            f"Calibration: {ia.arm_calibration_source or 'not configured'}. ARM uses one axial AF pass."
+        )
 
         af = cfg.af_demag
         self._af_board.setValue(af.board)
@@ -710,6 +743,13 @@ class SettingsPanel(QtWidgets.QWidget):
         self._af_settle.setValue(af.settle)
         self._af_tumble.setChecked(af.tumble)
         self._af_tumble_pause.setValue(af.tumble_pause)
+        self._af_calibration_summary.setText(
+            f"{'Enabled' if af.enabled else 'Disabled'} {af.system}; coil position {af.coil_position}.\n"
+            f"Axial: {len(af.axial_calibration)} points, {af.axial_frequency_hz:g} Hz, {af.axial_min_mT:g}–{af.axial_max_mT:g} mT.\n"
+            f"Transverse: {len(af.transverse_calibration)} points, {af.transverse_frequency_hz:g} Hz, {af.transverse_min_mT:g}–{af.transverse_max_mT:g} mT.\n"
+            f"Relays {af.axial_relay_bit}/{af.transverse_relay_bit}; calibration: {af.calibration_source or 'not configured'}.\n"
+            "Live AF uses all three passes; AFZ uses the axial pass. Calibrated timing comes from the imported profile."
+        )
 
         v = cfg.vacuum
         self._vac_port.setCurrentText(v.port)
@@ -746,6 +786,16 @@ class SettingsPanel(QtWidgets.QWidget):
         self._ch_baud.setCurrentText(str(ch.baud))
         self._ch_speed_xy.setValue(ch.speed_xy)
         self._ch_speed_z.setValue(ch.speed_z)
+        station = cfg.motor_station
+        imported = bool(station.calibration_source)
+        for control in (self._ch_port, self._ch_baud, self._ch_speed_xy, self._ch_speed_z):
+            control.setEnabled(not imported)
+        if imported:
+            self._ch_baud.setCurrentText(str(station.baud))
+            wiring = "; ".join(f"{axis}: {port} @{station.addresses.get(axis, '?')}" for axis, port in station.ports.items())
+            self._motor_station_summary.setText(f"{wiring}\nNative speeds and travel calibration from {station.calibration_source}")
+        else:
+            self._motor_station_summary.setText("No native station calibration imported.")
         self._ch_home_x.setValue(ch.home_x)
         self._ch_home_y.setValue(ch.home_y)
         self._ch_home_z.setValue(ch.home_z)

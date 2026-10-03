@@ -6,6 +6,7 @@ serves as the core abstraction boundary for later real-backend adapters.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 import dataclasses
 import hashlib
 import json
@@ -92,6 +93,30 @@ def _scale_motor_speed(base: int, scale_pct: float, *, minimum: int = 100_000) -
 def _build_motor_controller_config(config: AppConfig) -> MotorControllerConfig:
     """Map legacy RapidMain changer settings into motor controller settings."""
     defaults = MotorControllerConfig()
+    if config.motor_station.calibration_source:
+        from dataclasses import fields
+        import math
+        values = config.motor_station.controller
+        known = {item.name for item in fields(MotorControllerConfig)}
+        if any(key not in known or not math.isfinite(float(value)) for key, value in values.items()):
+            raise ValueError("Invalid native motor calibration.")
+        required = {"slot_min", "slot_max", "one_step", "changer_speed", "turner_speed",
+                    "turning_motor_full_rotation", "turning_motor_1rps", "lift_speed_slow",
+                    "lift_speed_normal", "lift_speed_fast", "lift_acceleration", "meas_pos",
+                    "sample_bottom", "sample_height", "updown_torque_factor", "updown_max_torque", "pickup_torque_throttle"}
+        if not required.issubset(values):
+            raise ValueError("Incomplete native motor calibration: " + ", ".join(sorted(required - values.keys())))
+        if values["one_step"] == 0 or values["turning_motor_full_rotation"] == 0 or values["slot_max"] < values["slot_min"]:
+            raise ValueError("Invalid native motor travel calibration.")
+        positive = required - {"one_step", "turning_motor_full_rotation", "meas_pos", "sample_bottom"}
+        if any(values[key] <= 0 for key in positive) or values["pickup_torque_throttle"] > 1 or values["updown_torque_factor"] > 100 or values["updown_max_torque"] > 32767:
+            raise ValueError("Invalid native motor speed/torque calibration.")
+        fractional = {"one_step", "pickup_torque_throttle"}
+        if any(not float(value).is_integer() for key, value in values.items() if key not in fractional):
+            raise ValueError("Native motor integer settings must not contain fractional units.")
+        values = dict(values, meas_pos=config.motion.meas_pos, sample_bottom=config.motion.sample_bottom,
+                      sample_height=config.motion.sample_height)
+        return MotorControllerConfig(**{key: float(value) if key in fractional else int(value) for key, value in values.items()})
     xy_pct = _to_speed_percent(config.changer.speed_xy, default=20.0)
     z_pct = _to_speed_percent(config.changer.speed_z, default=15.0)
     return MotorControllerConfig(
@@ -250,7 +275,6 @@ class NoCommBackend:
     susceptibility_timeout: float | None = None
 
 
-_DEMAG_LABEL_RE = re.compile(r"^(AF(?:MAX|Z)?|IRM|ARM)\s*(\d+(?:\.\d+)?)?(?:_([0-9]+(?:\.[0-9]+)?))?$")
 _THERMAL_LABEL_RE = re.compile(r"^(TT|TH|TEMP)\s*(\d+(?:\.\d+)?)$")
 _MEASUREMENT_ONLY_LABEL_RE = re.compile(r"^(?:NRM(?:-[XYZ])?|REPEAT\d+)$")
 
@@ -263,13 +287,12 @@ def _parse_demag_label(label: str) -> tuple[str, float | None, float | None]:
         where ``bias_mT`` is populated only for labels like ``ARM100_0.5``.
     """
     text = (label or "").strip().upper()
-    match = _DEMAG_LABEL_RE.match(text)
-    if not match:
+    from .treatment_labels import parse_field_treatment
+    try:
+        request = parse_field_treatment(text)
+    except ValueError:
         return text, None, None
-    prefix = match.group(1)
-    value = float(match.group(2)) if match.group(2) else None
-    bias = float(match.group(3)) if match.group(3) else None
-    return prefix, value, bias
+    return request.family, request.field_mT, request.bias_mT
 
 
 def _parse_thermal_label(label: str) -> tuple[str, float | None]:
@@ -295,7 +318,10 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
     """
 
     preflight_timeout: float | None = 12.0
-    step_timeout: float | None = 45.0
+    # Physical multi-pass ramps and motion are bounded by their adapters.
+    # An outer worker timeout cannot cancel those calls or safely interrupt
+    # their cleanup; use the installed cooperative halt check instead.
+    step_timeout: float | None = None
     # Bracketed acquisition is bounded by serial/motion adapters and performs
     # safe whole-block recovery. A worker-thread timeout cannot cancel physical
     # I/O and eight seconds is shorter than a normal six-latch acquisition.
@@ -314,17 +340,17 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         holder_store: "HolderStateStore | None" = None,
         susceptibility_backend=None,
         clock=None,
+        safety_store=None,
     ) -> None:
         self._config = config
+        from .hardware_safety import HardwareSafetyStore, default_safety_path
+        self._safety_store = safety_store if safety_store is not None else HardwareSafetyStore(default_safety_path())
         # Injected only by tests; production uses the real wall/monotonic clock
         # so the VB6 ARC and settling delays are actually observed.
         self._acquisition_clock = clock
-        self._motor_config = _build_motor_controller_config(config)
+        self._backend_errors: list[str] = []
         self._motor_communication_logger = CommunicationLogger(
             "DC_MOTOR", port=str(config.changer.port), max_payload_chars=2048
-        )
-        self._client = MotorSerialClient(
-            self._motor_config, trace=self._trace_motor_communication
         )
         self._axes = {
             "changer_x": MotorAxisConfig("ChangerX", 1, 1),
@@ -332,7 +358,21 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             "updown": MotorAxisConfig("UpDown", 3, 3),
             "changer_y": MotorAxisConfig("ChangerY", 4, 4),
         }
-        self._backend_errors: list[str] = []
+        self._client = None
+        self._motor_config = None
+        try:
+            self._motor_config = _build_motor_controller_config(config)
+            if config.motor_station.calibration_source:
+                from rapidpy_common.motor_routing import RoutedMotorSerialClient
+                station = config.motor_station
+                for key, axis in self._axes.items():
+                    axis.port = station.ports.get(key, "")
+                    axis.address = station.addresses.get(key, 0)
+                self._client = RoutedMotorSerialClient(self._motor_config, list(self._axes.values()), trace=self._trace_motor_communication)
+            else:
+                self._client = MotorSerialClient(self._motor_config, trace=self._trace_motor_communication)
+        except Exception as exc:
+            self._backend_errors.append(f"DC motor station configuration is unavailable: {exc}")
         nocomm = bool(config.general.nocomm)
 
         from .diagnostic_services import (
@@ -342,11 +382,21 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         )
 
         self._measurement = self._build_component("SQUID", build_squid_backend, config.squid, nocomm=nocomm)
-        self._irm_arm = self._build_component("IRM/ARM", build_irm_arm_backend, config.irm_arm, nocomm=nocomm)
+        self._irm_arm = self._build_component("IRM/ARM", build_irm_arm_backend, config.irm_arm, nocomm=True) if nocomm else None
         self._af_demag = self._build_component(
             "AF demagnetizer", build_af_demag_backend, config.af_demag, nocomm=nocomm
         )
+        self._arm_bias = None
+        if not nocomm and config.irm_arm.arm_enabled:
+            from .arm_bias import ArmBiasBackend
+            self._arm_bias = self._build_component("ARM bias", lambda cfg, **_kw: ArmBiasBackend(cfg), config.irm_arm, nocomm=False)
         self._susceptibility = susceptibility_backend
+        self._pulse_irm = None
+        if not nocomm and (config.pulse_irm.axial_enabled or config.pulse_irm.transverse_enabled):
+            from .pulse_treatment import PulseIrmBackend
+            def pulse_builder(cfg,**_kwargs):
+                return PulseIrmBackend(cfg,getattr(self._af_demag,"_controller",None))
+            self._pulse_irm = self._build_component("Pulse IRM",pulse_builder,config.pulse_irm,nocomm=False)
 
         self._connected = False
         self._last_hole = 1
@@ -364,12 +414,16 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._operator = str(config.general.operator or "")
         self._last_holder_outcome: "HolderMeasurementOutcome | None" = None
         self._susceptibility_records: list["SusceptibilityAcquisitionRecord"] = []
+        self._af_treatment_records = []
+        self._pulse_treatment_records = []
         self._halt_check: Callable[[], bool] | None = None
 
     def _trace_motor_communication(
         self, direction: str, payload: str, detail: str
     ) -> None:
         logger = self._motor_communication_logger
+        if detail.startswith("port="):
+            logger.port = detail.partition(" ")[0].removeprefix("port=")
         if direction == "TX":
             logger.sent(payload, detail=detail)
         elif direction == "RX":
@@ -447,6 +501,72 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._halt_check = check
 
     @property
+    def af_treatment_records(self):
+        return tuple(self._af_treatment_records)
+
+    @property
+    def has_unresolved_rotation_fault(self):
+        if self._durable_fault_family() in {"rrm", "unknown"}:
+            return True
+        for record in reversed(getattr(self, "_af_treatment_records", ())):
+            if record.schema.startswith("rapidpy.rrm."):
+                return not record.safe_state_confirmed
+        return False
+
+    @property
+    def pulse_treatment_records(self):
+        return tuple(self._pulse_treatment_records)
+
+    @property
+    def has_unresolved_pulse_fault(self):
+        if self._durable_fault_family() in {"pulse", "unknown"}:
+            return True
+        records = getattr(self,"_pulse_treatment_records",())
+        return bool(records and not records[-1].safe_state_confirmed)
+
+    def _safety_profile(self):
+        return {name: dataclasses.asdict(getattr(self._config, name))
+                for name in ("motor_station", "changer", "motion", "af_demag", "irm_arm", "pulse_irm")}
+
+    def _durable_fault_family(self):
+        from .hardware_safety import HardwareSafetyError
+        store = getattr(self, "_safety_store", None)
+        if store is None or self._config.general.nocomm:
+            return ""
+        try:
+            pending = store.pending()
+            return pending["family"] if pending else ""
+        except HardwareSafetyError:
+            return "unknown"
+
+    @property
+    def has_unresolved_hardware_fault(self):
+        return bool(self._durable_fault_family()) or self.has_unresolved_rotation_fault or self.has_unresolved_pulse_fault
+
+    def _begin_safety_operation(self, family, plan, *, bias_mT=None):
+        store = getattr(self, "_safety_store", None)
+        if store is None:  # private object.__new__ fixtures have no native constructor
+            return None
+        snapshot = dataclasses.asdict(plan)
+        if family == "arm":
+            snapshot["bias_mT"] = bias_mT
+        return store.begin(family, snapshot, self._safety_profile(),
+                           sample_id=self._sample_name or "sample", run_id=self._run_id)
+
+    def _finish_safety_operation(self, token, record):
+        if token is not None:
+            self._safety_store.finish(token, self._safety_profile(), record)
+
+    @contextmanager
+    def _safety_operation(self, family, plan, *, bias_mT=None):
+        store = getattr(self, "_safety_store", None)
+        if store is None:
+            yield None
+            return
+        with store.operation_lease():
+            yield self._begin_safety_operation(family, plan, bias_mT=bias_mT)
+
+    @property
     def acquisition_error(self) -> str:
         return self._acquisition_error
 
@@ -461,6 +581,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             self._bracketed,
             self._af_demag,
             self._irm_arm,
+            getattr(self, "_arm_bias", None),
             getattr(self, "_susceptibility", None),
         ):
             if source is None or bool(getattr(source, "simulated", False)):
@@ -664,9 +785,29 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         Explicit measurement-only labels use the measurement backend contract.
         """
         step_type, field_mT, bias_mT = _parse_demag_label(label)
+        if label.strip().upper().startswith("RRM"):
+            if not self._config.general.nocomm:
+                blockers = self._rrm_blockers(label)
+                if blockers: raise HardwareError("; ".join(blockers))
+                self._execute_rrm_treatment(label)
+            else:
+                self._measurement.set_demag_step(label)
+            self._treatment_label = str(label)
+            return
+        if not self._config.general.nocomm and (
+            step_type in {"AF", "AFMAX", "AFZ", "ARM"}
+            or (step_type == "IRM" and field_mT is not None)
+        ):
+            blockers = self._actuator_blockers(label, step_type, field_mT, bias_mT)
+            if blockers:
+                raise HardwareError("; ".join(blockers))
         if step_type in {"AF", "AFMAX", "AFZ"}:
             from .diagnostic_services import plan_af_demag_command
 
+            if not self._config.general.nocomm:
+                self._execute_af_treatment(label)
+                self._treatment_label = str(label)
+                return
             method = getattr(self._af_demag, "apply_af", None)
             if callable(method):
                 method(plan_af_demag_command(label, self._config.af_demag))
@@ -677,6 +818,11 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         if step_type == "IRM":
             if field_mT is None:
                 raise ValueError(f"IRM step requires numeric field value: {label}")
+            if not self._config.general.nocomm:
+                from .treatment_labels import parse_field_treatment
+                self._execute_pulse_treatment(field_mT, axis=parse_field_treatment(label).axis)
+                self._treatment_label = str(label)
+                return
             method = getattr(self._irm_arm, "apply_irm", None)
             if callable(method):
                 method(
@@ -692,6 +838,11 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         if step_type == "ARM":
             if field_mT is None:
                 field_mT = self._config.irm_arm.arm_peak_af
+            if not self._config.general.nocomm:
+                self._execute_af_treatment(label, peak_af_mT=field_mT,
+                                           bias_mT=self._config.irm_arm.arm_bias if bias_mT is None else bias_mT)
+                self._treatment_label = str(label)
+                return
             method = getattr(self._irm_arm, "apply_arm", None)
             if callable(method):
                 method(
@@ -756,10 +907,12 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         susceptibility_checked = False
         apply_thermal = getattr(self._measurement, "apply_thermal", None)
         for label in labels:
-            step_type, field_mT, _bias_mT = _parse_demag_label(label)
-            if step_type in {"AF", "AFMAX", "AFZ", "ARM"}:
+            if label.strip().upper().startswith("RRM"):
+                blockers.extend(self._rrm_blockers(label))
                 continue
-            if step_type == "IRM" and field_mT is not None:
+            step_type, field_mT, bias_mT = _parse_demag_label(label)
+            if step_type in {"AF", "AFMAX", "AFZ", "ARM"} or (step_type == "IRM" and field_mT is not None):
+                blockers.extend(self._actuator_blockers(label, step_type, field_mT, bias_mT))
                 continue
             _thermal_type, temperature_c = _parse_thermal_label(label)
             if temperature_c is not None:
@@ -790,11 +943,170 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             return PreflightResult.blocked(*blockers)
         return PreflightResult.pass_ok()
 
+    def _actuator_blockers(self, label: str, kind: str, field: float | None, bias: float | None) -> list[str]:
+        """Read-only request validation; no connection, ramp, or state mutation."""
+        from .diagnostic_services import DiagnosticContractError, plan_af_demag_command, validate_irm_request, validate_arm_request
+
+        is_af = kind in {"AF", "AFMAX", "AFZ"}
+        is_arm = kind == "ARM"
+        backend = getattr(self, "_arm_bias", None) if is_arm else (self._af_demag if is_af else getattr(self,"_pulse_irm",None))
+        method = "set_bias_mT" if is_arm else ("apply_calibrated_af" if is_af else "make_circuit")
+        reasons = []
+        if self.has_unresolved_rotation_fault:
+            reasons.append("RRM rotation/field safe state is unverified; stop recovery is required")
+        if self.has_unresolved_pulse_fault:
+            reasons.append("capacitor/relay safe state is unverified; run discharge recovery before another treatment")
+        if backend is None or not callable(getattr(backend, method, None)):
+            reasons.append("required actuator adapter is unavailable")
+        elif bool(getattr(backend, "simulated", False)):
+            reasons.append("simulated actuator cannot execute a live treatment")
+        else:
+            connected = getattr(backend, "is_connected", None)
+            if callable(connected):
+                try:
+                    if not connected():
+                        reasons.append("actuator adapter is disconnected")
+                except Exception as exc:
+                    reasons.append(f"actuator readiness unavailable: {exc}")
+        try:
+            if is_af:
+                from .af_treatment import plan_af_treatment
+                plan_af_treatment(label, self._config.af_demag, self._config.motion.sample_height)
+            elif kind == "IRM":
+                from .treatment_labels import parse_field_treatment
+                self._plan_pulse_treatment(field, axis=parse_field_treatment(label).axis)
+            else:
+                cfg = self._config.irm_arm
+                from .arm_bias import plan_arm_bias
+                from .af_treatment import plan_af_treatment
+                peak = cfg.arm_peak_af if field is None else field
+                plan_arm_bias(cfg.arm_bias if bias is None else bias, cfg)
+                plan_af_treatment(f"AFZ{peak:g}", self._config.af_demag, self._config.motion.sample_height)
+                reasons.extend(self._actuator_blockers(f"AFZ{peak:g}", "AFZ", peak, None))
+        except (TypeError, ValueError, MotorHardwareError, DiagnosticContractError) as exc:
+            reasons.append(str(exc))
+        return [f"Treatment {label!r} blocked: {reason}" for reason in reasons]
+
+    def _plan_pulse_treatment(self,field, *, axis=None):
+        from .pulse_irm import plan_pulse_irm
+        from .pulse_circuit import validate_pulse_bindings
+        from .pulse_treatment import pulse_motion_target
+        axis = str(self._config.irm_arm.irm_axis if axis is None else axis).upper().strip()
+        if axis.startswith("Z"):
+            coil,angle = "axial",0
+        elif axis in {"X","X AXIS","Y","Y AXIS"}:
+            coil,angle = "transverse",90 if axis.startswith("Y") else 0
+        else:
+            raise ValueError("Pulse IRM axis must be Z, X or Y.")
+        cfg = self._config.pulse_irm
+        validate_pulse_bindings(cfg)
+        pulse_motion_target(cfg,self._config.motion.sample_height)
+        return plan_pulse_irm(field,coil,cfg),angle
+
+    def _execute_pulse_treatment(self,field, *, axis=None):
+        from .pulse_treatment import PulseTreatmentService,PulseTreatmentError
+        from .squid_transport import MotorTurningController,MotorVerticalController
+        plan,angle = self._plan_pulse_treatment(field, axis=axis)
+        self._ensure_connected()
+        options = {"should_cancel":self._halt_check}
+        if self._acquisition_clock is not None:
+            options.update(sleep=self._acquisition_clock.sleep,monotonic=self._acquisition_clock.monotonic,clock=self._acquisition_clock.now)
+        circuit = self._pulse_irm.make_circuit(**options)
+        service = PulseTreatmentService(circuit,MotorVerticalController(self._client,self._axes["updown"]),
+                                       MotorTurningController(self._client,self._axes["turning"]),clock=options.get("clock"))
+        with self._safety_operation("pulse", plan) as token:
+            try:
+                record = service.execute(plan,sample_id=self._sample_name or "sample",run_id=self._run_id,
+                                         sample_height=self._config.motion.sample_height,orientation_deg=angle)
+            except PulseTreatmentError as exc:
+                self._pulse_treatment_records.append(exc.record)
+                self._finish_safety_operation(token, exc.record)
+                raise HardwareError(f"Pulse treatment failed: {exc}") from exc
+            self._pulse_treatment_records.append(record)
+            self._finish_safety_operation(token, record)
+
+    def _execute_af_treatment(self, label: str, *, peak_af_mT=None, bias_mT=None) -> None:
+        from .af_treatment import AfTreatmentError, AfTreatmentService, AfTreatmentPlan, plan_af_treatment
+        from .squid_transport import MotorTurningController, MotorVerticalController
+
+        af_label = label if peak_af_mT is None else f"AFZ{peak_af_mT:g}"
+        plan = plan_af_treatment(af_label, self._config.af_demag, self._config.motion.sample_height)
+        if peak_af_mT is not None:
+            plan = AfTreatmentPlan(label, plan.target_position, plan.passes)
+        self._ensure_connected()
+        service = AfTreatmentService(
+            self._af_demag,
+            MotorVerticalController(self._client, self._axes["updown"]),
+            MotorTurningController(self._client, self._axes["turning"]),
+            should_cancel=self._halt_check,
+            bias_adapter=self._arm_bias if peak_af_mT is not None else None,
+            bias_mT=bias_mT,
+            **({"sleep": self._acquisition_clock.sleep, "clock": self._acquisition_clock.now}
+               if self._acquisition_clock is not None else {}),
+        )
+        with self._safety_operation("arm" if peak_af_mT is not None else "af", plan, bias_mT=bias_mT) as token:
+            try:
+                record = service.execute(plan, sample_id=self._sample_name or "sample", run_id=self._run_id)
+            except AfTreatmentError as exc:
+                self._af_treatment_records.append(exc.record)
+                self._finish_safety_operation(token, exc.record)
+                raise HardwareError(f"AF treatment failed: {exc}") from exc
+            self._af_treatment_records.append(record)
+            self._finish_safety_operation(token, record)
+
+    def _rrm_blockers(self, label):
+        reasons = []
+        try:
+            from .rrm_treatment import plan_rrm_treatment
+            plan = plan_rrm_treatment(label, self._config)
+            if plan.bias_mT is not None:
+                bias = getattr(self, "_arm_bias", None)
+                if bias is None or not callable(getattr(bias, "set_bias_mT", None)) or bias.simulated or not bias.is_connected():
+                    reasons.append("RRM bias requires a connected physical ARM bias adapter")
+            if self.has_unresolved_rotation_fault or self.has_unresolved_pulse_fault:
+                reasons.append("instrument safe state is unverified; recovery is required")
+            if self._af_demag is None or not callable(getattr(self._af_demag, "apply_calibrated_af", None)):
+                reasons.append("calibrated AF adapter unavailable")
+            elif self._af_demag.simulated or not self._af_demag.is_connected():
+                reasons.append("a connected physical AF adapter is required")
+            if not callable(getattr(self._af_demag, "set_halt_check", None)):
+                reasons.append("RRM AF adapter requires cooperative rotation monitoring")
+        except (ValueError, TypeError, MotorHardwareError) as exc:
+            reasons.append(str(exc))
+        return [f"RRM {label!r} blocked: {reason}" for reason in reasons]
+
+    def _execute_rrm_treatment(self, label):
+        from .rrm_treatment import RrmTreatmentService, plan_rrm_treatment
+        from .af_treatment import AfTreatmentError
+        from .squid_transport import MotorTurningController, MotorVerticalController
+        plan = plan_rrm_treatment(label, self._config)
+        self._ensure_connected()
+        options = {"should_cancel": self._halt_check, "bias_adapter": getattr(self, "_arm_bias", None) if plan.bias_mT is not None else None}
+        if self._acquisition_clock is not None:
+            options.update(sleep=self._acquisition_clock.sleep, monotonic=self._acquisition_clock.monotonic, clock=self._acquisition_clock.now)
+        service = RrmTreatmentService(self._af_demag, MotorVerticalController(self._client, self._axes["updown"]),
+                                      MotorTurningController(self._client, self._axes["turning"]), **options)
+        with self._safety_operation("rrm", plan) as token:
+            try:
+                record = service.execute(plan, sample_id=self._sample_name or "sample", run_id=self._run_id)
+            except AfTreatmentError as exc:
+                self._af_treatment_records.append(exc.record)
+                self._finish_safety_operation(token, exc.record)
+                raise HardwareError(f"RRM treatment failed: {exc}") from exc
+            self._af_treatment_records.append(record)
+            self._finish_safety_operation(token, record)
+
     # -- preflight ---------------------------------------------------------
 
     def preflight(self) -> PreflightResult:
         blockers: list[str] = list(self._backend_errors)
         warnings: list[str] = []
+        if self._durable_fault_family():
+            blockers.append("A persisted unfinished hardware operation requires verified recovery before motion.")
+        if self.has_unresolved_rotation_fault:
+            blockers.append("RRM stationary rotation/field is unverified; stop recovery is required before motion.")
+        if self.has_unresolved_pulse_fault:
+            blockers.append("Pulse capacitor/relay safe state is unverified; discharge recovery is required before motion.")
         if self._config.general.nocomm:
             return PreflightResult.pass_ok()
 
@@ -815,7 +1127,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         if blockers:
             return PreflightResult.blocked(*blockers, warnings=tuple(warnings))
 
-        if self._connected and _to_bool_connected(self._measurement.is_connected):
+        if self._connected and self._client is not None and _to_bool_connected(self._client.is_connected) and _to_bool_connected(self._measurement.is_connected):
             self._ensure_bracketed()
             return PreflightResult(
                 ok=not blockers, blockers=tuple(blockers), warnings=tuple(warnings + self._acquisition_warnings())
@@ -826,7 +1138,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             blockers.append("Changer serial port is not configured.")
             return PreflightResult.blocked(*blockers, warnings=tuple(warnings))
 
-        baud = int(self._config.changer.baud or 0)
+        baud = int(self._config.motor_station.baud if self._config.motor_station.calibration_source else self._config.changer.baud or 0)
         if baud <= 0:
             baud = 9600
 
@@ -1122,9 +1434,53 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._direction_up = True
 
     def return_to_safe_state(self) -> None:
+        store = getattr(self, "_safety_store", None)
+        pending = store.pending(self._safety_profile()) if store is not None and not self._config.general.nocomm else None
+        if pending:
+            with store.operation_lease():
+                pending = store.pending(self._safety_profile())
+                if pending:
+                    self._recover_durable_treatment(pending)
+        records = getattr(self,"_pulse_treatment_records",())
+        if records and not records[-1].safe_state_confirmed:
+            from .pulse_circuit import PulseCircuitError
+            pulse = getattr(self,"_pulse_irm",None)
+            if pulse is None:
+                raise HardwareError("Pulse safe state is unverified; motor return and relay reset are inhibited.")
+            options = {}
+            if self._acquisition_clock is not None:
+                options.update(sleep=self._acquisition_clock.sleep,monotonic=self._acquisition_clock.monotonic,clock=self._acquisition_clock.now)
+            try:
+                recovery = pulse.make_circuit(**options).recover_safe_state(sample_id=self._sample_name or "sample",run_id=self._run_id)
+            except PulseCircuitError as exc:
+                self._pulse_treatment_records.append(exc.record)
+                raise HardwareError(f"Pulse discharge recovery failed; motor return and relay reset inhibited: {exc}") from exc
+            self._pulse_treatment_records.append(recovery)
+        if self.has_unresolved_rotation_fault:
+            from .rrm_treatment import RrmTreatmentService
+            from .af_treatment import AfTreatmentError
+            from .squid_transport import MotorTurningController, MotorVerticalController
+            prior = next(record for record in reversed(self._af_treatment_records) if record.schema.startswith("rapidpy.rrm."))
+            service = RrmTreatmentService(self._af_demag, MotorVerticalController(self._client, self._axes["updown"]),
+                                          MotorTurningController(self._client, self._axes["turning"]), bias_adapter=getattr(self, "_arm_bias", None) if prior.plan.bias_mT is not None else None)
+            try:
+                recovery = service.recover(prior.plan, sample_id=self._sample_name or prior.sample_id, run_id=self._run_id or prior.run_id)
+            except AfTreatmentError as exc:
+                self._af_treatment_records.append(exc.record)
+                raise HardwareError(f"RRM stop recovery failed; lift return inhibited: {exc}") from exc
+            self._af_treatment_records.append(recovery)
+        bias = getattr(self, "_arm_bias", None)
+        bias_error = ""
+        if bias is not None and callable(getattr(bias, "clear_bias", None)):
+            try:
+                bias.clear_bias()
+            except Exception as exc:
+                bias_error = f"ARM bias reset failed: {exc}"
         if not self._connected or not _to_bool_connected(self._client.is_connected):
+            if bias_error:
+                raise HardwareError(bias_error)
             return
-        errors: list[str] = []
+        errors: list[str] = [bias_error] if bias_error else []
         try:
             reset_af = getattr(self._af_demag, "reset_field", None)
             if callable(reset_af):
@@ -1152,7 +1508,152 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             self._motor_communication_logger.error(detail)
             raise QueueAutomationError(detail)
 
+    def _recover_durable_treatment(self, pending):
+        """Recover only the persisted station; never replay its treatment."""
+        sample_id, run_id = pending["sample_id"], pending["run_id"]
+        token = pending["token"]
+        if pending["family"] == "pulse":
+            from .pulse_circuit import PulseCircuitError
+            if self._pulse_irm is None:
+                raise HardwareError("The latched pulse station is unavailable for discharge recovery.")
+            options = {}
+            if self._acquisition_clock is not None:
+                options.update(sleep=self._acquisition_clock.sleep, monotonic=self._acquisition_clock.monotonic, clock=self._acquisition_clock.now)
+            try:
+                record = self._pulse_irm.make_circuit(**options).recover_safe_state(sample_id=sample_id, run_id=run_id)
+            except PulseCircuitError as exc:
+                self._pulse_treatment_records.append(exc.record)
+                self._finish_safety_operation(token, exc.record)
+                raise HardwareError(f"Persistent pulse discharge recovery failed: {exc}") from exc
+            record = self._recover_pulse_motion(record, pending)
+            self._pulse_treatment_records.append(record)
+            self._finish_safety_operation(token, record)
+            if not record.safe_state_confirmed:
+                raise HardwareError("Pulse discharge succeeded but specimen motion recovery is unverified: " + "; ".join(record.cleanup_errors))
+            return
+        if pending["family"] in {"af", "arm"}:
+            self._recover_durable_af(pending)
+            return
+        from .rrm_treatment import RrmTreatmentPlan, RrmTreatmentService
+        from .af_treatment import CalibratedAfRamp, AfTreatmentError
+        from .squid_transport import MotorTurningController, MotorVerticalController
+        snapshot = dict(pending["plan"])
+        snapshot["ramp"] = CalibratedAfRamp(**snapshot["ramp"])
+        plan = RrmTreatmentPlan(**snapshot)
+        if self._client is None or self._af_demag is None:
+            raise HardwareError("The latched RRM station is unavailable for stop recovery.")
+        # Reset on the existing ADwin board: booting could switch relays while
+        # an unknown process is still running. No treatment command is sent.
+        self._af_demag.recover_field()
+        if not _to_bool_connected(self._client.is_connected):
+            station = self._config.motor_station
+            self._client.connect(self._config.changer.port, baudrate=station.baud)
+            self._connected = True
+        # The recovery service independently verifies stop before returning
+        # reference/lift. Route its reset to the non-booting recovery method.
+        class RecoveryAdapter:
+            def reset_field(_self):
+                return self._af_demag.recover_field()
+        service = RrmTreatmentService(RecoveryAdapter(), MotorVerticalController(self._client, self._axes["updown"]),
+                                      MotorTurningController(self._client, self._axes["turning"]),
+                                      bias_adapter=self._arm_bias if plan.bias_mT is not None else None)
+        if plan.bias_mT is not None and self._arm_bias is None:
+            raise HardwareError("Latched RRM bias adapter is unavailable; recovery remains pending.")
+        try:
+            record = service.recover(plan, sample_id=sample_id, run_id=run_id)
+        except AfTreatmentError as exc:
+            self._af_treatment_records.append(exc.record)
+            self._finish_safety_operation(token, exc.record)
+            raise HardwareError(f"Persistent RRM stop recovery failed: {exc}") from exc
+        self._af_treatment_records.append(record)
+        self._finish_safety_operation(token, record)
+
+    def _connect_recovery_transport(self):
+        if self._client is None:
+            raise HardwareError("Motor station unavailable for recovery.")
+        if not _to_bool_connected(self._client.is_connected):
+            cfg = self._config
+            baud = cfg.motor_station.baud if cfg.motor_station.calibration_source else cfg.changer.baud
+            self._client.connect(cfg.changer.port, baudrate=baud)
+        self._connected = True
+
+    def _recover_pulse_motion(self, circuit_record, pending):
+        from datetime import datetime, timezone
+        from .pulse_treatment import PulseTreatmentRecord
+        from .pulse_circuit import PulsePhase
+        from .squid_transport import MotorTurningController, MotorVerticalController
+        phases, errors = [], []
+        def action(name, operation, check=lambda value: True):
+            try:
+                value = operation()
+                if not check(value):
+                    raise HardwareError("Recovery motion was not verified.")
+                phases.append(PulsePhase(name, datetime.now(timezone.utc).isoformat(), True, ""))
+                return True
+            except Exception as exc:
+                phases.append(PulsePhase(name, datetime.now(timezone.utc).isoformat(), False, str(exc)))
+                errors.append(f"{name}: {exc}")
+                return False
+        if circuit_record.safe_state_confirmed is not True:
+            errors.append("Capacitor/relay discharge is unverified; motor recovery withheld.")
+        elif action("connect_recovery_transport", self._connect_recovery_transport):
+            turning = MotorTurningController(self._client, self._axes["turning"])
+            vertical = MotorVerticalController(self._client, self._axes["updown"])
+            if action("stationary_turning", turning.stop_spin, lambda result: result.success is True):
+                if action("restore_reference", turning.restore_spin_reference, lambda result: result.ok is True and math.isfinite(result.actual)):
+                    action("home_after", vertical.home_to_top, lambda result: result.ok is True and math.isfinite(result.actual))
+        return PulseTreatmentRecord("irm-" + uuid.uuid4().hex, pending["sample_id"], pending["run_id"], 0, 0,
+                                    circuit_record, tuple(phases), not errors, "", tuple(errors),
+                                    schema="rapidpy.irm.recovery_treatment.v1")
+
+    def _recover_durable_af(self, pending):
+        from datetime import datetime, timezone
+        from .af_treatment import AfTreatmentPlan, AfPass, CalibratedAfRamp, AfTreatmentPhase, AfTreatmentRecord, AfTreatmentError
+        from .squid_transport import MotorTurningController, MotorVerticalController
+        snapshot = dict(pending["plan"])
+        bias_mT = snapshot.pop("bias_mT", None)
+        snapshot["passes"] = tuple(AfPass(item["angle_deg"], CalibratedAfRamp(**item["ramp"]), item["pause_before_s"]) for item in snapshot["passes"])
+        plan = AfTreatmentPlan(**snapshot)
+        phases, errors = [], []
+        def action(name, operation, check=lambda value: True):
+            try:
+                value = operation()
+                if not check(value):
+                    raise HardwareError("Hardware completion was not verified.")
+                phases.append(AfTreatmentPhase(name, True, datetime.now(timezone.utc).isoformat()))
+            except Exception as exc:
+                phases.append(AfTreatmentPhase(name, False, datetime.now(timezone.utc).isoformat(), str(exc)))
+                errors.append(f"{name}: {exc}")
+        if pending["family"] == "arm":
+            action("bias_clear", lambda: self._arm_bias.clear_bias())
+        action("field_recovery", lambda: self._af_demag.recover_field())
+        # Transport setup does not move an axis. Every subsequent movement is
+        # withheld until both independent field cleanup actions succeed.
+        if not errors:
+            action("connect_recovery_transport", self._connect_recovery_transport)
+        if not errors:
+            turning = MotorTurningController(self._client, self._axes["turning"])
+            vertical = MotorVerticalController(self._client, self._axes["updown"])
+            action("stationary_turning", turning.stop_spin, lambda result: result.success is True)
+            if not errors:
+                action("restore_reference", turning.restore_spin_reference, lambda result: result.ok is True and math.isfinite(result.actual))
+            if not errors:
+                action("home_after", vertical.home_to_top, lambda result: result.ok is True and math.isfinite(result.actual))
+        record = AfTreatmentRecord("af-" + uuid.uuid4().hex, pending["sample_id"], pending["run_id"], plan, 0,
+                                   tuple(phases), "", tuple(errors), not errors, False,
+                                   schema=f"rapidpy.{pending['family']}.recovery.v1", bias_mT=bias_mT)
+        self._af_treatment_records.append(record)
+        self._finish_safety_operation(pending["token"], record)
+        if errors:
+            raise AfTreatmentError(record)
+
     def _ensure_connected(self) -> None:
+        if self._durable_fault_family():
+            raise HardwareError("An unfinished hardware operation persists; motor motion is inhibited until verified recovery.")
+        if self.has_unresolved_rotation_fault:
+            raise HardwareError("RRM stationary rotation/field is unverified; motor motion is inhibited until stop recovery.")
+        if self.has_unresolved_pulse_fault:
+            raise HardwareError("Pulse capacitor/relay safe state is unverified; motor motion is inhibited until discharge recovery.")
         if self._connected and _to_bool_connected(self._client.is_connected):
             return
         preflight = self.preflight()

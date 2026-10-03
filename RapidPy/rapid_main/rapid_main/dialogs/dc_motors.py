@@ -458,6 +458,14 @@ class DCMotorDialog(QtWidgets.QDialog):
         self._baud_row.addWidget(self.baud_combo)
         self._baud_row.addStretch(1)
         conn_layout.addLayout(self._baud_row)
+        wiring = getattr(self._backend, "wiring_summary", "")
+        if isinstance(wiring, str) and wiring:
+            self.port_edit.setReadOnly(True)
+            self.baud_combo.setCurrentText(str(self._backend._station_baud))
+            self.baud_combo.setEnabled(False)
+            wiring_label = QtWidgets.QLabel(wiring)
+            wiring_label.setWordWrap(True)
+            conn_layout.addWidget(wiring_label)
 
         self.axis_combo = QtWidgets.QComboBox()
         self.axis_combo.addItems(self._axes)

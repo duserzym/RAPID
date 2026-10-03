@@ -34,6 +34,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import hashlib
 import json
+import re
 import threading
 from concurrent.futures import Future
 from datetime import datetime, timezone
@@ -61,6 +62,7 @@ from rapid_main.magnetometer import (
 from rapid_main.status_codes import OperatorStatus, error_status, status_for_phase, warning_status
 from rapid_main.susceptibility import write_susceptibility_summary_json
 from rapid_main.susceptibility_acquisition import write_susceptibility_acquisition
+from rapid_main.af_treatment import write_af_treatment_record
 from rapid_main.rockmag import write_rockmag_run_artifact
 from rapid_main.thermal import write_thermal_run_artifact
 from rapid_main.workflow import WorkflowPhase, WorkflowStateMachine
@@ -207,6 +209,10 @@ class MeasurementWorker(QtCore.QThread):
             self._backend_susceptibility_records()
         )
         self._susceptibility_artifacts: list[tuple[str, Path]] = []
+        self._af_record_start_count = len(self._backend_af_records())
+        self._af_artifacts: list[tuple[str, Path]] = []
+        self._pulse_record_start_count = len(self._backend_pulse_records())
+        self._pulse_artifacts: list[tuple[str,Path]] = []
         self._phase_history: list[dict[str, object]] = []
         self._published_event_ids: set[int] = set()
 
@@ -765,6 +771,53 @@ class MeasurementWorker(QtCore.QThread):
         except Exception:
             return ()
 
+    def _backend_af_records(self) -> tuple[object, ...]:
+        provider = getattr(self._backend, "af_treatment_records", ())
+        return tuple(provider() if callable(provider) else provider or ())
+
+    def _backend_pulse_records(self):
+        provider = getattr(self._backend,"pulse_treatment_records",())
+        return tuple(provider() if callable(provider) else provider or ())
+
+    def _write_pulse_treatment_artifacts(self):
+        written = {identity for identity,_path in self._pulse_artifacts}
+        for record in self._backend_pulse_records()[self._pulse_record_start_count:]:
+            try:
+                identity = record.treatment_id
+                if identity in written:
+                    continue
+                if not re.fullmatch(r"irm-[0-9a-f]{32}",identity):
+                    raise ValueError("Invalid pulse IRM artifact identity.")
+                path = self._publish_dir/"pulse_treatments"/f"{identity}.json"
+                write_af_treatment_record(path,record)
+            except Exception as exc:
+                message = f"Pulse IRM artifact write failed: {exc}"
+                self._error_messages.append(message)
+                self.error_occurred.emit(message)
+                continue
+            self._pulse_artifacts.append((identity,path))
+            written.add(identity)
+
+    def _write_af_treatment_artifacts(self) -> None:
+        written = {name for name, _path in self._af_artifacts}
+        for record in self._backend_af_records()[self._af_record_start_count:]:
+            identity = record.treatment_id
+            if identity in written:
+                continue
+            try:
+                if not re.fullmatch(r"af-[0-9a-f]{32}", identity):
+                    raise ValueError("Invalid AF treatment artifact identity.")
+                path = self._publish_dir / "af_treatments" / f"{identity}.json"
+                write_af_treatment_record(path, record)
+            except Exception as exc:
+                self._error_messages.append(f"AF treatment artifact write failed: {exc}")
+                self.error_occurred.emit(self._error_messages[-1])
+                if self._comm_logger is not None:
+                    self._comm_logger.error(self._error_messages[-1])
+                continue
+            self._af_artifacts.append((identity, path))
+            written.add(identity)
+
     def _write_susceptibility_acquisition_artifacts(self) -> None:
         """Publish every current-run bridge acquisition, accepted or failed."""
 
@@ -991,6 +1044,8 @@ class MeasurementWorker(QtCore.QThread):
             "susceptibility_acquisition_ids": [
                 name for name, _path in self._susceptibility_artifacts
             ],
+            "af_treatment_ids": [name for name, _path in self._af_artifacts],
+            "pulse_treatment_ids": [name for name,_path in self._pulse_artifacts],
             "calibration_record_ids": [
                 str(record.get("record_id", ""))
                 for record in self._calibration_records
@@ -1054,6 +1109,9 @@ class MeasurementWorker(QtCore.QThread):
 
     def _finish_run(self, *, aborted: bool) -> None:
         self._write_susceptibility_acquisition_artifacts()
+        self._write_af_treatment_artifacts()
+        self._write_pulse_treatment_artifacts()
+        aborted = aborted or bool(self._error_messages)
         self._write_workflow_summary(aborted=aborted)
         self._write_communication_transcript()
         self._write_rockmag_run_artifact(aborted=aborted)
@@ -1258,6 +1316,15 @@ class MeasurementWorker(QtCore.QThread):
                     ),
                 )
             )
+        for treatment_id,path in self._pulse_artifacts:
+            payload["artifacts"].append(entry(f"pulse_treatment:{treatment_id}",path,required=True,
+                producer="PulseTreatmentService",description="Capacitor/field plan, relay readback, charge/fire/discharge evidence, specimen motion and safe return."))
+        for treatment_id, path in self._af_artifacts:
+            payload["artifacts"].append(entry(
+                f"af_treatment:{treatment_id}", path, required=True,
+                producer="AfTreatmentService",
+                description="Calibrated AF multi-pass plan, positions, per-phase results, faults, and safe return.",
+            ))
         for acquisition_id, path in self._susceptibility_artifacts:
             payload["artifacts"].append(
                 entry(

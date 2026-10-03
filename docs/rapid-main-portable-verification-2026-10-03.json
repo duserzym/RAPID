@@ -1,0 +1,53 @@
+{
+  "schema": "rapidpy.portable_verification.v1",
+  "checked_at_utc": "2026-10-03T15:42:55.2445867+00:00",
+  "executable": "E:\\Github\\RAPID\\.tmp\\portable-verification-final\\RapidPyMain\\RapidPyMainConsole.exe",
+  "executable_sha256": "c824a3cdd2618b16ffbd411cc021aead550281e12f9a494efeaec097cabdb41e",
+  "startup": {
+    "assets_dir": "E:\\Github\\RAPID\\.tmp\\portable-verification-final\\RapidPyMain\\_internal\\rapid_main_assets",
+    "blockers": [],
+    "config_exists": false,
+    "config_path": "E:\\Github\\RAPID\\.tmp\\release-check-e28a0be157f2405a8f1f018171df3552\\operator-test-config.json",
+    "config_valid": true,
+    "icon_path": "E:\\Github\\RAPID\\.tmp\\portable-verification-final\\RapidPyMain\\_internal\\rapid_main_assets\\rapid_main_icon.ico",
+    "ok": true,
+    "optional_modules": {
+      "af_tuner": true,
+      "data_viewer": true,
+      "gaussmeter_control": true,
+      "numpy": true,
+      "pyqtgraph": true,
+      "serial": true,
+      "updown_control": true,
+      "vrm_logger": true,
+      "webcam_viewer": true
+    },
+    "packaged": true,
+    "python_executable": "E:\\Github\\RAPID\\.tmp\\portable-verification-final\\RapidPyMain\\RapidPyMainConsole.exe",
+    "python_version": "3.12.10",
+    "required_modules": {
+      "PySide6": true,
+      "rapidpy_common": true
+    },
+    "schema": "rapidpy.startup_environment.v1",
+    "warnings": [
+      "No configuration file exists yet; RapidPy will create E:\\Github\\RAPID\\.tmp\\release-check-e28a0be157f2405a8f1f018171df3552\\operator-test-config.json"
+    ]
+  },
+  "smoke": {
+    "height": 736,
+    "helpers": {
+      "af_tuner": true,
+      "data_viewer": true,
+      "gaussmeter_control": true,
+      "updown_control": true,
+      "vrm_logger": true,
+      "webcam_viewer": true
+    },
+    "ok": true,
+    "panels": 6,
+    "schema": "rapidpy.release_smoke.v1",
+    "simulated": true,
+    "width": 752
+  }
+}

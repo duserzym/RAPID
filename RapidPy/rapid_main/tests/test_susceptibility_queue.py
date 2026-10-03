@@ -15,6 +15,7 @@ from unittest import mock
 
 from rapid_main.communication_log import CommunicationDirection, CommunicationEvent
 from rapid_main.config import AppConfig
+from tests.af_fakes import configured_af
 from rapid_main.data_model import SpecimenMeta
 from rapid_main.hardware_contracts import (
     HardwareError,
@@ -357,6 +358,9 @@ class SampleSusceptibilityTests(_BackendCase):
     def test_plan_validation_accepts_susc_only_with_every_input_present(self) -> None:
         backend = self._with_holder()
 
+        backend._af_demag = mock.Mock(simulated=False)
+        backend._config.af_demag = configured_af()
+        backend._af_demag.is_connected.return_value = True
         self.assertTrue(backend.validate_treatment_plan(("NRM", "SUSC", "AF20")).ok)
         backend.set_demag_step("SUSC")  # measurement-only, no actuator call
         self.assertEqual(self.journal, [])

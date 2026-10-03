@@ -445,3 +445,22 @@ summary:
 - VB6 source: the full project compiled successfully with `-NoFixups` on
   2026-09-03. Runtime verification of the measurement change is still pending
   the no-communication smoke test and physical-system replay.
+
+## Source audit correction — 3 October 2026
+
+A new continuation audit distinguishes adapter-level tests from complete
+scientific workflow parity. Existing descriptions of AF and IRM/ARM as
+software-complete apply to individual ramp request/result/evidence contracts,
+not the full VB6 treatment lifecycle. The current AF adapter performs a single
+axial ramp; it does not implement the axial-plus-two-transverse choreography
+and centering in VB6/RockmagStep.cls. The current ARM adapter subtracts a bias
+from its effective peak; it does not establish independently controlled ARM
+bias. Pulse-IRM/backfield polarity circuitry and synchronized RRM also need
+software integration. These are not merely physical acceptance gates.
+
+The 3 October changes fix AFZ/AFMAX numeric request parsing, reject invalid or
+over-limit requests and missing/simulated/disconnected live actuators before
+execution, validate entire IRM ramps before mutation or partial actuation, and
+add a portable main-app build with bundled helper dispatch. All 599 tests pass
+using tools/test_rapid_main.py with temporary Qt preferences. See
+rapid-main-portable-release.md for launch/verification and remaining work.

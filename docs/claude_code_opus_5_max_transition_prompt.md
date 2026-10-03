@@ -946,3 +946,22 @@ Also report the VB6 gates separately in the final handoff:
 Acceptance for the replacement claim requires all P0 items to be code-complete and pass replay/fault tests, plus signed physical-system evidence for measurement sequence, rejection/recovery, motion/interlocks, safe halt, holder integrity, output parity, and restart behavior. Until then, label RapidPy as transition/testing software, not a full VB6 replacement.
 
 ---
+
+## Next assignment correction — 3 October 2026
+
+The current continuation audit found that complete AF and IRM/ARM treatment
+parity must not be inferred from their adapter evidence tests. Prioritize the
+remaining source-backed treatment integrations before claiming full app
+completion: coil centering and axial/two-transverse AF passes, independent ARM
+bias and pulse-IRM circuitry, backfield relay polarity, synchronized RRM,
+MCC/DAC binding, and transverse motor execution. Inspect VB6/RockmagStep.cls,
+VB6/frmIRMARM.frm, and the actual station INI/board mappings. Do not infer a
+physical field calibration from a normalized voltage ratio or treat effective
+peak subtraction as independent bias control.
+
+Preserve the portable build (installer/build_rapid_main.ps1), frozen helper
+launching, startup/smoke CLI, and new fail-closed request checks. Run the suite
+through tools/test_rapid_main.py so Qt settings never modify the operator's
+registry. The 3 October suite has 599 passing tests; the source six-panel/six-
+helper smoke check also passes. Full replacement remains open as documented
+in docs/rapid-main-portable-release.md.

@@ -1361,6 +1361,9 @@ class MainWindow(QtWidgets.QMainWindow):
         allow_reentrant: bool = True,
     ) -> object:
         """Acquire a shared device lease used to prevent concurrent hardware ownership."""
+        backend = getattr(self,"_measurement_backend",None)
+        if resource in {"measurement","changer","af_demag"} and owner!="irm_panel" and (getattr(backend,"has_unresolved_hardware_fault",False) is True or getattr(backend,"has_unresolved_pulse_fault",False) is True or getattr(backend,"has_unresolved_rotation_fault",False) is True):
+            raise DeviceOwnershipError("Pulse capacitor/relay or RRM rotation safe state is unverified. Open IRM / ARM and run Zero Field recovery before other hardware controls.")
         return self._ownership.acquire(resource, owner, allow_reentrant=allow_reentrant)
 
     def release_measurement_device(self, owner: str) -> None:
@@ -1547,6 +1550,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._dc_motor_backend = build_backend_or_unavailable(
             "DC motors",
             build_dcmotor_backend,
+            config=self.config,
             port=(self.config.changer.port or "COM3").strip(),
             baud=int(self.config.changer.baud or 9600),
             nocomm=nocomm,
@@ -1698,11 +1702,22 @@ class MainWindow(QtWidgets.QMainWindow):
         return True
 
     def _launch_irm(self) -> None:
-        self._run_owned_dialog(
-            "irm",
-            "irm_panel",
-            lambda owner: IrmArmDialog(owner, backend=self._irm_arm_backend),
-        )
+        leases = []
+        try:
+            for resource in ("measurement", "changer", "af_demag", "irm"):
+                leases.append(self.acquire_device(resource, "irm_panel", allow_reentrant=False))
+            from .manual_treatment import ManualArmTreatment
+            manual_arm = None
+            if not self.config.general.nocomm:
+                manual_arm = ManualArmTreatment(self._measurement_backend, Path(self.config.general.data_dir) / "manual_treatments")
+            dialog = IrmArmDialog(self, backend=manual_arm or self._irm_arm_backend, manual_arm=manual_arm)
+            dialog.setWindowIcon(self.windowIcon())
+            dialog.exec()
+        except (DeviceOwnershipError, RuntimeError) as exc:
+            QtWidgets.QMessageBox.warning(self, "IRM / ARM Control", str(exc))
+        finally:
+            for lease in reversed(leases):
+                lease.release()
 
     def _launch_af_tuner(self) -> None:
         self._launch_external_tool(

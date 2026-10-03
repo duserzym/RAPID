@@ -624,6 +624,9 @@ class TestHardwareContracts(unittest.TestCase):
             elif label == "SUSC":
                 with self.assertRaisesRegex(HardwareError, "SUSC cannot run in hardware mode"):
                     backend.set_demag_step(label)
+            elif label.startswith("RRM"):
+                with self.assertRaisesRegex(HardwareError, "RRM requires field and signed spin speed"):
+                    backend.set_demag_step(label)
             else:
                 with self.assertRaisesRegex(HardwareError, "no production actuator route"):
                     backend.set_demag_step(label)

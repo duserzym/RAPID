@@ -13,6 +13,41 @@ from rapid_main.startup import collect_startup_environment, select_main_icon
 
 
 class PackagingTests(unittest.TestCase):
+    def test_frozen_tools_dispatch_through_the_bundled_executable(self) -> None:
+        with patch("sys.frozen", True, create=True):
+            launch = resolve_tool_launch(
+                module="vrm_logger", source_root=".", source_relative="main.py",
+                python_executable="RapidPyMain.exe",
+            )
+            self.assertEqual(launch.command, ("RapidPyMain.exe", "--tool", "vrm_logger"))
+            self.assertIsNone(launch.cwd)
+            self.assertEqual(launch.source, "bundled-tool")
+            with self.assertRaises(ToolUnavailableError):
+                resolve_tool_launch(module="unbundled_tool", source_root=".", source_relative="main.py")
+
+    def test_helper_dispatch_strips_launcher_flags_and_preserves_exit_code(self) -> None:
+        from types import SimpleNamespace
+        import sys
+        original = sys.argv
+        seen = []
+        def entry():
+            seen.append(list(sys.argv))
+            return 7
+        with patch("rapid_main.__main__.import_module", return_value=SimpleNamespace(main=entry)):
+            self.assertEqual(module_main(["--tool", "vrm_logger"]), 7)
+        self.assertEqual(seen, [["vrm_logger"]])
+        self.assertIs(sys.argv, original)
+
+    def test_helper_dispatch_does_not_open_main_ui_for_none_return(self) -> None:
+        from types import SimpleNamespace
+        with patch("rapid_main.__main__.import_module", return_value=SimpleNamespace(main=lambda: None)):
+            self.assertEqual(module_main(["--tool", "webcam_viewer"]), 0)
+
+    def test_smoke_flag_dispatches_before_operator_config_is_loaded(self) -> None:
+        with patch("rapid_main.release_smoke.run_smoke_test", return_value=0) as check:
+            self.assertEqual(module_main(["--smoke-test"]), 0)
+            check.assert_called_once_with()
+
     def test_distribution_manifest_exposes_main_and_helper_entry_points(self) -> None:
         pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
         payload = tomllib.loads(pyproject.read_text(encoding="utf-8"))

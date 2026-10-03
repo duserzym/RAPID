@@ -96,6 +96,9 @@ class TestWindowBootstrapContracts(unittest.TestCase):
         for stmt in tree.body:
             if not isinstance(stmt, ast.ImportFrom):
                 continue
+            if package_hint == "rapid_main" and stmt.module == "rapid_main.__main__":
+                if any(alias.name == "console_main" and alias.asname == "main" for alias in stmt.names):
+                    return True
             if stmt.module is None or not stmt.module.endswith(".app"):
                 continue
             module_base = stmt.module.split(".")[-2]
@@ -147,7 +150,7 @@ class TestWindowBootstrapContracts(unittest.TestCase):
             imports_main = False
             for stmt in tree.body:
                 if isinstance(stmt, ast.ImportFrom):
-                    if any(alias.name == "main" for alias in stmt.names):
+                    if any(alias.name == "main" or (alias.name == "console_main" and alias.asname == "main") for alias in stmt.names):
                         imports_main = True
             if not imports_main:
                 missing_import.append(str(path))

@@ -189,6 +189,29 @@ def _field_mT_to_volts(
     return command.voltage_v
 
 
+def validate_irm_request(field_mT: float, axis: str, steps: int, cfg: IrmArmConfig) -> None:
+    """Validate the entire ramp before configuration changes or actuator calls."""
+    field = float(field_mT)
+    if not math.isfinite(field) or field < 0:
+        raise ValueError("IRM field must be finite and non-negative; backfield requires a polarity adapter.")
+    if int(steps) != steps or int(steps) < 1:
+        raise ValueError("IRM ramp steps must be a positive integer.")
+    # Check both ends: a negative calibration slope can make a later ramp
+    # invalid after an earlier ramp has already energized the coil.
+    _field_mT_to_volts(field / int(steps), axis, cfg)
+    _field_mT_to_volts(field, axis, cfg)
+
+
+def validate_arm_request(peak_af_mT: float, bias_mT: float, steps: int, cfg: IrmArmConfig) -> None:
+    peak, bias = float(peak_af_mT), float(bias_mT)
+    if not math.isfinite(peak) or peak < 0 or not math.isfinite(bias):
+        raise ValueError("ARM peak and bias must be finite, with a non-negative peak.")
+    if int(steps) != steps or int(steps) < 1:
+        raise ValueError("ARM steps must be a positive integer.")
+    from .arm_bias import plan_arm_bias
+    plan_arm_bias(bias, cfg)
+
+
 def _adwin_event_payload(action: str, **values: object) -> str:
     """Return a stable, single-line ADwin request/result evidence payload."""
 
@@ -559,6 +582,7 @@ class AfDemagCommand:
     tumble_pause_s: float
     ramp_peak_voltage: float
     monitor_peak_voltage: float
+    calibrated_ramp: object | None = None
 
 
 @runtime_checkable
@@ -586,11 +610,23 @@ def plan_af_demag_command(
     cfg = cfg or AfDemagConfig()
     _prefix, field_mT, _bias = _parse_af_label(label)
     target_mT = float(field_mT if field_mT is not None else cfg.peak)
-    if target_mT < 0.0:
-        raise DiagnosticContractError(f"AF field must be non-negative: {label}")
+    if cfg.calibration_source and cfg.enabled:
+        from .af_treatment import plan_calibrated_af_ramp
+        ramp = plan_calibrated_af_ramp(label, target_mT, "axial", cfg)
+        return AfDemagCommand(str(label), target_mT, str(cfg.ramp_speed), ramp.frequency_hz,
+                              ramp.hold_ms / 1000, bool(cfg.tumble), float(cfg.tumble_pause),
+                              ramp.ramp_peak_v, ramp.monitor_peak_v, ramp)
+    if not math.isfinite(target_mT) or target_mT < 0.0:
+        raise DiagnosticContractError(f"AF field must be finite and non-negative: {label}")
+    reference_peak = float(cfg.peak)
+    if not math.isfinite(reference_peak) or reference_peak <= 0:
+        raise DiagnosticContractError("AF reference peak must be finite and positive.")
+    if target_mT > reference_peak:
+        raise DiagnosticContractError(f"AF field {target_mT:g} mT exceeds configured peak {reference_peak:g} mT.")
+    if any(not math.isfinite(float(value)) or float(value) < 0 for value in (cfg.settle, cfg.tumble_pause)):
+        raise DiagnosticContractError("AF settling and tumble delay must be finite and non-negative.")
 
     ramp_hz = _parse_af_ramp_hz(cfg.ramp_speed)
-    reference_peak = max(float(cfg.peak), target_mT, 1.0)
     ramp_peak_voltage = min(10.0, max(0.0, target_mT / reference_peak * 10.0))
     monitor_peak_voltage = ramp_peak_voltage * 0.5
     return AfDemagCommand(
@@ -607,16 +643,13 @@ def plan_af_demag_command(
 
 
 def _parse_af_label(label: str) -> tuple[str, float | None, None]:
-    text = (label or "").strip().upper()
-    if not text.startswith("AF"):
-        return text, None, None
-    suffix = text[2:]
-    if suffix in {"", "MAX", "Z"}:
-        return text, None, None
+    from .treatment_labels import parse_field_treatment
     try:
-        return "AF", float(suffix), None
-    except ValueError:
-        return text, None, None
+        request = parse_field_treatment(label)
+        if request.family not in {"AFMAX", "AFZ", "AF"}: raise ValueError("Not AF.")
+    except ValueError as exc:
+        raise DiagnosticContractError(f"Invalid AF treatment label: {label!r}") from exc
+    return request.family, request.field_mT, None
 
 
 def _parse_af_ramp_hz(label: str) -> float:
@@ -890,6 +923,7 @@ class AfDemagBackendAdapter(_BaseBackend, AfDemagBackend):
         self._controller = controller
         self._last_result = None
         self._status = "AF ADwin backend not connected"
+        self._halt_check = None
         self._connect()
 
     def _connect(self) -> None:
@@ -898,7 +932,19 @@ class AfDemagBackendAdapter(_BaseBackend, AfDemagBackend):
         try:
             if self._controller is None:
                 board = AdwinBoardConfig(board_num=int(self._cfg.board) or 1)
-                self._controller = AdwinAFController(board=board, limits=AdwinCoilLimits())
+                for name in ("bin_folder", "boot_file", "process_file"):
+                    if getattr(self._cfg, name):
+                        setattr(board, name, getattr(self._cfg, name))
+                if self._cfg.calibration_source:
+                    bits = (self._cfg.axial_relay_bit, self._cfg.transverse_relay_bit)
+                    if any(not 0 <= bit < 32 for bit in bits) or bits[0] == bits[1]:
+                        raise ValueError("AF axial/transverse relay bits must be distinct configured ADwin outputs.")
+                    board.axial_relay_bit, board.trans_relay_bit = bits
+                limits = AdwinCoilLimits()
+                if self._cfg.calibration_source:
+                    limits = AdwinCoilLimits(self._cfg.axial_ramp_max_v, self._cfg.axial_monitor_max_v,
+                                            self._cfg.transverse_ramp_max_v, self._cfg.transverse_monitor_max_v)
+                self._controller = AdwinAFController(board=board, limits=limits)
             version = _verify_adwin_controller(self._controller, label="AF")
         except Exception as exc:
             self._controller = None
@@ -913,40 +959,61 @@ class AfDemagBackendAdapter(_BaseBackend, AfDemagBackend):
         return self._controller is not None
 
     def apply_af(self, command: AfDemagCommand) -> str:
+        if command.calibrated_ramp is None:
+            raise HardwareError("Live field-based AF requires accepted coil calibration; use AF Tuner for an explicit voltage/clip test.")
+        return self.apply_calibrated_af(command.calibrated_ramp)
+
+    def apply_calibrated_af(self, ramp) -> str:
         if self._controller is None or AdwinRampRequest is None:
             raise HardwareError("AF ADwin backend is not connected.")
+        from .af_treatment import plan_calibrated_af_ramp
+        verified = plan_calibrated_af_ramp(ramp.label, ramp.field_mT, ramp.coil, self._cfg)
+        if verified != ramp:
+            raise HardwareError("AF calibration changed after treatment planning; rebuild the plan.")
         request = AdwinRampRequest(
-            slope_up=max(command.ramp_peak_voltage, 0.001),
-            slope_down=max(command.ramp_peak_voltage, 0.001),
-            peak_monitor_voltage=command.monitor_peak_voltage,
-            sine_freq_hz=command.sine_freq_hz,
-            ramp_peak_voltage=command.ramp_peak_voltage,
-            active_coil="axial",
-            ramp_mode=3,
-            hold_ms=int(command.settle_s * 1000.0),
+            slope_up=ramp.slope_up_vps,
+            slope_down=ramp.slope_down_vps,
+            peak_monitor_voltage=ramp.monitor_peak_v,
+            sine_freq_hz=ramp.frequency_hz,
+            ramp_peak_voltage=ramp.ramp_peak_v,
+            active_coil=ramp.coil,
+            ramp_mode=ramp.ramp_mode,
+            hold_ms=ramp.hold_ms,
             ramp_down_mode=1,
-            io_rate_hz=25_000.0,
+            io_rate_hz=ramp.io_rate_hz,
             noise_level=5,
         )
         payload = _adwin_ramp_request_payload(request)
-        self._communication_logger.sent(payload, detail=f"AF treatment {command.label}")
+        self._communication_logger.sent(payload, detail=f"AF treatment {ramp.label}; coil={ramp.coil}; calibration={ramp.calibration_source}")
         try:
-            self._last_result = self._controller.run_ramp(request)
+            options = {"should_cancel": self._halt_check} if self._halt_check is not None else {}
+            self._last_result = self._controller.run_ramp(request, **options)
             result_payload = _adwin_ramp_result_payload(self._last_result)
         except Exception as exc:
             self._status = f"AF treatment failed: {exc}"
             self._communication_logger.error(
-                f"AF treatment {command.label} failed: {exc}", payload=payload
+                f"AF treatment {ramp.label} failed: {exc}", payload=payload
             )
             raise
         self._communication_logger.received(
             result_payload,
-            detail=f"AF treatment {command.label} completed",
+            detail=f"AF treatment {ramp.label} completed",
         )
         self._status = (
-            f"AF completed: {command.field_mT:.3g} mT, "
-            f"{command.sine_freq_hz:.3g} Hz."
+            f"AF completed: {ramp.field_mT:.3g} mT on {ramp.coil}, "
+            f"{ramp.frequency_hz:.3g} Hz."
         )
+        return self._status
+
+    def set_halt_check(self, check) -> None:
+        self._halt_check = check
+
+    def recover_field(self) -> str:
+        if self._controller is None:
+            raise HardwareError("AF ADwin backend is not connected.")
+        self._controller.recover_safe_field()
+        self._status = "AF processes stopped, ramp output zeroed and relay clear verified."
+        self._communication_logger.info(self._status)
         return self._status
 
     def reset_field(self) -> str:
@@ -1011,48 +1078,6 @@ class IrmArmBackendAdapter(_BaseBackend, IrmArmBackend):
     def communication_events(self) -> tuple[CommunicationEvent, ...]:
         return tuple(self._communication_logger.transcript.events)
 
-    def _run_single_ramp(self, field_mT: float, axis: str, label: str) -> None:
-        if self._controller is None:
-            raise HardwareError("IRM / ARM ADwin backend is not connected.")
-        if AdwinRampRequest is None:
-            raise HardwareError("IRM / ARM ADwin ramp request API unavailable.")
-
-        coil = _parse_irm_axis(axis)
-        hold_ms = int(_parse_ramp_seconds(label) * 1000.0)
-        peak_v = _field_mT_to_volts(field_mT, axis, self._cfg)
-        request = AdwinRampRequest(
-            slope_up=abs(peak_v) / max(_parse_ramp_seconds(label), 0.001),
-            slope_down=abs(peak_v) / max(_parse_ramp_seconds(label), 0.001),
-            peak_monitor_voltage=abs(peak_v) * 0.5,
-            sine_freq_hz=10.0,
-            ramp_peak_voltage=abs(peak_v),
-            active_coil=coil,
-            ramp_mode=3,
-            hold_ms=hold_ms,
-            ramp_down_mode=1,
-            io_rate_hz=25_000.0,
-            noise_level=5,
-        )
-        payload = _adwin_ramp_request_payload(request)
-        self._communication_logger.sent(
-            payload, detail=f"{label} field={field_mT:.6g} mT axis={axis}"
-        )
-        try:
-            result = self._controller.run_ramp(request)
-            result_payload = _adwin_ramp_result_payload(result)
-        except Exception as exc:
-            self._status = f"{label} ramp failed: {exc}"
-            self._communication_logger.error(
-                f"{label} field={field_mT:.6g} mT axis={axis} failed: {exc}",
-                payload=payload,
-            )
-            raise
-        self._communication_logger.received(
-            result_payload,
-            detail=f"{label} field={field_mT:.6g} mT axis={axis} completed",
-        )
-        self._last_result = result
-
     def is_connected(self) -> bool:
         return self._controller is not None
 
@@ -1062,48 +1087,12 @@ class IrmArmBackendAdapter(_BaseBackend, IrmArmBackend):
         return "IRM / ARM ADwin backend connected"
 
     def apply_irm(self, *, max_field_mT: float, axis: str, ramp_label: str, steps: int) -> str:
-        self._cfg.irm_max_field = max(float(max_field_mT), 0.0)
-        self._cfg.irm_axis = axis or self._cfg.irm_axis
-        self._cfg.irm_ramp = ramp_label or self._cfg.irm_ramp
-        self._cfg.irm_steps = max(1, int(steps))
-
-        # Preserve compatibility for older workflows that expect incremental IRM steps.
-        steps_total = max(1, int(self._cfg.irm_steps))
-        target_step = self._cfg.irm_max_field / float(steps_total)
-        for idx in range(steps_total):
-            target = target_step * (idx + 1)
-            self._run_single_ramp(target, self._cfg.irm_axis, self._cfg.irm_ramp)
-
-        self._status = (
-            f"IRM completed: {self._cfg.irm_max_field:.2f} mT on {self._cfg.irm_axis}, "
-            f"{steps_total} step(s), ramp {self._cfg.irm_ramp}."
-        )
-        return self._status
+        validate_irm_request(max_field_mT, axis or self._cfg.irm_axis, steps, self._cfg)
+        raise HardwareError("Live IRM requires calibrated capacitor charge/readback/fire/discharge through the pulse treatment workflow.")
 
     def apply_arm(self, *, peak_af_mT: float, bias_mT: float, steps: int | None = None) -> str:
-        self._cfg.arm_peak_af = max(float(peak_af_mT), 0.0)
-        self._cfg.arm_bias = float(bias_mT)
-        if steps is not None:
-            self._cfg.irm_steps = max(1, int(steps))
-
-        steps_total = max(1, int(self._cfg.irm_steps))
-        steps_total = max(1, steps_total)
-
-        # ARM uses the configured IRM axis as a practical default for AC demag biasing.
-        axis = self._cfg.irm_axis or "Z (up-axis)"
-        effective_peak = self._cfg.arm_peak_af - self._cfg.arm_bias
-        effective_peak = max(0.0, effective_peak)
-
-        target_step = effective_peak / float(steps_total)
-        for idx in range(steps_total):
-            target = target_step * (idx + 1)
-            self._run_single_ramp(target, axis, self._cfg.irm_ramp)
-
-        self._status = (
-            f"ARM completed: peak {self._cfg.arm_peak_af:.2f} mT, "
-            f"bias {self._cfg.arm_bias:.3f} mT, {steps_total} step(s)."
-        )
-        return self._status
+        validate_arm_request(peak_af_mT, bias_mT, self._cfg.irm_steps if steps is None else steps, self._cfg)
+        raise HardwareError("Live ARM requires the queue's calibrated axial AF lifecycle and independent MCC bias circuit.")
 
     def reset_field(self) -> str:
         if self._controller is None or not hasattr(self._controller, "set_af_relays"):
@@ -1591,6 +1580,7 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         *,
         port: str,
         baud: int,
+        config=None,
     ) -> None:
         super().__init__(simulated=False)
         self._communication_logger = CommunicationLogger(
@@ -1603,6 +1593,19 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
             "Up/Down": MotorAxisConfig("UpDown", 3, 3),
             "Changer (Y)": MotorAxisConfig("ChangerY", 4, 4),
         }
+        self.wiring_summary = ""
+        self._station_baud = None
+        if config is not None and config.motor_station.calibration_source:
+            from .hardware_contracts import _build_motor_controller_config
+            from rapidpy_common.motor_routing import RoutedMotorSerialClient
+            station = config.motor_station
+            for label, key in (("Changer (X)", "changer_x"), ("Turning", "turning"), ("Up/Down", "updown"), ("Changer (Y)", "changer_y")):
+                axis = self._axes[label]
+                axis.port = station.ports.get(key, "")
+                axis.address = station.addresses.get(key, 0)
+            self._client = RoutedMotorSerialClient(_build_motor_controller_config(config), list(self._axes.values()), trace=self._trace)
+            self._station_baud = station.baud
+            self.wiring_summary = "; ".join(f"{label}: {axis.port} @{axis.address}" for label, axis in self._axes.items())
         self._port = ""
         self._baud = 9600
         self._connected = False
@@ -1612,6 +1615,8 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
             self._baud = int(baud)
 
     def _trace(self, direction: str, payload: str, detail: str) -> None:
+        if detail.startswith("port="):
+            self._communication_logger.port = detail.partition(" ")[0].removeprefix("port=")
         if direction == "TX":
             self._communication_logger.sent(payload, detail=detail)
         elif direction == "RX":
@@ -1637,6 +1642,8 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
     def connect(self, port: str, baudrate: int) -> None:
         self._port = str(port)
         self._baud = int(baudrate)
+        if self._station_baud is not None:
+            self._baud = self._station_baud
         self._communication_logger.port = self._port
         try:
             self._client.connect(self._port, baudrate=self._baud)
@@ -1685,9 +1692,9 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         self._require_move_success(f"move changer to hole {hole}", result)
         return float(convert_position_to_hole(
             result.final_position,
-            slot_min=1,
-            slot_max=101,
-            one_step=-1000,
+            slot_min=self._client.config.slot_min,
+            slot_max=self._client.config.slot_max,
+            one_step=self._client.config.one_step,
         ))
 
     def read_hole(self, axis: str) -> float:
@@ -1697,9 +1704,9 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         pos = self._client.read_position(self._axes["Changer (X)"])
         return float(convert_position_to_hole(
             pos,
-            slot_min=1,
-            slot_max=101,
-            one_step=-1000,
+            slot_min=self._client.config.slot_min,
+            slot_max=self._client.config.slot_max,
+            one_step=self._client.config.one_step,
         ))
 
     def home_to_top(self) -> None:
@@ -1762,7 +1769,7 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         if self._simulated:
             return "No-comm adapter active"
         if self._connected:
-            return f"Connected to {self._port}:{self._baud}"
+            return f"Connected to {self.wiring_summary or self._port}:{self._baud}"
         return "DC motor adapter ready (disconnected)"
 
 
@@ -1959,6 +1966,7 @@ def build_dcmotor_backend(
     baud: int = 9600,
     nocomm: bool = False,
     allow_simulation_fallback: bool = False,
+    config=None,
 ) -> DCMotorBackend:
     """Build a DC motor diagnostic backend.
 
@@ -1969,7 +1977,7 @@ def build_dcmotor_backend(
     if nocomm:
         return DCMotorNoCommBackend(port=port, baud=baud)
     try:
-        return DCMotorBackendAdapter(port=port, baud=baud)
+        return DCMotorBackendAdapter(port=port, baud=baud, config=config)
     except Exception as exc:
         if allow_simulation_fallback:
             return DCMotorNoCommBackend(port=port, baud=baud)

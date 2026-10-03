@@ -10,6 +10,8 @@ This module intentionally performs a safe, conservative mapping:
 from __future__ import annotations
 
 import configparser
+import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -310,6 +312,101 @@ def import_vb6_ini(config: AppConfig, path: str | Path) -> LegacyIniImportReport
 
     # AF controls
     af_section = "AF"
+    af = config.af_demag
+    units = (_value(parser, "AF", "AFUnits") or "").upper()
+    field_factor = {"G": 0.1, "GAUSS": 0.1, "OE": 0.1, "OERSTED": 0.1, "MT": 1.0}.get(units)
+    if field_factor is None:
+        warnings.append("AFUnits is missing or unsupported; live AF calibration was not imported.")
+    else:
+        af.calibration_source = str(ini_path.resolve())
+        for coil, section, prefix in (("axial", "AFAxial", "AFAxial"), ("transverse", "AFTrans", "AFTrans")):
+            raw_count = _value(parser, section, prefix + "Count")
+            if raw_count is not None:
+                try:
+                    count = int(raw_count)
+                    if not 2 <= count <= 10000:
+                        raise ValueError("at least two calibration points required")
+                    points = [[float(_value(parser, section, f"{prefix}X{i}")),
+                               float(_value(parser, section, f"{prefix}Y{i}")) * field_factor]
+                              for i in range(1, count + 1)]
+                    if any(not math.isfinite(x) or not math.isfinite(y) for x, y in points):
+                        raise ValueError("non-finite calibration")
+                    setattr(af, coil + "_calibration", points)
+                    setattr(af, coil + "_calibrated", _parse_bool(_value(parser, section, prefix + "CalDone"), default=False,
+                           section_key=section, field=prefix + "CalDone", warnings=warnings))
+                    for i in range(1, count + 1):
+                        mark_mapped(section, f"{prefix}X{i}", f"af_demag.{coil}_calibration")
+                        mark_mapped(section, f"{prefix}Y{i}", f"af_demag.{coil}_calibration (mT)")
+                    mark_mapped(section, prefix + "Count", f"af_demag.{coil}_calibration")
+                    mark_mapped(section, prefix + "CalDone", f"af_demag.{coil}_calibrated")
+                except (TypeError, ValueError) as exc:
+                    setattr(af, coil + "_calibrated", False)
+                    warnings.append(f"{section} calibration not imported: {exc}")
+            for suffix, destination, factor in (("Min", "min_mT", field_factor), ("Max", "max_mT", field_factor),
+                    ("ResFreq", "frequency_hz", 1), ("RampMax", "ramp_max_v", 1), ("MonMax", "monitor_max_v", 1)):
+                raw_value = _value(parser, section, prefix + suffix)
+                if raw_value is not None:
+                    setattr(af, coil + "_" + destination, _parse_float(raw_value, default=0,
+                            section_key=section, field=prefix + suffix, warnings=warnings) * factor)
+                    mark_mapped(section, prefix + suffix, f"af_demag.{coil}_{destination}")
+        af.peak = max(af.axial_max_mT, af.transverse_max_mT) or af.peak
+        mark_mapped("AF", "AFUnits", "af_demag calibration fields converted to mT")
+    for section, key, name in (("SteppingMotor", "AFPos", "coil_position"),
+            ("AF", "AxialRampUpVoltsPerSec", "axial_ramp_up_vps"),
+            ("AF", "TransRampUpVoltsPerSec", "transverse_ramp_up_vps"),
+            ("AF", "MinRampUpTime_ms", "ramp_up_min_ms"), ("AF", "MaxRampUpTime_ms", "ramp_up_max_ms"),
+            ("AF", "MinRampDown_NumPeriods", "ramp_down_min_periods"),
+            ("AF", "MaxRampDown_NumPeriods", "ramp_down_max_periods"),
+            ("AF", "RampDownNumPeriodsPerVolt", "ramp_down_periods_per_v"),
+            ("AF", "HoldAtPeakField_NumPeriods", "hold_peak_periods")):
+        raw_value = _value(parser, section, key)
+        if raw_value is not None:
+            current = getattr(af, name)
+            convert = _parse_int if isinstance(current, int) else _parse_float
+            setattr(af, name, convert(raw_value, default=current, section_key=section, field=key, warnings=warnings))
+            mark_mapped(section, key, f"af_demag.{name}")
+    for key, name in (("AFSystem", "system"), ("ADWINBinFolderPath", "bin_folder"),
+                      ("ADWINBootFile", "boot_file"), ("ADWINRampProgFile", "process_file")):
+        raw_value = _value(parser, "AF", key)
+        if raw_value is not None:
+            setattr(af, name, raw_value)
+            mark_mapped("AF", key, f"af_demag.{name}")
+    enabled = _value(parser, "Modules", "EnableAF")
+    if enabled is not None:
+        af.enabled = _parse_bool(enabled, default=False, section_key="Modules", field="EnableAF", warnings=warnings)
+        mark_mapped("Modules", "EnableAF", "af_demag.enabled")
+    # Resolve the named legacy relay through its board channel entry, not the
+    # ordinal in the symbolic DO reference (the two can differ).
+    relay_board = None
+    for key, name in (("AFAxialRelay", "axial_relay_bit"), ("AFTransRelay", "transverse_relay_bit")):
+        reference = _value(parser, "Channels", key)
+        if reference:
+            match = re.fullmatch(r"DO-(\d+)-CH(\d+)", reference)
+            mapping = _value(parser, "Boards", reference)
+            try:
+                if not match or not mapping:
+                    raise ValueError("relay channel has no board mapping")
+                board_index = match.group(1)
+                protocol = int(_value(parser, "Boards", "CommProtocol" + board_index))
+                if protocol != 2:
+                    raise ValueError("AF relay does not belong to an ADwin board")
+                board_number = int(_value(parser, "Boards", "BoardNum" + board_index))
+                if relay_board is not None and relay_board != board_number:
+                    raise ValueError("AF coil relays must belong to the same ADwin board")
+                relay_board = board_number
+                af.board = board_number
+                setattr(af, name, int(mapping.split(",")[1]))
+                mark_mapped("Channels", key, f"af_demag.{name}")
+            except (TypeError, ValueError, IndexError) as exc:
+                setattr(af, name, -1)
+                warnings.append(f"{key}: {exc}")
+    wave_count = _parse_int(_value(parser, "WaveForms", "WaveFormCount"), default=0,
+                            section_key="WaveForms", field="WaveFormCount", warnings=warnings)
+    for index in range(max(0, min(wave_count, 10000))):
+        if (_value(parser, "WaveForms", f"WaveName{index}") or "").upper() == "AFRAMPUP":
+            af.io_rate_hz = _parse_float(_value(parser, "WaveForms", f"IORate{index}"), default=0,
+                                        section_key="WaveForms", field=f"IORate{index}", warnings=warnings)
+            mark_mapped("WaveForms", f"IORate{index}", "af_demag.io_rate_hz")
     raw = _value(parser, af_section, "AFWait")
     if raw is not None:
         config.af_demag.settle = _parse_float(
@@ -338,52 +435,183 @@ def import_vb6_ini(config: AppConfig, path: str | Path) -> LegacyIniImportReport
     arm_section = "ARM"
     raw = _value(parser, arm_section, "ARMMax")
     if raw is not None:
-        config.irm_arm.arm_peak_af = _parse_float(
+        config.irm_arm.arm_bias_max_mT = .1 * _parse_float(
             raw,
-            default=config.irm_arm.arm_peak_af,
+            default=config.irm_arm.arm_bias_max_mT * 10,
             section_key=arm_section,
             field="ARMMax",
             warnings=warnings,
         )
-        mark_mapped(arm_section, "ARMMax", "irm_arm.arm_peak_af")
+        mark_mapped(arm_section, "ARMMax", "irm_arm.arm_bias_max_mT (G converted to mT)")
 
     raw = _value(parser, arm_section, "ARMVoltGauss")
     if raw is not None:
-        config.irm_arm.arm_bias = _parse_float(
+        config.irm_arm.arm_voltage_per_mT = 10 * _parse_float(
             raw,
-            default=config.irm_arm.arm_bias,
+            default=config.irm_arm.arm_voltage_per_mT / 10,
             section_key=arm_section,
             field="ARMVoltGauss",
             warnings=warnings,
         )
-        mark_mapped(arm_section, "ARMVoltGauss", "irm_arm.arm_bias")
+        mark_mapped(arm_section, "ARMVoltGauss", "irm_arm.arm_voltage_per_mT (V/G converted to V/mT)")
 
-    irm_axial = _parse_float(
-        _value(parser, "IRMAxial", "IRMAxialVoltMax"),
-        default=None,
-        section_key="IRMAxial",
-        field="IRMAxialVoltMax",
-        warnings=warnings,
-    )
-    if irm_axial is not None:
-        config.irm_arm.irm_max_field = irm_axial
-        mark_mapped("IRMAxial", "IRMAxialVoltMax", "irm_arm.irm_max_field")
+    arm = config.irm_arm
+    arm.arm_calibration_source = str(Path(path).resolve())
+    raw = _value(parser, "Modules", "EnableARM")
+    if raw is not None:
+        arm.arm_enabled = _parse_bool(raw, default=False, section_key="Modules", field="EnableARM", warnings=warnings)
+        mark_mapped("Modules", "EnableARM", "irm_arm.arm_enabled")
+    raw = _value(parser, "ARM", "ARMVoltMax")
+    if raw is not None:
+        arm.arm_voltage_max = _parse_float(raw, default=0, section_key="ARM", field="ARMVoltMax", warnings=warnings)
+        mark_mapped("ARM", "ARMVoltMax", "irm_arm.arm_voltage_max")
+    arm_board = None
+    for key, kind, name in (("ARMVoltageOut", "AO", "arm_dac_channel"), ("ARMSet", "DO", "arm_gate_bit")):
+        reference = _value(parser, "Channels", key)
+        if reference:
+            try:
+                match = re.fullmatch(kind + r"-(\d+)-CH(\d+)", reference)
+                if not match:
+                    raise ValueError("invalid ARM channel reference")
+                index = match.group(1)
+                if int(_value(parser, "Boards", "CommProtocol" + index)) != 1:
+                    raise ValueError("ARM bias channel requires an MCC board")
+                number = int(_value(parser, "Boards", "BoardNum" + index))
+                if arm_board is not None and arm_board != number:
+                    raise ValueError("ARM bias outputs must use the same MCC board")
+                arm_board = number
+                arm.arm_board = number
+                setattr(arm, name, int(_value(parser, "Boards", reference).split(",")[1]))
+                arm.arm_voltage_range = int(_value(parser, "Boards", "RangeType" + index))
+                arm.arm_digital_port = int(_value(parser, "Boards", "DOutPortType" + index))
+                mark_mapped("Channels", key, "irm_arm." + name)
+            except (AttributeError, TypeError, ValueError, IndexError) as exc:
+                setattr(arm, name, -1)
+                warnings.append(f"{key}: {exc}")
 
-    irm_trans = _parse_float(
-        _value(parser, "IRMTrans", "IRMTransVoltMax"),
-        default=None,
-        section_key="IRMTrans",
-        field="IRMTransVoltMax",
-        warnings=warnings,
-    )
-    if irm_trans is not None:
-        if config.irm_arm.irm_max_field < irm_trans:
-            config.irm_arm.irm_max_field = irm_trans
-        mark_mapped("IRMTrans", "IRMTransVoltMax", "irm_arm.irm_max_field")
+    pulse = config.pulse_irm
+    pulse.calibration_source = str(Path(path).resolve())
+    for section,key,name in (("IRMPulse","IRMSystem","system"),("IRMPulse","PulseMCCVoltConversion","control_v_per_capacitor_v"),
+                             ("IRMPulse","PulseReturnMCCVoltConversion","feedback_v_per_capacitor_v"),
+                             ("IRMPulse","PulseVoltMax","control_max_v"),("IRMPulse","AscSetVoltageMinBoostMultiplier","asc_boost_at_min"),
+                             ("IRMPulse","AscSetVoltageMaxBoostMultiplier","asc_boost_at_max"),("IRMPulse","TrimOnTrue","trim_on_high"),
+                             ("Modules","EnableAxialIRM","axial_enabled"),("Modules","EnableTransIRM","transverse_enabled"),
+                             ("Modules","EnableIRMBackfield","backfield_enabled"),("SteppingMotor","IRMPos","coil_position")):
+        raw = _value(parser,section,key)
+        if raw is None:
+            continue
+        old = getattr(pulse,name)
+        if isinstance(old,bool):
+            value = _parse_bool(raw,default=old,section_key=section,field=key,warnings=warnings)
+        elif isinstance(old,str):
+            value = raw.strip()
+        elif name=="coil_position":
+            value = _parse_int(raw,default=int(old),section_key=section,field=key,warnings=warnings)
+        else:
+            value = _parse_float(raw,default=old,section_key=section,field=key,warnings=warnings)
+        setattr(pulse,name,value)
+        mark_mapped(section,key,"pulse_irm."+name)
+    for coil,prefix in (("axial","Axial"),("transverse","Trans")):
+        section = "IRM"+prefix
+        count = _parse_int(_value(parser,section,"Pulse"+prefix+"Count"),default=0,section_key=section,field="Count",warnings=warnings)
+        setattr(pulse,coil+"_calibrated",False)
+        if count >= 2 and count <= 10000:
+            try:
+                points = [[float(_value(parser,section,f"Pulse{prefix}X{i}")),.1*float(_value(parser,section,f"Pulse{prefix}Y{i}"))] for i in range(1,count+1)]
+                setattr(pulse,coil+"_calibration",points)
+                done = _parse_bool(_value(parser,section,f"IRM{prefix}CalDone"),default=False,section_key=section,field="CalDone",warnings=warnings)
+                setattr(pulse,coil+"_calibrated",done)
+                for i in range(1,count+1):
+                    for axis in ("X","Y"):
+                        mark_mapped(section,f"Pulse{prefix}{axis}{i}",f"pulse_irm.{coil}_calibration")
+            except (TypeError,ValueError) as exc:
+                warnings.append(f"{section} pulse calibration: {exc}")
+        for suffix,name,scale in (("Min","min_mT",.1),("Max","max_mT",.1)):
+            raw = _value(parser,section,"Pulse"+prefix+suffix)
+            if raw is not None:
+                setattr(pulse,coil+"_"+name,scale*_parse_float(raw,default=0,section_key=section,field=suffix,warnings=warnings))
+                mark_mapped(section,"Pulse"+prefix+suffix,f"pulse_irm.{coil}_{name}")
+        raw = _value(parser,section,"IRM"+prefix+"VoltMax")
+        if raw is not None:
+            setattr(pulse,coil+"_capacitor_max_v",_parse_float(raw,default=0,section_key=section,field="VoltMax",warnings=warnings))
+            mark_mapped(section,"IRM"+prefix+"VoltMax",f"pulse_irm.{coil}_capacitor_max_v")
+
+    mcc_board = None
+    for key,kind,name in (("IRMVoltageOut","AO","dac_channel"),("IRMCapacitorVoltageIn","AI","capacitor_adc_channel"),
+                          ("IRMFire","DO","fire_bit"),("IRMTrim","DO","trim_bit")):
+        reference = _value(parser,"Channels",key)
+        if reference is None:
+            continue
+        try:
+            match = re.fullmatch(kind+r"-(\d+)-CH(\d+)",reference)
+            if not match:
+                raise ValueError("invalid pulse IRM channel reference")
+            index = match.group(1)
+            if int(_value(parser,"Boards","CommProtocol"+index)) != 1:
+                raise ValueError("pulse charge/readback/fire/trim requires MCC channels")
+            number = int(_value(parser,"Boards","BoardNum"+index))
+            if mcc_board is not None and mcc_board != number:
+                raise ValueError("pulse circuit channels must use one MCC board")
+            mcc_board = number
+            pulse.board = number
+            setattr(pulse,name,int(_value(parser,"Boards",reference).split(",")[1]))
+            pulse.voltage_range = int(_value(parser,"Boards","RangeType"+index))
+            pulse.digital_port = int(_value(parser,"Boards","DOutPortType"+index))
+            mark_mapped("Channels",key,"pulse_irm."+name)
+        except (AttributeError,TypeError,ValueError,IndexError) as exc:
+            setattr(pulse,name,-1)
+            warnings.append(f"{key}: {exc}")
+    for key,name in (("IRMRelay","irm_relay_bit"),("AFAxialRelay","axial_relay_bit"),("AFTransRelay","transverse_relay_bit")):
+        reference = _value(parser,"Channels",key)
+        if reference is None:
+            continue
+        try:
+            match = re.fullmatch(r"DO-(\d+)-CH(\d+)",reference)
+            if not match:
+                raise ValueError("invalid pulse coil relay reference")
+            index = match.group(1)
+            if int(_value(parser,"Boards","CommProtocol"+index)) != 2:
+                raise ValueError("pulse coil selection requires ADwin relay channels")
+            number = int(_value(parser,"Boards","BoardNum"+index))
+            if pulse.relay_board >= 0 and pulse.relay_board != number:
+                raise ValueError("pulse coil relays must use one ADwin board")
+            pulse.relay_board = number
+            setattr(pulse,name,int(_value(parser,"Boards",reference).split(",")[1]))
+            mark_mapped("Channels",key,"pulse_irm."+name)
+        except (AttributeError,TypeError,ValueError,IndexError) as exc:
+            setattr(pulse,name,-1)
+            warnings.append(f"{key}: {exc}")
+
+    pulse.temperature_channels = []
+    for index in (1,2):
+        enabled = _parse_bool(_value(parser,"Modules",f"EnableT{index}"),default=False,section_key="Modules",field=f"EnableT{index}",warnings=warnings)
+        if not enabled:
+            continue
+        try:
+            reference = _value(parser,"Channels",f"AnalogT{index}")
+            match = re.fullmatch(r"AI-(\d+)-CH(\d+)",reference or "")
+            if not match or int(_value(parser,"Boards","BoardNum"+match.group(1)))!=pulse.board:
+                raise ValueError("pulse temperature sensor must use its configured MCC board")
+            channel = int(_value(parser,"Boards",reference).split(",")[1])
+            pulse.temperature_channels.append(channel)
+            mark_mapped("Channels",f"AnalogT{index}","pulse_irm.temperature_channels")
+        except (AttributeError,TypeError,ValueError,IndexError) as exc:
+            pulse.temperature_channels.append(-1)
+            warnings.append(f"AnalogT{index}: {exc}")
+    for key,name in (("TSlope","temperature_slope"),("Toffset","temperature_offset"),("Thot","temperature_hot_c")):
+        raw = _value(parser,"AF",key)
+        if raw is not None:
+            setattr(pulse,name,_parse_float(raw,default=0,section_key="AF",field=key,warnings=warnings))
+            mark_mapped("AF",key,"pulse_irm."+name)
+
+    calibrated_limits = [getattr(pulse,coil+"_max_mT") for coil in ("axial","transverse")
+                         if getattr(pulse,coil+"_calibrated") and math.isfinite(getattr(pulse,coil+"_max_mT")) and getattr(pulse,coil+"_max_mT")>0]
+    if calibrated_limits:
+        config.irm_arm.irm_max_field = max(calibrated_limits)
 
     raw = _value(parser, "IRMPulse", "IRMAxis")
     if raw is not None and raw.strip():
-        config.irm_arm.irm_axis = f"{raw.strip().upper()} axis" if raw.strip().upper() in {"X", "Y", "Z"} else raw.strip()
+        config.irm_arm.irm_axis = {"X":"X","Y":"Y","Z":"Z (up-axis)"}.get(raw.strip().upper(),raw.strip())
         mark_mapped("IRMPulse", "IRMAxis", "irm_arm.irm_axis")
 
     # Vacuum
@@ -427,21 +655,61 @@ def import_vb6_ini(config: AppConfig, path: str | Path) -> LegacyIniImportReport
         )
         mark_mapped("Modules", "EnableSusceptibility", "susceptibility.enabled")
 
-    # Optional safety / quality mappings (if present)
+    # Native motion calibration must not be confused with UI speed percentages.
+    station = config.motor_station
+    for axis, port_key, address_key in (
+        ("changer_x", "COMPortChanger", "MotorIDChanger"),
+        ("changer_y", "COMPortChangerY", "MotorIDChangerY"),
+        ("updown", "COMPortUpDown", "MotorIDUpDown"),
+        ("turning", "COMPortTurning", "MotorIDTurning"),
+    ):
+        port = _normalize_com_port(_value(parser, "COMPorts", port_key), field=port_key, warnings=warnings)
+        address = _value(parser, "MotorPrograms", address_key)
+        if port:
+            station.ports[axis] = port
+            mark_mapped("COMPorts", port_key, f"motor_station.ports.{axis}")
+        if address is not None:
+            station.addresses[axis] = _parse_int(address, default=0, section_key="MotorPrograms", field=address_key, warnings=warnings)
+            mark_mapped("MotorPrograms", address_key, f"motor_station.addresses.{axis}")
+    for section, key, destination in (
+        ("SampleChanger", "SlotMin", "slot_min"),
+        ("SampleChanger", "SlotMax", "slot_max"),
+        ("SampleChanger", "OneStep", "one_step"),
+        ("SteppingMotor", "SampleHoleAlignmentOffset", "sample_hole_alignment_offset"),
+        ("SteppingMotor", "ChangerSpeed", "changer_speed"),
+        ("SteppingMotor", "TurnerSpeed", "turner_speed"),
+        ("SteppingMotor", "TurningMotorFullRotation", "turning_motor_full_rotation"),
+        ("SteppingMotor", "TurningMotor1rps", "turning_motor_1rps"),
+        ("SteppingMotor", "LiftSpeedSlow", "lift_speed_slow"),
+        ("SteppingMotor", "LiftSpeedNormal", "lift_speed_normal"),
+        ("SteppingMotor", "LiftSpeedFast", "lift_speed_fast"),
+        ("SteppingMotor", "LiftAcceleration", "lift_acceleration"),
+        ("SteppingMotor", "MeasPos", "meas_pos"),
+        ("SteppingMotor", "SampleBottom", "sample_bottom"),
+        ("SteppingMotor", "UpDownTorqueFactor", "updown_torque_factor"),
+        ("SteppingMotor", "UpDownMaxTorque", "updown_max_torque"),
+        ("SteppingMotor", "PickupTorqueThrottle", "pickup_torque_throttle"),
+    ):
+        raw = _value(parser, section, key)
+        if raw is not None:
+            value = _parse_float(raw, default=None, section_key=section, field=key, warnings=warnings)
+            if value is not None and math.isfinite(value):
+                station.controller[destination] = value
+                mark_mapped(section, key, f"motor_station.controller.{destination}")
+    if station.ports or station.addresses or station.controller:
+        station.calibration_source = str(ini_path.resolve())
+        station.controller["sample_height"] = config.motion.sample_height
+
     raw = _value(parser, "SampleChanger", "HoleSlotNum")
     if raw is not None:
-        config.changer.speed_z = _parse_int(
+        station.hole_slot = _parse_int(
             raw,
-            default=int(config.changer.speed_z),
+            default=station.hole_slot,
             section_key="SampleChanger",
             field="HoleSlotNum",
             warnings=warnings,
         )
-        mark_mapped("SampleChanger", "HoleSlotNum", "changer.speed_z")
-        warnings.append(
-            "SampleChanger.HoleSlotNum is migrated to changer.speed_z as a best-effort placeholder "
-            "because no dedicated rapid_main field exists."
-        )
+        mark_mapped("SampleChanger", "HoleSlotNum", "motor_station.hole_slot")
 
     # Compositional summary of unmapped keys
     for sec_name in parser.sections():

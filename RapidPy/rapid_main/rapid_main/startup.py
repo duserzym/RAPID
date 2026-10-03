@@ -116,7 +116,7 @@ def collect_startup_environment(
         metadata.version("berkeley-rapidpy")
         packaged = True
     except metadata.PackageNotFoundError:
-        packaged = False
+        packaged = bool(getattr(sys, "frozen", False))
     return StartupEnvironmentReport(
         python_executable=sys.executable,
         python_version=sys.version.split()[0],

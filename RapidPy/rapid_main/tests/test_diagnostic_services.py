@@ -14,6 +14,7 @@ from rapid_main.config import (
     VacuumConfig,
 )
 from rapid_main import diagnostic_services
+from tests.af_fakes import configured_af
 from rapid_main.communication_log import CommunicationDirection
 from rapid_main.diagnostic_services import (
     DCMotorNoCommBackend,
@@ -75,8 +76,9 @@ class TestDiagnosticServices(unittest.TestCase):
                 return 0
 
         controller = _Controller()
-        backend = AfDemagBackendAdapter(AfDemagConfig(board=2), controller=controller)
-        command = plan_af_demag_command("AF50", AfDemagConfig(peak=100.0))
+        cfg = configured_af(board=2)
+        backend = AfDemagBackendAdapter(cfg, controller=controller)
+        command = plan_af_demag_command("AF50", cfg)
 
         status = backend.apply_af(command)
         reset_status = backend.reset_field()
@@ -112,8 +114,9 @@ class TestDiagnosticServices(unittest.TestCase):
                 del request
                 raise RuntimeError("ADwin process timeout")
 
-        backend = AfDemagBackendAdapter(AfDemagConfig(), controller=_Controller())
-        command = plan_af_demag_command("AF25", AfDemagConfig(peak=100.0))
+        cfg = configured_af()
+        backend = AfDemagBackendAdapter(cfg, controller=_Controller())
+        command = plan_af_demag_command("AF25", cfg)
 
         with self.assertRaisesRegex(RuntimeError, "process timeout"):
             backend.apply_af(command)
@@ -135,8 +138,9 @@ class TestDiagnosticServices(unittest.TestCase):
                 del request
                 return SimpleNamespace(out_count=1)
 
-        backend = AfDemagBackendAdapter(AfDemagConfig(), controller=_Controller())
-        command = plan_af_demag_command("AF25", AfDemagConfig(peak=100.0))
+        cfg = configured_af()
+        backend = AfDemagBackendAdapter(cfg, controller=_Controller())
+        command = plan_af_demag_command("AF25", cfg)
 
         with self.assertRaises(AttributeError):
             backend.apply_af(command)
@@ -148,7 +152,7 @@ class TestDiagnosticServices(unittest.TestCase):
         )
         self.assertNotIn("completed", backend.status().lower())
 
-    def test_irm_live_adapter_records_every_incremental_ramp(self) -> None:
+    def test_irm_live_adapter_cannot_substitute_an_af_waveform_for_a_capacitor_pulse(self) -> None:
         result = self._adwin_result()
 
         class _Controller:
@@ -165,23 +169,10 @@ class TestDiagnosticServices(unittest.TestCase):
         controller = _Controller()
         backend = IrmArmBackendAdapter(IrmArmConfig(), controller=controller)
 
-        backend.apply_irm(
-            max_field_mT=30.0,
-            axis="Z (up-axis)",
-            ramp_label="Fast (10 s)",
-            steps=3,
-        )
-
-        self.assertEqual(len(controller.requests), 3)
-        events = backend.communication_events()
-        self.assertEqual(len(events), 6)
-        self.assertEqual(
-            [event.direction for event in events],
-            [CommunicationDirection.TX, CommunicationDirection.RX] * 3,
-        )
-        self.assertTrue(all(event.channel == "ADWIN_IRM_ARM" for event in events))
-        self.assertIn("field=10 mT", events[0].detail)
-        self.assertIn("field=30 mT", events[-1].detail)
+        with self.assertRaisesRegex(RuntimeError,"capacitor charge/readback/fire/discharge"):
+            backend.apply_irm(max_field_mT=30.0,axis="Z (up-axis)",ramp_label="Fast (10 s)",steps=3)
+        self.assertEqual(controller.requests, [])
+        self.assertEqual(backend.communication_events(), ())
 
     def test_adwin_readiness_probe_failure_blocks_live_adapters(self) -> None:
         class _Unreachable:

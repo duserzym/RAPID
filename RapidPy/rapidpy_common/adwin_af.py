@@ -370,6 +370,30 @@ class AdwinAFController:
             raise AdwinError(f"ADWIN boot failed (return code {ret}) using {boot_path}.")
         self._raise_if_error(f"ADboot(dev={self._dev}, file={Path(boot_path).name})", raw_return=ret)
 
+    def recover_safe_field(self) -> int:
+        """Stop outputs on the existing board without rebooting its relays.
+
+        VB6 Adwin.bas Process_Status uses Get_Par(-100 + ProcessNo):
+        1 is running, 0 stopped and -1 absent. Acknowledgements and status
+        are both checked before disabling the ramp DAC and coil relays.
+        """
+        for proc in range(1, 11):
+            status = self.get_par(-100 + proc)
+            if status not in {-1, 0, 1}:
+                raise AdwinError(f"Unknown process {proc} status {status} during recovery.")
+            if status == 1:
+                result = int(self._dll.ADB_Stop(proc, self._dev))
+                self._raise_if_error(f"Stop_Process({proc})", raw_return=result)
+                if result != 0:
+                    raise AdwinError(f"Stop_Process({proc}) failed with code {result}.")
+            if self.get_par(-100 + proc) not in {-1, 0}:
+                raise AdwinError(f"Process {proc} stop was not verified.")
+        self.set_dac(self.board.ramp_dac_chan, 0.0)
+        self.set_digout(0)
+        if self.get_digout() != 0:
+            raise AdwinError("AF recovery relay clear was not verified.")
+        return 0
+
     def clear_all_processes(self) -> None:
         for proc in range(1, 11):
             self._dll.ADB_Stop(proc, self._dev)
@@ -407,7 +431,9 @@ class AdwinAFController:
         return value
 
     def set_digout(self, value: int) -> None:
-        value = int(value) & 0x3F
+        value = int(value)
+        if not 0 <= value <= 0x3F:
+            raise AdwinError("ADwin-light-16 digital output word must be in 0..63; outputs cannot be silently masked.")
         ret = int(self._dll.Set_Digout(value, self._dev))
         if ret != 0:
             code, text = self._last_error()
@@ -510,7 +536,10 @@ class AdwinAFController:
             return self.limits.trans_ramp_max, self.limits.trans_monitor_max
         raise AdwinError(f"Unsupported coil {coil!r}; expected axial/transverse.")
 
-    def run_ramp(self, request: AdwinRampRequest, timeout_s: float = 90.0) -> AdwinRampResult:
+    def run_ramp(self, request: AdwinRampRequest, timeout_s: float = 90.0,
+                 *, should_cancel: Callable[[], bool] | None = None) -> AdwinRampResult:
+        if should_cancel is not None and should_cancel():
+            raise AdwinError("ADWIN AF ramp cancelled before initialization.")
         self.boot_board()
         self.set_af_relays(request.active_coil, one_chan_on=True)
         self.clear_all_processes()
@@ -540,13 +569,20 @@ class AdwinAFController:
             raise AdwinError(f"Start_Process({self.board.process_num}) failed with code {ret}.")
 
         start = time.monotonic()
-        while True:
-            if self.get_par(4) == 7:
-                break
-            if time.monotonic() - start > timeout_s:
-                self._dll.ADB_Stop(self.board.process_num, self._dev)
-                raise AdwinError("ADWIN AF ramp timeout while waiting for process completion.")
-            time.sleep(0.2)
+        try:
+            while True:
+                if should_cancel is not None and should_cancel():
+                    raise AdwinError("ADWIN AF ramp cancelled while running.")
+                if self.get_par(4) == 7:
+                    break
+                if time.monotonic() - start > timeout_s:
+                    raise AdwinError("ADWIN AF ramp timeout while waiting for process completion.")
+                time.sleep(0.2)
+        except Exception as exc:
+            stop_result = int(self._dll.ADB_Stop(self.board.process_num, self._dev))
+            if stop_result != 0:
+                raise AdwinError(f"{exc}; process stop failed with code {stop_result}.") from exc
+            raise
 
         result = AdwinRampResult(
             out_count=self.get_par(5),

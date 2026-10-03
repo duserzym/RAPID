@@ -730,3 +730,139 @@ Deliver a validated `rapid_main` AF-first pilot within the next two sprints:
 - No side-menu icon/text clipping.
 - Main app presents a custom icon (not default Python icon) and all modules use explicit window/icon identity.
 - VB6 parity tracker updated with objective evidence references and no silent exclusions.
+
+## Continuation checkpoint — 3 October 2026
+
+The main glass workspace, susceptibility/holder lifecycle, transactional
+bundles, calibration governance, and helper integration are retained. New work
+adds a wheel-backed portable build, frozen helper dispatch, startup diagnostics,
+and an isolated offline UI smoke check. Treatment validation blocks missing,
+simulated, or disconnected actuators and invalid requests before execution.
+IRM/ARM requests cannot silently clamp or partially apply invalid ramps.
+AFZ/AFMAX numeric labels retain their requested field. All 599 tests pass with
+isolated Qt preferences; the source UI/helper smoke check passes.
+
+The July snapshot above is historical. See
+`docs/rapid-main-portable-release.md` for the current launch/test procedure.
+Full replacement remains open: AF multi-pass choreography/field calibration,
+independent ARM bias and pulse-IRM circuitry, backfield polarity, synchronized
+RRM, MCC/DAC binding, and transverse motor execution are software integrations
+still needing closure. Physical/operator acceptance is additional; do not
+classify all remaining work as hardware-only testing.
+
+### Calibrated AF source checkpoint — 3 October 2026
+
+Live queue AF now uses the full source-backed axial/transverse/transverse
+lifecycle, AFZ and independent-coil AFMAX, accepted calibration imports,
+verified specimen centering, cooperative native ADwin cancellation, independent
+cleanup attempts and immutable indexed treatment evidence. The main-app suite
+passes 613 tests. See docs/af-treatment-integration.md for evidence and limits.
+The portable pilot predates these source changes. Calibration tooling and bench
+acceptance remain open; independent ARM bias, pulse IRM, backfield, RRM and
+MCC/DAC integration still require development. The full-system goal remains active.
+
+### Independent ARM bias source checkpoint — 3 October 2026
+
+Queue ARM now uses one calibrated axial AF pass and independent MCC DC bias,
+with corrected legacy calibration units/bindings, active-low gate sequencing,
+cooperative setup cancellation, safe output cleanup and indexed phase evidence.
+The MCC Universal Library ctypes adapter probes read-only and checks each native
+conversion/output status. All 622 main-app tests pass. Settings show imported
+AF/ARM calibration summaries. See docs/arm-bias-integration.md. Manual ARM control,
+calibration tooling, pulse IRM/backfield, RRM and bench qualification remain open.
+The full-system goal is active; the portable pilot has not yet been rebuilt.
+
+### Manual ARM and pulse IRM planning checkpoint — 3 October 2026
+
+Manual ARM now reuses the complete calibrated lifecycle on a GUI-safe worker,
+retains device leases until cancellation cleanup finishes, requires specimen
+identity, and publishes immutable treatment records with SHA-256 indexes. Success
+and failure evidence, unwritable destinations, publication failure and close
+cancellation have injected coverage. Queue context is restored after each attempt.
+
+Pulse IRM now has separate persisted configuration/imports and tested Old/ASC
+capacitor-field planning, ASC boost, module/backfield gating and calibrated limits.
+The common MCC driver has checked ADC read/conversion support. Pulse execution,
+Matsusada scaling, channel binding, polarity/positioning, pulse evidence and manual
+IRM integration remain open. See docs/pulse-irm-development.md. The main suite
+passes 633 tests; the additional ADC check and UI smoke pass. The goal remains
+active and the portable pilot still predates these source changes.
+
+### Capacitor pulse execution and integration — 3 October 2026
+
+Live queue and manual IRM now use calibrated capacitor charge/readback/trim/fire/
+discharge with ADwin coil/polarity readback, source Matsusada scaling, enabled
+coil-temperature interlocks, two residual pulses at load and verified specimen
+positioning. Backfield changes the polarity relay and retains non-negative DAC
+voltages. The old generic AF waveform IRM implementation is removed/inhibited.
+
+Unverified pulse safe state inhibits motor return, further treatments and device
+ownership until a recorded discharge-only recovery succeeds. Immutable pulse,
+motion and recovery records are retained/indexed for worker and manual runs.
+Legacy capacitor-voltage/field mapping and axis normalization are corrected.
+All 651 main-app tests pass in 88.038 seconds; six-panel/six-helper UI smoke passes.
+See docs/pulse-irm-development.md. Zero-field queue semantics, RRM, motor station
+configuration, calibration tooling, probe motion, release rebuilding and physical/
+scientific acceptance remain open. The full-system goal remains active.
+
+### Native motor station and RRM lifecycle — 3 October 2026
+
+Imported native motor wiring now routes four address-16 controllers on separate
+ports rather than assuming addresses 1..4 on COM3. Both queue and manual motor
+diagnostics use native travel, speed, torque and 57600 baud calibration.
+Fractional belt steps and negative specimen-centre floor semantics are retained.
+Slot number is no longer misinterpreted as lift speed. Incomplete station profiles
+block preflight without constructing a motor transport.
+
+RRM/RRMZ now have explicit field/signed-speed labels, optional independent ARM
+bias, calibrated AF while spinning, cooperative rotation readback checks,
+verified stop and independent field cleanup. Unsafe rotation/field inhibits lift
+return and further treatments until recorded stop recovery succeeds. Worker and
+manual recovery publish immutable RRM evidence with SHA-256 indexes. See
+docs/motor-station-and-rrm-development.md for requirements and remaining work.
+
+Verification: 673 main-app tests passed in 84.794 seconds; the additional long-spin
+native reference regression and current motor/RRM subset pass (23 tests).
+Six-panel/six-helper source UI smoke passes. The full-system goal remains active;
+the portable pilot has not yet been rebuilt from this newer source.
+
+### Zero-field IRM, typed field units and routine controls — 3 October 2026
+
+Queue IRM0 now performs two source residual discharges at load and positions the
+specimen without charging or applying a specimen pulse. Zero-treatment records
+retain residual count, explicit charged-pulse status, bounded discharge and
+required immutable artifact digests. Recovery remains discharge-only.
+
+Typed G/MT labels convert once at the actuator boundary, support explicit pulse
+axes and keep ARM peak/bias units independent. The sequence panel now uses RRM
+field/speed/coil/bias and ARM AF-peak controls; logarithmic IRM and numeric
+backfield steps preserve gauss inputs. The documented Hawaiian series is explicit
+25–800 G rather than 25–800 mT. Compact panels stack controls above the preview
+and scroll vertically. See docs/zero-irm-and-treatment-units.md for contracts,
+source discrepancies and remaining work. The full-system goal remains active.
+
+Verification: 696 isolated main-app tests pass in 90.593 seconds. Source UI smoke
+passes six panels and six helpers. Temperature is rechecked before each residual
+fire and immediately before charging after positioning. The full-system goal
+remains active; persistence of unsafe hardware state across restarts is a next
+required development task, and the portable pilot remains older than this source.
+
+### Durable field-treatment safety across restarts — 3 October 2026
+
+Live AF, ARM, pulse IRM and RRM persist unfinished operations before treatment
+motion/output and retain station identity, plan and physical recovery evidence.
+Atomic checksummed storage, stale-token checks and an OS lifetime ownership
+lease prevent restart amnesia and concurrent treatment/recovery. Changed wiring,
+corrupt state and failed publication block further operation. Recovery does not
+reapply fields, charge/fire pulses or start rotation. Pulse discharge precedes
+verified reference/lift return; field recovery stops ADwin processes and checks
+relay clear without rebooting the board. See docs/hardware-safety-persistence.md.
+
+The full-system goal remains active. Standalone helper ownership, non-treatment
+motion persistence, calibration/probe tooling, portable rebuild and physical/
+scientific acceptance remain open. Development changes are being committed and
+pushed in verified milestones at the user's request.
+
+Verification: 724 isolated main-app tests pass in 92.420 seconds, including 28
+durable-safety tests. Six-panel/six-helper source UI smoke passes. The portable
+pilot still predates this source checkpoint and must be rebuilt before release.

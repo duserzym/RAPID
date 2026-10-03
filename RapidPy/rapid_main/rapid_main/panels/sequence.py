@@ -9,6 +9,7 @@ from rapid_main.rockmag import (
     RockmagRoutinePlan,
     compile_rockmag_routine,
     rockmag_af_demag,
+    rockmag_hawaiian_af,
     rockmag_the_works,
 )
 from rapid_main.thermal import ThermalRoutinePlan
@@ -24,8 +25,8 @@ class SequenceConfig:
     rrm_af_field: float = 100.0
     rrm_do_negative: bool = False
     do_arm: bool = False
-    arm_step: float = 5.0
-    arm_max: float = 100.0
+    arm_step: float = .5
+    arm_max: float = 1.0
     arm_af_field: float = 100.0
     do_irm_af: bool = False
     irm_log_factor: float = 0.25
@@ -55,19 +56,38 @@ class SequencePanel(QtWidgets.QWidget):
         self._dirty = False
 
         root = QtWidgets.QHBoxLayout(self)
+        self._root_layout = root
+        self._compact_layout = None
         root.setContentsMargins(16, 12, 16, 16)
         root.setSpacing(12)
 
         left_panel = QtWidgets.QWidget()
         lv = QtWidgets.QVBoxLayout(left_panel)
+        lv.setSizeConstraint(QtWidgets.QLayout.SizeConstraint.SetNoConstraint)
         lv.setContentsMargins(0, 0, 0, 0)
         lv.setSpacing(12)
         lv.addWidget(self._build_presets_card())
         lv.addWidget(self._build_steps_card())
         lv.addStretch()
-        root.addWidget(left_panel, 3)
+        self._steps_scroll = QtWidgets.QScrollArea()
+        self._steps_scroll.setWidgetResizable(True)
+        self._steps_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self._steps_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        left_panel.setMinimumSize(0, 0)
+        left_panel.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred)
+        self._steps_scroll.setWidget(left_panel)
+        root.addWidget(self._steps_scroll, 3)
         root.addWidget(self._build_preview_card(), 2)
         self._rebuild_preview()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        compact = self.width() < 1100
+        if compact != self._compact_layout:
+            self._compact_layout = compact
+            direction = QtWidgets.QBoxLayout.TopToBottom if compact else QtWidgets.QBoxLayout.LeftToRight
+            self._root_layout.setDirection(direction)
+            self._preset_buttons_layout.setDirection(direction)
 
     # ── Presets ───────────────────────────────────────────────────────────────
     def _build_presets_card(self) -> QtWidgets.QFrame:
@@ -86,6 +106,7 @@ class SequencePanel(QtWidgets.QWidget):
         cl.addWidget(note)
 
         row = QtWidgets.QHBoxLayout()
+        self._preset_buttons_layout = row
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(10)
 
@@ -95,7 +116,7 @@ class SequencePanel(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
-        hw_btn.setToolTip("Hawaiian Standard AF\n(25, 50, 100, 200, 400, 800 mT)")
+        hw_btn.setToolTip("Hawaiian Standard AF\n25, 50, 100, 200, 400, 800 G (2.5–80 mT)")
         hw_btn.clicked.connect(self._preset_hawaiian)
 
         rw_btn = QtWidgets.QPushButton('Rockmag the Works')
@@ -149,8 +170,8 @@ class SequencePanel(QtWidgets.QWidget):
         self._chk_rrm.toggled.connect(self._rebuild_preview)
         rrm_row, self._rrm_step, self._rrm_max, self._rrm_af = self._param_row(
             self._chk_rrm,
-            [("step (rps)", 0.5, 0.01, 10.0),
-             ("to (rps)",   2.0, 0.01, 10.0),
+            [("step (rps)", 0.5, 0.01, 40.0),
+             ("to (rps)",   2.0, 0.01, 40.0),
              ("AF field (mT)", 100.0, 1.0, 1200.0)],
         )
         self._chk_rrm_neg = QtWidgets.QCheckBox("and negative rotations")
@@ -160,6 +181,20 @@ class SequencePanel(QtWidgets.QWidget):
         self._chk_rrm_neg.toggled.connect(self._rebuild_preview)
         cl.addWidget(self._chk_rrm)
         cl.addWidget(rrm_row)
+        self._rrm_coil = QtWidgets.QComboBox()
+        self._rrm_coil.addItem("RRM transverse", "RRM")
+        self._rrm_coil.addItem("RRMZ axial", "RRMZ")
+        self._rrm_coil.setEnabled(False)
+        self._chk_rrm.toggled.connect(self._rrm_coil.setEnabled)
+        self._rrm_coil.currentIndexChanged.connect(self._rebuild_preview)
+        cl.addWidget(self._rrm_coil)
+        self._chk_rrm_bias = QtWidgets.QCheckBox("Apply independent DC bias during RRM")
+        self._chk_rrm_bias.setEnabled(False)
+        self._chk_rrm.toggled.connect(self._chk_rrm_bias.setEnabled)
+        self._chk_rrm_bias.toggled.connect(self._rebuild_preview)
+        rrm_bias_row, self._rrm_bias = self._param_row(self._chk_rrm_bias, [("RRM bias (mT)", .05, 0., 10.)])
+        cl.addWidget(self._chk_rrm_bias)
+        cl.addWidget(rrm_bias_row)
         cl.addWidget(self._chk_rrm_neg)
         cl.addSpacing(6)
 
@@ -168,8 +203,8 @@ class SequencePanel(QtWidgets.QWidget):
         self._chk_arm.toggled.connect(self._rebuild_preview)
         arm_row, self._arm_step, self._arm_max, self._arm_af = self._param_row(
             self._chk_arm,
-            [("step (G)",     5.0,   0.1, 500.0),
-             ("to (G)",       100.0, 0.1, 2000.0),
+            [("bias step (G)", .5,   0.1, 500.0),
+             ("bias to (G)",   1.0, 0.1, 2000.0),
              ("in AF (mT)",   100.0, 1.0, 1200.0)],
         )
         cl.addWidget(self._chk_arm)
@@ -268,6 +303,7 @@ class SequencePanel(QtWidgets.QWidget):
         cl.setSpacing(8)
 
         self._preview_header = QtWidgets.QLabel("SEQUENCE PREVIEW")
+        self._preview_header.setWordWrap(True)
         self._preview_header.setObjectName("sectionHdr")
         cl.addWidget(self._preview_header)
 
@@ -317,13 +353,16 @@ class SequencePanel(QtWidgets.QWidget):
             step = self._rrm_step.value()
             top  = self._rrm_max.value()
             v    = step
+            prefix = self._rrm_coil.currentData()
+            field = self._rrm_af.value()
+            bias = f"@{self._rrm_bias.value():g}" if self._chk_rrm_bias.isChecked() else ""
             while v <= top + 1e-9:
-                labels.append(f"RRM{v:.2f}".rstrip("0").rstrip("."))
+                labels.append(f"{prefix}{field:g}/{v:g}{bias}")
                 v += step
             if self._chk_rrm_neg.isChecked():
                 v = step
                 while v <= top + 1e-9:
-                    labels.append(f"RRM-{v:.2f}".rstrip("0").rstrip("."))
+                    labels.append(f"{prefix}{field:g}/-{v:g}{bias}")
                     v += step
 
         if self._chk_arm.isChecked():
@@ -331,7 +370,7 @@ class SequencePanel(QtWidgets.QWidget):
             top  = self._arm_max.value()
             v    = step
             while v <= top + 1e-9:
-                labels.append(f"ARM{int(round(v))}" if v == round(v) else f"ARM{v:.2f}".rstrip("0").rstrip("."))
+                labels.append(f"ARM{self._arm_af.value():g}mT_{v:g}G")
                 v += step
 
         if self._chk_irm.isChecked():
@@ -340,12 +379,12 @@ class SequencePanel(QtWidgets.QWidget):
             af_max     = self._irm_af_max.value()
             irm_max    = self._irm_irm_max.value()
             # AF demagnetisation steps (log-spaced)
-            labels += _log_steps("AF", min_step, af_max, log_factor)
+            labels += _log_steps("AF", min_step / 10, af_max, log_factor)
             # IRM acquisition steps (log-spaced)
-            labels += _log_steps("IRM", min_step, irm_max, log_factor)
+            labels += [label + "G" for label in _log_steps("IRM", min_step, irm_max, log_factor)]
 
         if self._chk_backfield.isChecked():
-            labels.append("IRM-BF")
+            labels += [label + "G" for label in _log_steps("IRM-", self._irm_min.value(), self._irm_irm_max.value(), self._irm_log.value())]
 
         if self._chk_susc.isChecked():
             labels.append("SUSC")
@@ -513,12 +552,7 @@ class SequencePanel(QtWidgets.QWidget):
 
     # ── Preset loaders ────────────────────────────────────────────────────────
     def _preset_hawaiian(self) -> None:
-        plan = compile_rockmag_routine(
-            rockmag_af_demag(
-                (25.0, 50.0, 100.0, 200.0, 400.0, 800.0),
-                name="Hawaiian AF Preset",
-            )
-        )
+        plan = compile_rockmag_routine(rockmag_hawaiian_af())
         self._compiled_routine_plan = plan
         self._compiled_thermal_plan = None
         self._compiled_routine_labels = plan.to_queue_labels()
@@ -583,10 +617,8 @@ def _log_steps(prefix: str, min_val: float, max_val: float, log_factor: float) -
         v *= (1.0 + log_factor)
     steps.append(max_val)
     labels: list[str] = []
+    from rapid_main.treatment_labels import format_field_value
     for s in steps:
-        if s == round(s):
-            labels.append(f"{prefix}{int(round(s))}")
-        else:
-            labels.append(f"{prefix}{s:.1f}".rstrip("0").rstrip("."))
+        labels.append(f"{prefix}{format_field_value(s)}")
     return labels
 

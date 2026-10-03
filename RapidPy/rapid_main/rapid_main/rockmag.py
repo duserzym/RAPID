@@ -9,6 +9,7 @@ with the existing RapidPy queue/measurement path.
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 from dataclasses import dataclass, field
@@ -231,7 +232,8 @@ def rockmag_the_works(
     *,
     af_fields_mT: Sequence[float] = (20.0, 40.0, 60.0, 80.0, 100.0),
     irm_fields_g: Sequence[float] = (100.0, 300.0, 1000.0),
-    arm_fields_g: Sequence[float] = (50.0, 100.0),
+    arm_fields_g: Sequence[float] = (0.5, 1.0),
+    arm_peak_af_mT: float = 100.0,
     include_backfield: bool = True,
     include_susceptibility: bool = True,
 ) -> RockmagRoutineSpec:
@@ -239,10 +241,13 @@ def rockmag_the_works(
 
     labels = ["NRM"]
     labels.extend(_field_labels("AF", af_fields_mT))
-    labels.extend(_field_labels("IRM", irm_fields_g))
-    labels.extend(_field_labels("ARM", arm_fields_g))
+    labels.extend(label + "G" for label in _field_labels("IRM", irm_fields_g))
+    if not math.isfinite(arm_peak_af_mT) or arm_peak_af_mT <= 0:
+        raise ValueError("ARM peak AF must be finite and positive.")
+    # The legacy ARM step controls DC bias in gauss, separately from AF peak.
+    labels.extend(f"ARM{_format_field(arm_peak_af_mT)}mT_{bias}G" for bias in _field_labels("", arm_fields_g))
     if include_backfield:
-        labels.append("IRM-BF")
+        labels.extend(f"IRM-{_format_field(float(value))}G" for value in irm_fields_g if float(value) > 0)
     if include_susceptibility:
         labels.append("SUSC")
     return RockmagRoutineSpec(
@@ -253,6 +258,8 @@ def rockmag_the_works(
             "af_count": str(len(af_fields_mT)),
             "irm_count": str(len(irm_fields_g)),
             "arm_count": str(len(arm_fields_g)),
+            "arm_peak_af_mT": str(arm_peak_af_mT),
+            "field_units": "AF peak mT; IRM and ARM bias G",
         },
     )
 
@@ -268,6 +275,12 @@ def rockmag_af_demag(
     labels = ["NRM"] if include_nrm else []
     labels.extend(_field_labels("AF", fields_mT))
     return RockmagRoutineSpec(name=name, labels=tuple(labels), metadata={"template": "af-demag"})
+
+
+def rockmag_hawaiian_af() -> RockmagRoutineSpec:
+    """The documented VB6 Hawaiian AF values are gauss, not mT."""
+    return RockmagRoutineSpec("Hawaiian AF Preset", ("NRM", "AF25G", "AF50G", "AF100G", "AF200G", "AF400G", "AF800G"),
+                              metadata={"template": "hawaiian-af", "field_units": "G", "source": "VB6 frmRockmagRoutine Hawaiian button caption"})
 
 
 def _blocks_by_family(
@@ -308,16 +321,15 @@ def _field_labels(prefix: str, values: Iterable[float]) -> list[str]:
     labels: list[str] = []
     for value in values:
         numeric = float(value)
-        if numeric < 0.0:
-            raise ValueError(f"{prefix} field values must be non-negative")
+        if not math.isfinite(numeric) or numeric < 0.0:
+            raise ValueError(f"{prefix} field values must be finite and non-negative")
         labels.append(f"{prefix}{_format_field(numeric)}")
     return labels
 
 
 def _format_field(value: float) -> str:
-    if value == round(value):
-        return str(int(round(value)))
-    return f"{value:.3f}".rstrip("0").rstrip(".")
+    from .treatment_labels import format_field_value
+    return format_field_value(value)
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:

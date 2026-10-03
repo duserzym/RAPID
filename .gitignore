@@ -22,6 +22,7 @@ env/
 # Keep: installer/   lib/   tools/   dist is produced — don't commit binaries
 build/
 dist/
+/.tmp/
 
 # ── Packaging scratch / archives ──────────────────────────────────────────────
 *.zip

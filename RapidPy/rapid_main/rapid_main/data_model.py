@@ -224,6 +224,10 @@ class RockmagStep:
             return "SUSCEPTIBILITY"
         if label == "IRM-BF":
             return "BACKFIELD"
+        if re.match(r"^IRM[XYZ]?\s*-", label):
+            return "BACKFIELD"
+        if label.startswith("IRM"):
+            return "IRM"
         match = re.match(r"^([A-Z]+)", label)
         return match.group(1) if match else "UNKNOWN"
 
@@ -233,12 +237,16 @@ class RockmagStep:
         if not match:
             return None, ""
         value = float(match.group(1))
+        explicit_unit = re.match(r"\s*(MT|G)(?:_|$)", label[match.end():])
+        if explicit_unit:
+            return value, "mT" if explicit_unit[1] == "MT" else "G"
         if label.startswith("AF"):
             return value, "mT"
         if label.startswith("IRM") or label.startswith("ARM"):
             return value, "G"
         if label.startswith("RRM"):
-            return value, "rps"
+            # Old speed-only labels remain readable in archived artifacts.
+            return value, "mT" if "/" in label else "rps"
         if label.startswith(("TT", "TH", "TEMP")):
             return value, "C"
         return value, ""

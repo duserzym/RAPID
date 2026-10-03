@@ -10,6 +10,12 @@ Modern replacements live under `RapidPy/` — self-contained Python apps with a 
 
 ## Current Progress
 
+The integrated main app now has a portable Windows pilot build with six bundled
+helper tools. Launch `dist/RapidPyMain/RapidPyMain.exe`; copy the entire directory
+to move it to another computer. See the [portable release and operator
+guide](docs/rapid-main-portable-release.md) for verification, rebuilding,
+operator workflow, and the remaining VB6 replacement gates.
+
 RapidPy is now beyond the initial three-app milestone. The repository currently contains seven released modules, additional in-progress migration panels, and bench or support utilities, with public app pages under the GitHub Pages site and recent one-file Windows builds landing in the repo-root `dist/` folder.
 
 - **Website overview:** https://duserzym.github.io/RAPID/

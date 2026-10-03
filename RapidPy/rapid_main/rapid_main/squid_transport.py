@@ -253,6 +253,26 @@ class MotorTurningController:
     def angle(self) -> float:
         return float(convert_pos_to_angle(self._client.read_position(self._axis), self._full_rotation))
 
+    def spin(self, speed_rps: float, duration_s: float):
+        return self._client.turning_motor_spin(self._axis, speed_rps, duration_s)
+
+    def stop_spin(self):
+        return self._client.turning_motor_spin(self._axis, 0)
+
+    def position(self) -> int:
+        return int(self._client.read_position(self._axis))
+
+    def restore_spin_reference(self) -> MotionOutcome:
+        # Avoid commanding an absolute return across hundreds of completed turns.
+        position = self.position()
+        wrapped = position % (-self._full_rotation)
+        angle = convert_pos_to_angle(wrapped, self._full_rotation)
+        self._client.relabel_pos(self._axis, wrapped)
+        result = self.rotate_to(360 if angle > 10 else 0)
+        if result.ok:
+            self._client.relabel_pos(self._axis, 0)
+        return result
+
     def set_reference_angle(self, angle_deg: float) -> None:
         """VB6 ``SetTurningMotorAngle``: wrap into one rotation, then relabel."""
 

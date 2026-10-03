@@ -28,7 +28,7 @@ class RockmagRoutineTests(unittest.TestCase):
         plan = compile_rockmag_routine(spec)
 
         self.assertEqual(plan.spec.name, "Rockmag the Works")
-        self.assertEqual(plan.labels, ["NRM", "AF20", "AF40", "IRM100", "ARM50", "IRM-BF", "SUSC"])
+        self.assertEqual(plan.labels, ["NRM", "AF20", "AF40", "IRM100G", "ARM100MT_50G", "IRM-100G", "SUSC"])
         self.assertEqual(plan.to_queue_labels(), plan.labels)
         self.assertEqual(
             plan.blocks.block_names(),

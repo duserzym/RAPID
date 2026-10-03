@@ -34,7 +34,7 @@ class SequenceDocumentTests(unittest.TestCase):
         panel._preset_hawaiian()
         self.assertEqual(
             panel.generate_labels(),
-            ["NRM", "AF25", "AF50", "AF100", "AF200", "AF400", "AF800"],
+            ["NRM", "AF25G", "AF50G", "AF100G", "AF200G", "AF400G", "AF800G"],
         )
         self.assertTrue(panel.has_unsaved_changes())
         self.assertIn("Unsaved", panel._preview_header.text())

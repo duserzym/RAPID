@@ -93,9 +93,64 @@ class IrmArmConfig:
     irm_steps:      int   = 10
     arm_peak_af:    float = 100.0    # mT
     arm_bias:       float = 0.05     # mT
+    arm_enabled: bool = False
+    arm_bias_max_mT: float = 0.0
+    arm_voltage_per_mT: float = 0.0
+    arm_voltage_max: float = 0.0
+    arm_board: int = -1
+    arm_dac_channel: int = -1
+    arm_gate_bit: int = -1
+    arm_digital_port: int = 1  # MCC AUXPORT
+    arm_voltage_range: int = 100  # MCC UNI10VOLTS
+    arm_calibration_source: str = ""
     irm_voltage_slope: float = 0.01  # V / mT
     irm_voltage_intercept: float = 0.0  # V
     irm_max_voltage: float = 10.0  # V
+
+
+@dataclass
+class PulseIrmConfig:
+    system: str = ""
+    calibration_source: str = ""
+    axial_enabled: bool = False
+    transverse_enabled: bool = False
+    backfield_enabled: bool = False
+    coil_position: int = 0
+    axial_calibrated: bool = False
+    transverse_calibrated: bool = False
+    axial_calibration: list[list[float]] = field(default_factory=list)  # capacitor V, mT
+    transverse_calibration: list[list[float]] = field(default_factory=list)
+    axial_min_mT: float = 0
+    axial_max_mT: float = 0
+    transverse_min_mT: float = 0
+    transverse_max_mT: float = 0
+    axial_capacitor_max_v: float = 0
+    transverse_capacitor_max_v: float = 0
+    control_v_per_capacitor_v: float = 0
+    feedback_v_per_capacitor_v: float = 0
+    control_max_v: float = 0
+    asc_boost_at_min: float = 1.5
+    asc_boost_at_max: float = 1.13
+    trim_on_high: bool = False
+    board: int = -1
+    dac_channel: int = -1
+    capacitor_adc_channel: int = -1
+    voltage_range: int = 100
+    digital_port: int = 1
+    fire_bit: int = -1
+    trim_bit: int = -1
+    relay_board: int = -1
+    irm_relay_bit: int = -1
+    axial_relay_bit: int = -1
+    transverse_relay_bit: int = -1
+    charge_timeout_s: float = 90
+    discharge_timeout_s: float = 30
+    discharged_max_v: float = 10  # legacy zero-field charge threshold
+    poll_s: float = .1
+    temperature_channels: list[int] = field(default_factory=list)
+    temperature_slope: float = 0
+    temperature_offset: float = 0
+    temperature_hot_c: float = 0
 
 
 @dataclass
@@ -106,6 +161,38 @@ class AfDemagConfig:
     settle:       float = 1.5     # s
     tumble:       bool  = False
     tumble_pause: float = 0.5     # s
+    enabled: bool = False
+    system: str = "ADWIN"
+    coil_position: int = 0
+    calibration_source: str = ""
+    axial_calibration: list[list[float]] = field(default_factory=list)  # monitor V, field mT
+    transverse_calibration: list[list[float]] = field(default_factory=list)
+    axial_calibrated: bool = False
+    transverse_calibrated: bool = False
+    axial_min_mT: float = 0.0
+    axial_max_mT: float = 0.0
+    transverse_min_mT: float = 0.0
+    transverse_max_mT: float = 0.0
+    axial_frequency_hz: float = 0.0
+    transverse_frequency_hz: float = 0.0
+    axial_ramp_max_v: float = 0.0
+    transverse_ramp_max_v: float = 0.0
+    axial_monitor_max_v: float = 0.0
+    transverse_monitor_max_v: float = 0.0
+    axial_ramp_up_vps: float = 0.0
+    transverse_ramp_up_vps: float = 0.0
+    ramp_up_min_ms: float = 0.0
+    ramp_up_max_ms: float = 0.0
+    ramp_down_min_periods: int = 0
+    ramp_down_max_periods: int = 0
+    ramp_down_periods_per_v: float = 0.0
+    hold_peak_periods: int = 0
+    io_rate_hz: float = 0.0
+    axial_relay_bit: int = -1
+    transverse_relay_bit: int = -1
+    bin_folder: str = ""
+    boot_file: str = ""
+    process_file: str = ""
 
 
 @dataclass
@@ -147,6 +234,18 @@ class DataFilesConfig:
 
 
 @dataclass
+class MotorStationConfig:
+    """Native Quicksilver calibration and per-axis serial wiring from the station."""
+
+    calibration_source: str = ""
+    ports: dict[str, str] = field(default_factory=dict)
+    baud: int = 57600  # VB6 frmDCMotors: 57600,N,8,2
+    addresses: dict[str, int] = field(default_factory=dict)
+    controller: dict[str, float] = field(default_factory=dict)
+    hole_slot: int = 0
+
+
+@dataclass
 class ChangerConfig:
     port:         str   = "COM3"
     baud:         int   = 9600
@@ -184,11 +283,13 @@ class MotionPositionsConfig:
 
     def zero_position(self) -> int:
         """VB6 ``Int(ZeroPos + SampleHeight / 2)``."""
-        return int(self.zero_pos + self.sample_height / 2)
+        import math
+        return math.floor(self.zero_pos + self.sample_height / 2)
 
     def measurement_position(self) -> int:
         """VB6 ``Int(MeasPos + SampleHeight / 2)``."""
-        return int(self.meas_pos + self.sample_height / 2)
+        import math
+        return math.floor(self.meas_pos + self.sample_height / 2)
 
     @property
     def configured(self) -> bool:
@@ -275,11 +376,13 @@ class AppConfig:
     general:    GeneralConfig      = field(default_factory=GeneralConfig)
     squid:      SquidConfig        = field(default_factory=SquidConfig)
     irm_arm:    IrmArmConfig       = field(default_factory=IrmArmConfig)
+    pulse_irm:  PulseIrmConfig     = field(default_factory=PulseIrmConfig)
     af_demag:   AfDemagConfig      = field(default_factory=AfDemagConfig)
     vacuum:     VacuumConfig       = field(default_factory=VacuumConfig)
     susceptibility: SusceptibilityConfig = field(default_factory=SusceptibilityConfig)
     data_files: DataFilesConfig    = field(default_factory=DataFilesConfig)
     changer:    ChangerConfig      = field(default_factory=ChangerConfig)
+    motor_station: MotorStationConfig = field(default_factory=MotorStationConfig)
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
     motion:     MotionPositionsConfig = field(default_factory=MotionPositionsConfig)
     sequence:   SequenceTimesConfig = field(default_factory=SequenceTimesConfig)
@@ -328,11 +431,13 @@ class AppConfig:
             general=    _merge(GeneralConfig,       d.get("general",     {})),
             squid=      _merge(SquidConfig,         d.get("squid",       {})),
             irm_arm=    _merge(IrmArmConfig,        d.get("irm_arm",     {})),
+            pulse_irm=  _merge(PulseIrmConfig,      d.get("pulse_irm",   {})),
             af_demag=   _merge(AfDemagConfig,       d.get("af_demag",    {})),
             vacuum=     _merge(VacuumConfig,        d.get("vacuum",      {})),
             susceptibility=_merge(SusceptibilityConfig, d.get("susceptibility", {})),
             data_files= _merge(DataFilesConfig,     d.get("data_files",  {})),
             changer=    _merge(ChangerConfig,       d.get("changer",     {})),
+            motor_station=_merge(MotorStationConfig, d.get("motor_station", {})),
             calibration=_merge(CalibrationConfig,   d.get("calibration", {})),
             motion=     _merge(MotionPositionsConfig, d.get("motion",    {})),
             sequence=   _merge(SequenceTimesConfig, d.get("sequence",    {})),

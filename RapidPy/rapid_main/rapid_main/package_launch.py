@@ -6,6 +6,11 @@ from importlib.util import find_spec
 from pathlib import Path
 import sys
 
+HELPER_MODULES = (
+    "af_tuner", "data_viewer", "gaussmeter_control", "updown_control",
+    "vrm_logger", "webcam_viewer",
+)
+
 
 class ToolUnavailableError(RuntimeError):
     pass
@@ -28,6 +33,10 @@ def resolve_tool_launch(
     """Prefer a checkout script, then fall back to an installed ``-m`` entry."""
 
     executable = python_executable or sys.executable
+    if getattr(sys, "frozen", False):
+        if module not in HELPER_MODULES:
+            raise ToolUnavailableError(f"Tool {module!r} is not bundled with RAPID.")
+        return ToolLaunch((executable, "--tool", module), None, "bundled-tool")
     root = Path(source_root).resolve()
     script = root / source_relative
     if script.is_file():
