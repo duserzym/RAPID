@@ -28,6 +28,7 @@ from rapidpy_common.adwin_af import (  # noqa: E402
 )
 from rapidpy_common.ui import apply_card_shadow, apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon  # noqa: E402
 from rapidpy_common.resources import asset_directory  # noqa: E402
+from rapidpy_common.af_diagnostic_safety import af_diagnostic_operation, recover_af_diagnostic  # noqa: E402
 
 
 @dataclass(slots=True)
@@ -177,6 +178,8 @@ class AutoTuneWorker(QtCore.QObject):
     @QtCore.Slot()
     def run(self) -> None:
         try:
+            if self._abort:
+                raise InterruptedError("Auto-tune cancelled before output initialization.")
             board = AdwinBoardConfig(
                 board_num=self._backend.board_num,
                 bin_folder=self._backend.bin_folder,
@@ -196,43 +199,46 @@ class AutoTuneWorker(QtCore.QObject):
             best_amp = -1.0
             points: list[SweepPoint] = []
 
-            while freq <= self._high + 1e-9:
-                if self._abort:
-                    self.progress.emit("Auto-tune aborted.")
-                    break
+            operation = {"action": "auto_tune_sweep", "coil": self._coil, "low_hz": self._low, "high_hz": self._high,
+                         "step_hz": self._step, "hold_ms": self._hold_ms, "io_rate_hz": self._io_rate_hz,
+                         "ramp_peak_v": self._ramp_peak_v, "monitor_peak_v": self._monitor_peak_v}
+            with af_diagnostic_operation(controller, operation) as observations:
+                while freq <= self._high + 1e-9:
+                    if self._abort:
+                        raise InterruptedError("Auto-tune stopped by operator.")
 
-                self.progress.emit(f"Sweeping {freq:.4f} Hz…")
-                result = controller.run_ramp(
-                    AdwinRampRequest(
-                        slope_up=slope,
-                        slope_down=slope,
-                        peak_monitor_voltage=self._monitor_peak_v,
-                        sine_freq_hz=freq,
-                        ramp_peak_voltage=self._ramp_peak_v,
-                        active_coil=self._coil,
-                        ramp_mode=3,
-                        hold_ms=self._hold_ms,
-                        ramp_down_mode=1,
-                        io_rate_hz=self._io_rate_hz,
-                        noise_level=5,
+                    self.progress.emit(f"Sweeping {freq:.4f} Hz…")
+                    request = AdwinRampRequest(
+                            slope_up=slope,
+                            slope_down=slope,
+                            peak_monitor_voltage=self._monitor_peak_v,
+                            sine_freq_hz=freq,
+                            ramp_peak_voltage=self._ramp_peak_v,
+                            active_coil=self._coil,
+                            ramp_mode=3,
+                            hold_ms=self._hold_ms,
+                            ramp_down_mode=1,
+                            io_rate_hz=self._io_rate_hz,
+                            noise_level=5,
+                        )
+                    result = controller.run_ramp(request, should_cancel=lambda: self._abort)
+                    observations.append({"request": asdict(request), "result": asdict(result)})
+                    points.append(
+                        SweepPoint(
+                            freq_hz=freq,
+                            monitor_peak_v=result.monitor_peak_v,
+                            ramp_peak_v=result.ramp_peak_v,
+                            points_per_period=result.points_per_period,
+                        )
                     )
-                )
-                points.append(
-                    SweepPoint(
-                        freq_hz=freq,
-                        monitor_peak_v=result.monitor_peak_v,
-                        ramp_peak_v=result.ramp_peak_v,
-                        points_per_period=result.points_per_period,
+                    self.progress.emit(
+                        f"{freq:.4f} Hz -> monitor_peak={result.monitor_peak_v:.5f} V, "
+                        f"ramp_peak={result.ramp_peak_v:.5f} V, {result.points_per_period:.1f} samples/cycle"
                     )
-                )
-                self.progress.emit(
-                    f"{freq:.4f} Hz -> monitor_peak={result.monitor_peak_v:.5f} V, "
-                    f"ramp_peak={result.ramp_peak_v:.5f} V, {result.points_per_period:.1f} samples/cycle"
-                )
-                if result.monitor_peak_v > best_amp:
-                    best_amp = result.monitor_peak_v
-                    best_freq = freq
-                freq += self._step
+                    if result.monitor_peak_v > best_amp:
+                        best_amp = result.monitor_peak_v
+                        best_freq = freq
+                    freq += self._step
 
             self.finished.emit(
                 AutoTuneResult(
@@ -286,6 +292,8 @@ class DenseCaptureWorker(QtCore.QObject):
     @QtCore.Slot()
     def run(self) -> None:
         try:
+            if self._stop:
+                raise InterruptedError("Capture cancelled before output initialization.")
             board = AdwinBoardConfig(
                 board_num=self._backend.board_num,
                 bin_folder=self._backend.bin_folder,
@@ -297,13 +305,11 @@ class DenseCaptureWorker(QtCore.QObject):
                 trans_relay_bit=self._backend.trans_relay_bit,
             )
             controller = AdwinAFController(board=board, limits=self._limits)
-            controller.set_af_relays(self._coil, one_chan_on=True)
             self.progress.emit(
                 f"{self._label}: board-timed capture at {self._freq_hz:.3f} Hz, "
                 f"{self._amplitude_v:.3f} V, {self._io_rate_hz:.0f} Hz IO rate"
             )
-            capture = controller.run_dense_loopback(
-                AdwinDenseCaptureRequest(
+            request = AdwinDenseCaptureRequest(
                     sine_freq_hz=self._freq_hz,
                     amplitude_v=self._amplitude_v,
                     io_rate_hz=self._io_rate_hz,
@@ -315,9 +321,11 @@ class DenseCaptureWorker(QtCore.QObject):
                     ramp_up_slope_vps=self._ramp_up_slope_vps,
                     ramp_down_slope_vps=self._ramp_down_slope_vps,
                     ramp_down_periods=max(1, self._ramp_down_periods),
-                ),
-                should_stop=lambda: self._stop,
-            )
+                    active_coil=self._coil,
+                )
+            with af_diagnostic_operation(controller, {"action": "dense_capture", "coil": self._coil, "request": asdict(request)}) as observations:
+                capture = controller.run_dense_loopback(request, should_stop=lambda: self._stop)
+                observations.append({"capture": asdict(capture)})
             self.capture_ready.emit(
                 CaptureEnvelope(
                     label=self._label,
@@ -351,6 +359,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._connected = False
         self._last_version: int = 0
         self._worker_thread: QtCore.QThread | None = None
+        self._close_after_cleanup = False
         self._worker: QtCore.QObject | None = None
         self._task_kind: str | None = None
         self._queued_capture_freq: float | None = None
@@ -378,8 +387,45 @@ class MainWindow(QtWidgets.QMainWindow):
             self.setFont(compact_font)
 
         set_app_icon(self, "af_tuner_icon.ico", _assets_dir())
-        self.setMinimumSize(1480, 860)
+        self.setMinimumSize(800, 620)
         self.resize(1680, 940)
+
+    def _fit_to_screen(self, screen=None) -> None:
+        screen = screen or self.screen() or QtWidgets.QApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        width, height = max(1, min(1680, int(area.width() * .92))), max(1, min(940, int(area.height() * .90)))
+        self.setMinimumSize(min(800, width), min(620, height))
+        self.setMaximumSize(width, height)
+        self.resize(width, height)
+        frame = self.frameGeometry()
+        self.move(max(area.left(), min(frame.left(), area.right() - frame.width() + 1)),
+                  max(area.top(), min(frame.top(), area.bottom() - frame.height() + 1)))
+        self._set_compact_layout(self.width() < 1240)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_compact_tabs"):
+            self._set_compact_layout(self.width() < 1240)
+
+    def _set_compact_layout(self, compact) -> None:
+        if self._compact_layout == compact:
+            return
+        self._compact_layout = compact
+        if compact:
+            self._compact_tabs.addTab(self._controls_scroll, "Controls")
+            self._compact_tabs.addTab(self._plot_card, "Plots")
+            self._splitter.hide()
+            self._compact_tabs.show()
+        else:
+            while self._compact_tabs.count():
+                self._compact_tabs.removeTab(0)
+            self._splitter.addWidget(self._controls_scroll)
+            self._splitter.addWidget(self._plot_card)
+            self._compact_tabs.hide()
+            self._splitter.show()
+            self._splitter.setSizes([720, 900])
 
     # ------------------------------------------------------------------
     # UI construction
@@ -395,12 +441,17 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(8)
         layout.addWidget(splitter, stretch=1)
+        self._splitter = splitter
+        self._compact_layout = False
+        self._compact_tabs = QtWidgets.QTabWidget()
+        self._compact_tabs.hide()
+        layout.addWidget(self._compact_tabs, stretch=1)
 
         left_scroll = QtWidgets.QScrollArea()
         left_scroll.setObjectName("panelScroll")
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        left_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         left_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         left_scroll.setMinimumHeight(100)
 
@@ -419,6 +470,8 @@ class MainWindow(QtWidgets.QMainWindow):
         left_scroll.setWidget(left_host)
 
         plot_card = self._build_plot_card()
+        self._controls_scroll = left_scroll
+        self._plot_card = plot_card
         apply_card_shadow(plot_card)
 
         splitter.addWidget(left_scroll)
@@ -623,7 +676,7 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Ignored,
             QtWidgets.QSizePolicy.Policy.Preferred,
         )
-        self.quick_connect_btn = QtWidgets.QPushButton("Connect / Boot")
+        self.quick_connect_btn = QtWidgets.QPushButton("Connect / Probe")
         self.quick_connect_btn.setObjectName("connectAction")
         self.quick_connect_btn.setMinimumHeight(38)
         self.quick_check_btn = QtWidgets.QPushButton("Check Comm")
@@ -709,7 +762,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.hold_ms = QtWidgets.QSpinBox()
         self.hold_ms.setRange(0, 60000)
         self.io_rate = QtWidgets.QDoubleSpinBox()
-        self.io_rate.setRange(500.0, 100000.0)
+        self.io_rate.setRange(500.0, 50000.0)
         self.io_rate.setDecimals(1)
         autotune_form.addRow("Sweep Low", self.low_freq)
         autotune_form.addRow("Sweep High", self.high_freq)
@@ -745,7 +798,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.clip_duration_ms = QtWidgets.QSpinBox()
         self.clip_duration_ms.setRange(50, 60000)
         self.clip_io_rate = QtWidgets.QDoubleSpinBox()
-        self.clip_io_rate.setRange(500.0, 100000.0)
+        self.clip_io_rate.setRange(500.0, 50000.0)
         self.clip_io_rate.setDecimals(1)
         self.clip_ramp_up = QtWidgets.QDoubleSpinBox()
         self.clip_ramp_up.setRange(0.1, 100000.0)
@@ -887,11 +940,11 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addLayout(form)
 
         buttons = QtWidgets.QGridLayout()
-        self.connect_btn = QtWidgets.QPushButton("Connect / Boot")
+        self.connect_btn = QtWidgets.QPushButton("Connect / Probe")
         self.connect_btn.setObjectName("connectAction")
         self.check_comm_btn = QtWidgets.QPushButton("Check Communication")
-        self.apply_relay_btn = QtWidgets.QPushButton("Apply Active Relay")
-        self.relays_off_btn = QtWidgets.QPushButton("All Relays Off")
+        self.apply_relay_btn = QtWidgets.QPushButton("Test Active Relay")
+        self.relays_off_btn = QtWidgets.QPushButton("Recover Outputs Off")
         self.save_backend_btn = QtWidgets.QPushButton("Save Backend")
         buttons.addWidget(self.connect_btn, 0, 0, 1, 2)
         buttons.addWidget(self.check_comm_btn, 1, 0, 1, 2)
@@ -950,6 +1003,8 @@ class MainWindow(QtWidgets.QMainWindow):
         top_row = QtWidgets.QHBoxLayout()
         title = QtWidgets.QLabel("Board Capture And Sweep Results")
         title.setObjectName("title")
+        title.setWordWrap(True)
+        title.setMinimumWidth(0)
         top_row.addWidget(title)
         top_row.addStretch(1)
         self.save_plot_btn = QtWidgets.QPushButton("Save Plot")
@@ -1241,12 +1296,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 version = controller.test_version()
             except Exception:
                 version = 0
-            relay_word = controller.set_af_relays(self._active_coil_name(), one_chan_on=True)
-            try:
-                version_after = controller.test_version()
-            except Exception:
-                version_after = 0
-            self._last_version = max(version, version_after)
+            # Connecting probes the existing board. Relay/boot/output actions
+            # require a journaled diagnostic operation, never an eager connect.
+            relay_word = controller.get_digout()
+            self._last_version = version
             self._ctrl = controller
             self._connected = True
             if self._last_version:
@@ -1254,7 +1307,7 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 self._set_backend_status("Connected (I/O ready)", "#0f766e")
             self._append(
-                f"ADwin ready on board {self._backend_config.board_num}; active coil relay word 0x{relay_word:02X}."
+                f"ADwin probed on board {self._backend_config.board_num}; observed relay word 0x{relay_word:02X}."
             )
             self._update_comm_snapshot(log_result=False, relay_word=relay_word)
         except Exception as exc:
@@ -1264,7 +1317,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._set_backend_status("Connection failed", "#991b1b")
             self._set_comm_summary("Communication not established.", "#991b1b")
             self._set_relay_status("Relay state unavailable.", "#991b1b")
-            self._append(f"[ERROR] ADwin connect/boot failed: {exc}")
+            self._append(f"[ERROR] ADwin connection probe failed: {exc}")
 
     def _check_communication(self) -> None:
         if self._ctrl is None:
@@ -1320,9 +1373,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
         try:
             self._ctrl.board = AdwinBoardConfig(**asdict(self._build_backend_from_widgets()))
-            relay_word = self._ctrl.set_af_relays(self._active_coil_name(), one_chan_on=True)
-            self._update_comm_snapshot(log_result=False, relay_word=relay_word)
-            self._append(f"AF relays set for {self._active_coil_name()} coil (word 0x{relay_word:02X}).")
+            with af_diagnostic_operation(self._ctrl, {"action": "relay_test", "coil": self._active_coil_name()}) as observations:
+                relay_word = self._ctrl.set_af_relays(self._active_coil_name(), one_chan_on=True)
+                if self._ctrl.get_digout() != relay_word:
+                    raise RuntimeError("Selected coil relay readback did not match.")
+                observations.append({"selected_relay_word": relay_word})
+            self._update_comm_snapshot(log_result=False, relay_word=0)
+            self._append(f"AF {self._active_coil_name()} relay test completed (word 0x{relay_word:02X}); outputs cleared and verified.")
         except Exception as exc:
             self._append(f"[ERROR] Relay update failed: {exc}")
 
@@ -1332,9 +1389,9 @@ class MainWindow(QtWidgets.QMainWindow):
             if self._ctrl is None:
                 return
         try:
-            self._ctrl.set_af_relays("off", one_chan_on=True)
+            recover_af_diagnostic(self._ctrl)
             self._update_comm_snapshot(log_result=False, relay_word=0)
-            self._append("All AF relays turned off.")
+            self._append("AF processes stopped, ramp output zeroed and relay clear verified.")
         except Exception as exc:
             self._append(f"[ERROR] Failed to turn all relays off: {exc}")
 
@@ -1348,7 +1405,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.chk_lock_coils.isChecked():
             return
         self._load_into_widgets()
-        self._apply_relays()
+        self._update_comm_snapshot(log_result=False)
 
     def _apply_freq(self) -> None:
         freq = self.new_freq.value()
@@ -1598,7 +1655,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(str)
     def _on_task_failed(self, message: str) -> None:
-        QtWidgets.QMessageBox.critical(self, "ADwin Operation Error", message)
+        if not self._close_after_cleanup:
+            QtWidgets.QMessageBox.critical(self, "ADwin Operation Error", message)
         self._append(f"[ERROR] {message}")
         self._queued_capture_freq = None
 
@@ -1617,8 +1675,25 @@ class MainWindow(QtWidgets.QMainWindow):
 
         queued = self._queued_capture_freq
         self._queued_capture_freq = None
+        if self._close_after_cleanup:
+            QtCore.QTimer.singleShot(0, self.close)
+            return
         if finished_kind == "sweep" and queued is not None:
             QtCore.QTimer.singleShot(0, lambda: self._start_capture(queued, "Best-frequency waveform preview"))
+
+    def closeEvent(self, event) -> None:
+        thread = self._worker_thread
+        if thread is not None and thread.isRunning():
+            self._close_after_cleanup = True
+            self._queued_capture_freq = None
+            if isinstance(self._worker, AutoTuneWorker):
+                self._worker.abort()
+            elif isinstance(self._worker, DenseCaptureWorker):
+                self._worker.stop()
+            self._append("Stopping diagnostic; waiting for verified output cleanup before closing.")
+            event.ignore()
+            return
+        event.accept()
 
     # ------------------------------------------------------------------
     # Plot helpers

@@ -40,8 +40,9 @@ before the operation is verified. Recovery never reapplies AF, ARM bias or spin.
 Controller status and output acknowledgements are hardware evidence; physical
 field-zero and scientific acceptance still require station validation.
 
-Remaining full-system work includes extending ownership/persistence to standalone
-hardware helper processes, non-treatment motion/acquisition interruption,
+The journal is now shared with AF Tuner; see [AF diagnostic safety](af-diagnostic-safety.md).
+Remaining full-system work includes extending ownership/persistence to the other
+hardware helper processes and embedded direct diagnostics, non-treatment motion/acquisition interruption,
 calibration acceptance tooling, probe workflows, rebuilding the portable pilot
 from current source, and physical/scientific acceptance. A missing first-run
 latch is not evidence that an externally operated instrument is physically safe.

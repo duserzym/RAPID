@@ -87,6 +87,8 @@ def plan_calibrated_af_ramp(label: str, field_mT: float, coil: str, cfg: AfDemag
     ramp = monitor / monitor_max * ramp_max / (2 if coil == "transverse" else 1)
     frequency = _positive(f"{coil} resonance frequency", getattr(cfg, f"{coil}_frequency_hz"))
     rate = _positive("IO rate", cfg.io_rate_hz)
+    if rate > 50000:
+        raise ValueError("AF IO rate exceeds the shipped sineout process's 50 kHz limit.")
     if rate / frequency < 4:
         raise ValueError("AF IO rate must provide at least four samples per period.")
     min_ms = _positive("minimum ramp-up duration", cfg.ramp_up_min_ms)

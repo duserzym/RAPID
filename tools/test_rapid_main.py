@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-for module in ("rapid_main", "updown_control", "vrm_logger"):
+for module in ("rapid_main", "updown_control", "vrm_logger", "af_tuner"):
     sys.path.insert(0, str(ROOT / "RapidPy" / module))
 sys.path.insert(0, str(ROOT / "RapidPy"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

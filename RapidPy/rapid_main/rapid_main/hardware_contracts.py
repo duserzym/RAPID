@@ -1435,11 +1435,13 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
 
     def return_to_safe_state(self) -> None:
         store = getattr(self, "_safety_store", None)
-        pending = store.pending(self._safety_profile()) if store is not None and not self._config.general.nocomm else None
+        pending = store.pending() if store is not None and not self._config.general.nocomm else None
         if pending:
             with store.operation_lease():
-                pending = store.pending(self._safety_profile())
+                pending = store.pending()
                 if pending:
+                    if pending["family"] != "af_diagnostic":
+                        pending = store.pending(self._safety_profile())
                     self._recover_durable_treatment(pending)
         records = getattr(self,"_pulse_treatment_records",())
         if records and not records[-1].safe_state_confirmed:
@@ -1510,6 +1512,8 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
 
     def _recover_durable_treatment(self, pending):
         """Recover only the persisted station; never replay its treatment."""
+        if pending["family"] == "af_diagnostic":
+            raise HardwareError("An unfinished AF Tuner diagnostic requires recovery in AF Tuner using its original board settings.")
         sample_id, run_id = pending["sample_id"], pending["run_id"]
         token = pending["token"]
         if pending["family"] == "pulse":

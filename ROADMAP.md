@@ -866,3 +866,26 @@ pushed in verified milestones at the user's request.
 Verification: 724 isolated main-app tests pass in 92.420 seconds, including 28
 durable-safety tests. Six-panel/six-helper source UI smoke passes. The portable
 pilot still predates this source checkpoint and must be rebuilt before release.
+
+### AF Tuner ownership, native capture checks and compact recovery UI — 3 October 2026
+
+AF Tuner shares the main-app safety journal and lifetime operation lease. Connecting
+and selecting a coil no longer eagerly boot or write relays. Sweeps/captures retain
+request/results and indexed immutable diagnostic evidence, verify output cleanup
+before success signals, and hold close requests until worker cleanup. Recovery
+checks all processes, independently zeroes both DAC outputs, and verifies relay
+clear without booting. Main/helper pending operations block each other's output
+work and route recovery to the original owner/profile.
+
+Dense captures explicitly select/readback the coil after initialization, reject
+unsupported requests before output I/O and reject incomplete capture arrays.
+Source-backed 50 kHz / 1,000,000-point limits prevent silently changed diagnostics.
+AF Tuner uses Controls/Plots tabs on compact screens, preserving widgets across
+layout transitions and exposing recovery controls at 736x720. See
+docs/af-diagnostic-safety.md. The full-system goal remains active: other helpers,
+embedded direct diagnostics, motion restart recovery, calibration/probe tooling,
+portable rebuilding and station/scientific acceptance still require completion.
+
+Verification: 760 isolated main-app tests pass in 91.928 seconds; source UI smoke
+passes six panels and six helpers. Compact control/plot rendering was inspected
+at 736x720, including accessible recovery controls and wrapped plot headings.

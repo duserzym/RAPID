@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import math
 import os
 import platform
 import struct
@@ -200,6 +201,7 @@ class AdwinDenseCaptureRequest:
     ramp_up_slope_vps: float = 200.0
     ramp_down_slope_vps: float = 200.0
     ramp_down_periods: int = 2
+    active_coil: str = "off"  # Loopback default; coil diagnostics must be explicit.
 
 
 @dataclass(slots=True)
@@ -215,6 +217,37 @@ class AdwinDenseCaptureResult:
     points_per_period: float
     steady_start_idx: int
     steady_stop_idx: int
+
+
+def validate_dense_capture_request(request: AdwinDenseCaptureRequest) -> float:
+    """Validate against the shipped sineout process before any hardware I/O.
+
+    sineout.bas clamps processdelay to 800 ticks at 25 ns (50 kHz), and
+    globals.inc allocates 1,000,000 points. Reject unsupported requests rather
+    than silently changing their amplitude, rate or duration.
+    """
+    for name in ("sine_freq_hz", "amplitude_v", "io_rate_hz", "duration_s", "ramp_up_slope_vps", "ramp_down_slope_vps"):
+        value = getattr(request, name)
+        if isinstance(value, bool) or not math.isfinite(float(value)) or float(value) <= 0:
+            raise AdwinError(f"Dense capture {name} must be finite and positive.")
+    if request.amplitude_v > 10 or not 1 <= request.io_rate_hz <= 50000:
+        raise AdwinError("Dense capture exceeds the 10 V output or 50 kHz legacy process limit.")
+    if request.io_rate_hz / request.sine_freq_hz < 4:
+        raise AdwinError("Dense capture requires at least four samples per sine period.")
+    for name, low, high in (("dac_chan", 1, 2), ("adc_chan", 1, 16), ("ramp_down_periods", 1, 20), ("noise_level", 0, 65535)):
+        value = getattr(request, name)
+        if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+            raise AdwinError(f"Dense capture {name} is outside {low}..{high}.")
+    if request.ramp_mode != 3 or request.active_coil.strip().lower() not in {"off", "axial", "transverse"}:
+        raise AdwinError("Dense capture requires CLIPTEST mode and an explicit supported coil or off.")
+    # Include up-ramp, rounded hold periods, requested down periods and two
+    # period margins in the acquisition/timeout and memory estimate.
+    hold_periods = max(1, int(round(request.duration_s * request.sine_freq_hz)))
+    total_s = (request.amplitude_v / request.ramp_up_slope_vps
+               + (hold_periods + request.ramp_down_periods + 2) / request.sine_freq_hz)
+    if math.ceil(total_s * request.io_rate_hz) + 10 > 1000000:
+        raise AdwinError("Dense capture would exceed the legacy process's 1,000,000-point buffer.")
+    return total_s
 
 
 class _AdwinDll:
@@ -377,18 +410,30 @@ class AdwinAFController:
         1 is running, 0 stopped and -1 absent. Acknowledgements and status
         are both checked before disabling the ramp DAC and coil relays.
         """
+        errors = []
         for proc in range(1, 11):
-            status = self.get_par(-100 + proc)
-            if status not in {-1, 0, 1}:
-                raise AdwinError(f"Unknown process {proc} status {status} during recovery.")
-            if status == 1:
-                result = int(self._dll.ADB_Stop(proc, self._dev))
-                self._raise_if_error(f"Stop_Process({proc})", raw_return=result)
-                if result != 0:
-                    raise AdwinError(f"Stop_Process({proc}) failed with code {result}.")
-            if self.get_par(-100 + proc) not in {-1, 0}:
-                raise AdwinError(f"Process {proc} stop was not verified.")
-        self.set_dac(self.board.ramp_dac_chan, 0.0)
+            try:
+                status = self.get_par(-100 + proc)
+                if status not in {-1, 0, 1}:
+                    raise AdwinError(f"Unknown process {proc} status {status} during recovery.")
+                if status == 1:
+                    result = int(self._dll.ADB_Stop(proc, self._dev))
+                    self._raise_if_error(f"Stop_Process({proc})", raw_return=result)
+                    if result != 0:
+                        raise AdwinError(f"Stop_Process({proc}) failed with code {result}.")
+                if self.get_par(-100 + proc) not in {-1, 0}:
+                    raise AdwinError(f"Process {proc} stop was not verified.")
+            except Exception as exc:
+                errors.append(str(exc))
+        # ADwin-light-16 has two DAC outputs. An interrupted channel-2
+        # diagnostic must not leave its output latched while channel 1 is zero.
+        for channel in (1, 2):
+            try:
+                self.set_dac(channel, 0.0)
+            except Exception as exc:
+                errors.append(f"DAC {channel} reset: {exc}")
+        if errors:
+            raise AdwinError("; ".join(errors))
         self.set_digout(0)
         if self.get_digout() != 0:
             raise AdwinError("AF recovery relay clear was not verified.")
@@ -518,6 +563,8 @@ class AdwinAFController:
         elif key in {"none", "off", ""}:
             self.boot_board()
             self.set_digout(0)
+            if self.get_digout() != 0:
+                raise AdwinError("AF relay-off readback did not match.")
             return 0
         else:
             raise AdwinError(f"Unsupported coil {active_coil!r}; expected axial/transverse.")
@@ -526,6 +573,8 @@ class AdwinAFController:
         bit_value = self.calc_digout_bit(chan, set_high=True, one_chan_on=one_chan_on)
         self.set_digout(bit_value)
         time.sleep(1.0)
+        if self.get_digout() != bit_value:
+            raise AdwinError("Selected AF coil relay readback did not match.")
         return bit_value
 
     def _coil_limits(self, coil: str) -> tuple[float, float]:
@@ -538,6 +587,22 @@ class AdwinAFController:
 
     def run_ramp(self, request: AdwinRampRequest, timeout_s: float = 90.0,
                  *, should_cancel: Callable[[], bool] | None = None) -> AdwinRampResult:
+        for name in ("slope_up", "slope_down", "sine_freq_hz", "io_rate_hz"):
+            value = getattr(request, name)
+            if isinstance(value, bool) or not math.isfinite(float(value)) or float(value) <= 0:
+                raise AdwinError(f"AF ramp {name} must be finite and positive.")
+        if request.io_rate_hz > 50000 or request.io_rate_hz / request.sine_freq_hz < 4:
+            raise AdwinError("AF ramp exceeds 50 kHz or provides fewer than four samples per period.")
+        ramp_limit, monitor_limit = self._coil_limits(request.active_coil)
+        for name, limit in (("ramp_peak_voltage", ramp_limit), ("peak_monitor_voltage", monitor_limit)):
+            value = getattr(request, name)
+            if isinstance(value, bool) or not math.isfinite(float(value)) or not 0 <= value <= min(10., limit):
+                raise AdwinError(f"AF ramp {name} exceeds the selected coil's voltage limit.")
+        if (request.ramp_mode not in {2, 3} or request.ramp_down_mode not in {0, 1}
+                or isinstance(request.hold_ms, bool) or not isinstance(request.hold_ms, int) or request.hold_ms < 0):
+            raise AdwinError("AF ramp requires a supported calibrated/clip mode and non-negative integer hold time.")
+        if not math.isfinite(float(timeout_s)) or timeout_s <= 0:
+            raise AdwinError("AF ramp timeout must be finite and positive.")
         if should_cancel is not None and should_cancel():
             raise AdwinError("ADWIN AF ramp cancelled before initialization.")
         self.boot_board()
@@ -602,7 +667,7 @@ class AdwinAFController:
     def run_dense_loopback(
         self,
         request: AdwinDenseCaptureRequest,
-        timeout_s: float = 30.0,
+        timeout_s: float | None = None,
         should_stop: Callable[[], bool] | None = None,
     ) -> AdwinDenseCaptureResult:
         """Run a dense, board-timed sine capture using the legacy ADwin process.
@@ -611,14 +676,23 @@ class AdwinAFController:
         the board, configures its timer/process delay from ``io_rate_hz``, and then
         bulk-reads the captured arrays from DATA_31 / DATA_32 after completion.
         """
+        estimated_s = validate_dense_capture_request(request)
+        timeout_s = max(30.0, estimated_s + 10.0) if timeout_s is None else float(timeout_s)
+        if not math.isfinite(timeout_s) or timeout_s < estimated_s:
+            raise AdwinError("Dense capture timeout is shorter than its planned ramp/hold/down duration.")
+        if should_stop is not None and should_stop():
+            raise AdwinError("Dense capture cancelled before output initialization.")
+        if request.active_coil != "off" and request.amplitude_v > self._coil_limits(request.active_coil)[0]:
+            raise AdwinError("Dense capture amplitude exceeds the selected coil's configured ramp limit.")
         self.boot_board()
+        self.set_af_relays(request.active_coil, one_chan_on=True)
         self.clear_all_processes()
         self.load_process()
 
-        amplitude_v = max(0.0, min(10.0, float(request.amplitude_v)))
-        sine_freq_hz = max(0.1, float(request.sine_freq_hz))
-        io_rate_hz = max(1.0, float(request.io_rate_hz))
-        duration_s = max(0.05, float(request.duration_s))
+        amplitude_v = float(request.amplitude_v)
+        sine_freq_hz = float(request.sine_freq_hz)
+        io_rate_hz = float(request.io_rate_hz)
+        duration_s = float(request.duration_s)
 
         self.set_fpar(31, float(request.ramp_up_slope_vps))
         self.set_fpar(32, float(request.ramp_down_slope_vps))
@@ -665,8 +739,12 @@ class AdwinAFController:
         points_per_period = float(self.get_fpar(7))
 
         capture_count = min(in_count, out_count) if out_count > 0 else in_count
+        if not 1 <= out_count <= 1000000 or not 1 <= in_count <= 1000000 or not math.isfinite(timestep_s) or timestep_s <= 0 or not math.isfinite(points_per_period) or points_per_period < 4:
+            raise AdwinError("Dense capture returned invalid timing or data-array counts.")
         raw_adc = self.get_data_long(31, 1, capture_count)
         raw_dac = self.get_data_long(32, 1, capture_count)
+        if len(raw_adc) != capture_count or len(raw_dac) != capture_count:
+            raise AdwinError("Dense capture returned incomplete input/output arrays.")
 
         steady_start_idx = min(max(up_count - 1, 0), capture_count)
         steady_stop_idx = min(max(down_start - 1, steady_start_idx), capture_count)

@@ -267,6 +267,7 @@ class AutoClipWorker(QtCore.QObject):
                             ramp_up_slope_vps=self._config.ramp_up_slope_vps,
                             ramp_down_slope_vps=self._config.ramp_down_slope_vps,
                             ramp_down_periods=max(1, self._config.ramp_down_periods),
+                            active_coil=self._coil,
                         ),
                         should_stop=lambda: self._stop,
                     )

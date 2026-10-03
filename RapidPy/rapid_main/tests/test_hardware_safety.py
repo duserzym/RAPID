@@ -366,7 +366,7 @@ class NativeRestartRecoveryTests(unittest.TestCase):
         controller.get_par.side_effect = lambda _index: next(statuses)
         controller.recover_safe_field()
         controller._dll.ADB_Stop.assert_called_once_with(1, controller._dev)
-        controller.set_dac.assert_called_once_with(1, 0.0)
+        self.assertEqual([call.args for call in controller.set_dac.call_args_list], [(1, 0.0), (2, 0.0)])
         controller.set_digout.assert_called_once_with(0)
         controller.boot_board.assert_not_called()
 
@@ -376,7 +376,7 @@ class NativeRestartRecoveryTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             controller.recover_safe_field()
         controller.set_digout.assert_not_called()
-        controller.set_dac.assert_not_called()
+        self.assertEqual(controller.set_dac.call_count, 2)
 
     def test_unverified_relay_clear_raises(self):
         controller = self.controller()
