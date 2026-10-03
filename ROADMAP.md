@@ -918,3 +918,31 @@ auxiliary diagnostic regressions. Source UI smoke passes six panels and six help
 imports. The clipping and communications windows were also constructed and their
 compact control/recovery layouts inspected at 736x720. The portable pilot still
 predates this source checkpoint and requires rebuilding before release.
+
+### Lift diagnostic ownership and stopped-in-place recovery — 3 October 2026
+
+Up/Down Control guards native moves and entire measurement Z scans with the shared
+lifetime lease and motion_diagnostic journal family. It records requests, movement
+results, baseline/calibration and collected scan points, including native raw XYZ
+readings. Cleanup requires an acknowledged stop plus two zero-velocity, stable
+position readbacks before clearing the latch. Failed cleanup or immutable evidence
+publication stays pending after restart. Recovery uses the original COM port and
+axis configuration and never automatically homes, zeroes or replays motion.
+
+Active and queued scans block motor/SQUID connection changes, settings/baseline
+replacement and additional movement. Cancellation retains partial evidence without
+reporting scan success. Close requests retain the worker and connections until
+actual thread completion, with no timed-wait/disconnect race or closing error modal.
+Compact tabs preserve the original controls and expose recovery at 736x720. See
+docs/motor-diagnostic-safety.md.
+
+The full-system goal remains active. Vacuum/gripper lifetime ownership, other
+motor and embedded direct diagnostics, durable main-app non-treatment motion and
+acquisition recovery, calibration/probe tooling, portable rebuilding and physical/
+scientific acceptance remain open. Development checks use injected instruments.
+
+Verification: 798 isolated main-app tests pass in 103.711 seconds, including 21
+lift safety regressions. Six-panel/six-helper source smoke passes. The actual lift
+window was constructed with instrument discovery disabled, and its compact
+connections, axis profile and motion/recovery views were inspected at 736x720.
+No physical instruments were actuated. The portable pilot still needs rebuilding.

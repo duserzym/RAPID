@@ -105,7 +105,7 @@ class AfDiagnosticSafetyTests(AfDiagnosticFixture, unittest.TestCase):
         backend._safety_store = self.store
         backend._client = Mock()
         self.assertTrue(backend.has_unresolved_hardware_fault)
-        with self.assertRaisesRegex(RuntimeError, "AF Tuner"):
+        with self.assertRaisesRegex(RuntimeError, "ADwin helper"):
             backend.return_to_safe_state()
         self.assertEqual(backend._client.mock_calls, [])
 

@@ -7,6 +7,9 @@ import re
 import shutil
 import sys
 import time
+import threading
+from contextlib import contextmanager
+from functools import wraps
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
@@ -31,6 +34,8 @@ _bootstrap_common_imports()
 from rapidpy_common.hardware import HardwareError, MotorAxisConfig, MotorControllerConfig, MotorSerialClient, MoveResult  # noqa: E402
 from rapidpy_common.ui import apply_card_shadow, apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon  # noqa: E402
 from rapidpy_common.resources import asset_directory  # noqa: E402
+from rapidpy_common.hardware_safety import HardwareSafetyError, HardwareSafetyStore, default_safety_path
+from rapidpy_common.motor_diagnostic_safety import motor_diagnostic_operation, recover_motor_diagnostic
 
 
 APP_SETTINGS_PATH = Path.home() / ".rapidpy_updown_settings.json"
@@ -1095,6 +1100,7 @@ class SquidMomentReader:
         baseline_raw: tuple[float, float, float] | None,
     ) -> tuple[float, float, float, float]:
         x_raw, y_raw, z_raw = self._client.read_xyz_raw()
+        self.last_raw_xyz = (x_raw, y_raw, z_raw)
         bx, by, bz = baseline_raw if baseline_raw is not None else (0.0, 0.0, 0.0)
         x_emu = (x_raw - bx) * calibration.xcal * calibration.range_fact
         y_emu = (y_raw - by) * calibration.ycal * calibration.range_fact
@@ -1256,24 +1262,105 @@ class VacuumController:
             self.set_motor_power(False)
 
 
+def _guarded_lift_motion(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self.motion_operation({'action': method.__name__, 'args': list(args), 'kwargs': kwargs}) as observations:
+            result = method(self, *args, **kwargs)
+            observations.append({'action': method.__name__, 'result': asdict(result)})
+            if result.success is not True:
+                raise HardwareError(f"Lift {method.__name__} did not reach its verified target.")
+            return result
+    return wrapped
+
+
 class UpDownController:
-    def __init__(self, profile: SettingsProfile) -> None:
+    def __init__(self, profile: SettingsProfile, *, safety_store=None) -> None:
         self.profile = profile
         self.motor = MotorSerialClient(config=profile.motion_defaults)
+        self._safety_store = safety_store if safety_store is not None else HardwareSafetyStore(default_safety_path())
+        self._binding_lock = threading.RLock()
+        self._operation_owner = None
+        self._observations = None
+        self._abort_allowed = False
+        self._port = ''
+
+    @property
+    def operation_active(self):
+        return self._operation_owner is not None
+
+    def safety_profile(self, port=None):
+        profile = asdict(self.profile)
+        profile.pop('path')  # The physical configuration, not its file location.
+        return {'helper': 'updown_control', 'motor_port': (self._port if port is None else port).upper(), 'configuration': profile}
+
+    @contextmanager
+    def motion_operation(self, operation):
+        owner = threading.get_ident()
+        with self._binding_lock:
+            if self._operation_owner is not None:
+                if self._operation_owner != owner:
+                    raise HardwareSafetyError('The lift is owned by an active diagnostic.')
+                nested = True
+            else:
+                if not self.is_connected:
+                    raise HardwareSafetyError('Connect the original lift controller before motion.')
+                self._operation_owner = owner
+                nested = False
+        if nested:
+            yield self._observations
+            return
+        try:
+            with motor_diagnostic_operation(self.motor, self.profile.updown_axis, operation, self.safety_profile(), store=self._safety_store) as observations:
+                self._observations = observations
+                self._abort_allowed = True
+                try:
+                    yield observations
+                finally:
+                    with self._binding_lock:
+                        self._abort_allowed = False
+        finally:
+            with self._binding_lock:
+                self._observations = None
+                self._operation_owner = None
+
+    def recover_stopped_in_place(self):
+        with self._binding_lock:
+            if self.operation_active:
+                raise HardwareSafetyError('Wait for the active scan to settle before recovery.')
+            if not self.is_connected:
+                raise HardwareSafetyError('Connect the original lift controller before recovery.')
+            return recover_motor_diagnostic(self.motor, self.profile.updown_axis, self.safety_profile(), store=self._safety_store)
 
     def apply_settings_profile(self, profile: SettingsProfile) -> None:
-        self.profile = profile
-        self.motor.config = profile.motion_defaults
+        with self._binding_lock:
+            if self.operation_active:
+                raise HardwareSafetyError('Wait for the active lift diagnostic before changing settings.')
+            self.profile = profile
+            self.motor.config = profile.motion_defaults
 
     @property
     def is_connected(self) -> bool:
         return self.motor.is_connected
 
     def connect(self, port: str) -> None:
-        self.motor.connect(port, baudrate=57600)
+        with self._binding_lock:
+            if self.operation_active:
+                raise HardwareSafetyError('Wait for the active lift diagnostic before changing connections.')
+            with self._safety_store.operation_lease():
+                pending = self._safety_store.pending()
+                if pending:
+                    if pending['family'] != 'motion_diagnostic':
+                        raise HardwareSafetyError('Recover the unfinished operation in its original app before connecting the lift helper.')
+                    self._safety_store.pending(self.safety_profile(port))
+                self.motor.connect(port, baudrate=57600)
+                self._port = port
 
     def disconnect(self) -> None:
-        self.motor.disconnect()
+        with self._binding_lock:
+            if self.operation_active:
+                raise HardwareSafetyError('Wait for verified scan cleanup before disconnecting the lift.')
+            self.motor.disconnect()
 
     def read_position(self) -> int:
         return self.motor.read_position(self.profile.updown_axis)
@@ -1282,14 +1369,30 @@ class UpDownController:
         return self.motor.check_internal_status(self.profile.updown_axis, TOP_SWITCH_BIT) == 1
 
     def halt(self) -> None:
-        self.motor.halt(self.profile.updown_axis)
+        with self._binding_lock:
+            if self.operation_active:
+                if self._abort_allowed:
+                    self.motor.halt(self.profile.updown_axis)
+            else:
+                self.recover_stopped_in_place()
 
     def stop(self) -> None:
-        self.motor.stop(self.profile.updown_axis)
+        with self._binding_lock:
+            if self.operation_active:
+                if self._abort_allowed:
+                    self.motor.stop(self.profile.updown_axis)
+            else:
+                self.recover_stopped_in_place()
 
+    @_guarded_lift_motion
     def home_to_top(self) -> MoveResult:
-        return self.motor.home_to_top(self.profile.updown_axis)
+        self.motor.home_to_top(self.profile.updown_axis)
+        if not self.top_switch_active():
+            raise HardwareError('Lift homing did not verify the top switch.')
+        position = self.read_position()
+        return MoveResult(target=0, final_position=position, success=abs(position) <= POSITION_TOLERANCE_COUNTS)
 
+    @_guarded_lift_motion
     def move_to_raw(self, target: int, velocity: int) -> MoveResult:
         result = self.motor.move_motor(
             self.profile.updown_axis,
@@ -1299,9 +1402,10 @@ class UpDownController:
             acceleration=96637,
             relative_mode=False,
         )
-        success = abs(result.final_position - int(target)) <= POSITION_TOLERANCE_COUNTS or int(target) == 0
+        success = abs(result.final_position - int(target)) <= POSITION_TOLERANCE_COUNTS
         return MoveResult(target=int(target), final_position=result.final_position, success=success)
 
+    @_guarded_lift_motion
     def jog_relative(self, delta: int, velocity: int) -> MoveResult:
         current = self.read_position()
         result = self.motor.move_motor(
@@ -1316,9 +1420,11 @@ class UpDownController:
         success = abs(result.final_position - target) <= POSITION_TOLERANCE_COUNTS
         return MoveResult(target=target, final_position=result.final_position, success=success)
 
+    @_guarded_lift_motion
     def sample_pickup(self) -> MoveResult:
         return self.motor.sample_pickup(self.profile.updown_axis)
 
+    @_guarded_lift_motion
     def sample_dropoff(self) -> MoveResult:
         return self.motor.sample_dropoff(self.profile.updown_axis)
 
@@ -1363,7 +1469,8 @@ class ScanWorker(QtCore.QThread):
     def request_stop(self) -> None:
         self._stop_requested = True
         try:
-            self._controller.halt()
+            if self._controller.operation_active:
+                self._controller.halt()
         except Exception:
             pass
 
@@ -1380,72 +1487,99 @@ class ScanWorker(QtCore.QThread):
 
     def run(self) -> None:
         try:
-            points: list[ScanPoint] = []
-            tolerance = max(POSITION_TOLERANCE_COUNTS, abs(self._counts_per_cm) // 10, 100)
-            for index, target in enumerate(self._target_positions, start=1):
-                self._check_abort()
+            self._check_abort()
+            if (not self._target_positions or isinstance(self._counts_per_cm, bool)
+                    or not isinstance(self._counts_per_cm, int) or self._counts_per_cm == 0
+                    or not math.isfinite(self._settle_s) or self._settle_s < 0
+                    or not math.isfinite(self._sample_height_cm) or self._sample_height_cm <= 0):
+                raise HardwareSafetyError('Scan requires targets, nonzero signed position calibration, positive specimen height, and finite nonnegative settling time.')
+            for target in self._target_positions:
                 self._ensure_bounds(target)
-                self.log_message.emit(f"Scan move {index}/{len(self._target_positions)} to {target:,} raw counts.")
-                result = self._controller.move_to_raw(target, self._velocity_raw)
-                final_position = result.final_position
-                if abs(final_position - target) > tolerance:
-                    try:
-                        self._controller.halt()
-                    except Exception:
-                        pass
-                    raise RuntimeError(
-                        f"Z move did not settle at the requested target. "
-                        f"Requested {target:,}, reached {final_position:,}."
+            operation = {"action": "measurement_z_scan", "targets_raw": self._target_positions,
+                         "velocity_raw": self._velocity_raw, "settle_s": self._settle_s,
+                         "counts_per_cm": self._counts_per_cm, "sample_height_cm": self._sample_height_cm,
+                         "safe_min_raw": self._safe_min_raw, "safe_max_raw": self._safe_max_raw,
+                         "calibration": asdict(self._calibration), "baseline_raw": self._baseline_raw}
+            with self._controller.motion_operation(operation) as observations:
+                points: list[ScanPoint] = []
+                tolerance = max(POSITION_TOLERANCE_COUNTS, abs(self._counts_per_cm) // 10, 100)
+                for index, target in enumerate(self._target_positions, start=1):
+                    self._check_abort()
+                    self._ensure_bounds(target)
+                    self.log_message.emit(f"Scan move {index}/{len(self._target_positions)} to {target:,} raw counts.")
+                    result = self._controller.move_to_raw(target, self._velocity_raw)
+                    final_position = result.final_position
+                    if abs(final_position - target) > tolerance:
+                        try:
+                            self._controller.halt()
+                        except Exception:
+                            pass
+                        raise RuntimeError(
+                            f"Z move did not settle at the requested target. "
+                            f"Requested {target:,}, reached {final_position:,}."
+                        )
+                    if self._controller.top_switch_active() and abs(final_position) > tolerance:
+                        try:
+                            self._controller.halt()
+                        except Exception:
+                            pass
+                        raise RuntimeError(
+                            "Top switch became active away from the expected top region. "
+                            "The scan stopped to protect the holder."
+                        )
+                    self._check_abort()
+                    deadline = time.monotonic() + self._settle_s
+                    while time.monotonic() < deadline:
+                        self._check_abort()
+                        time.sleep(min(.05, max(0., deadline - time.monotonic())))
+                    self._check_abort()
+                    x_emu, y_emu, z_emu, moment_emu = self._squid.read_moment(self._calibration, self._baseline_raw)
+                    if not all(math.isfinite(value) for value in (x_emu, y_emu, z_emu, moment_emu)):
+                        raise HardwareError('SQUID scan returned a nonfinite calibrated moment.')
+                    point = ScanPoint(
+                        index=index,
+                        raw_position=final_position,
+                        z_cm=final_position / self._counts_per_cm,
+                        x_emu=x_emu,
+                        y_emu=y_emu,
+                        z_emu=z_emu,
+                        moment_emu=moment_emu,
                     )
-                if self._controller.top_switch_active() and abs(final_position) > tolerance:
-                    try:
-                        self._controller.halt()
-                    except Exception:
-                        pass
-                    raise RuntimeError(
-                        "Top switch became active away from the expected top region. "
-                        "The scan stopped to protect the holder."
+                    points.append(point)
+                    observations.append({"scan_point": asdict(point)})
+                    raw = getattr(self._squid, 'last_raw_xyz', None)
+                    if isinstance(raw, tuple) and len(raw) == 3:
+                        observations[-1]['raw_xyz'] = list(raw)
+                    self.point_acquired.emit(point)
+                    self.log_message.emit(
+                        f"Scan point {index}: raw={final_position:,}, z={point.z_cm:+.3f} cm, moment={moment_emu:.3e} emu"
                     )
                 self._check_abort()
-                time.sleep(self._settle_s)
-                x_emu, y_emu, z_emu, moment_emu = self._squid.read_moment(self._calibration, self._baseline_raw)
-                point = ScanPoint(
-                    index=index,
-                    raw_position=final_position,
-                    z_cm=final_position / self._counts_per_cm,
-                    x_emu=x_emu,
-                    y_emu=y_emu,
-                    z_emu=z_emu,
-                    moment_emu=moment_emu,
-                )
-                points.append(point)
-                self.point_acquired.emit(point)
-                self.log_message.emit(
-                    f"Scan point {index}: raw={final_position:,}, z={point.z_cm:+.3f} cm, moment={moment_emu:.3e} emu"
-                )
-            suggested_z_cm, fit_method = fit_best_measurement_position(points)
-            suggested_target_raw = None
-            suggested_meas_pos_raw = None
-            note = ""
-            if suggested_z_cm is not None:
-                suggested_target_raw = int(round(suggested_z_cm * self._counts_per_cm))
-                half_height_counts = int(round(self._sample_height_cm * self._counts_per_cm / 2.0))
-                suggested_meas_pos_raw = suggested_target_raw - half_height_counts
-                if not (self._safe_min_raw <= suggested_target_raw <= self._safe_max_raw):
-                    note = (
-                        "Best-fit target falls outside the enforced safety range; "
-                        "review the scan window before applying it."
+                suggested_z_cm, fit_method = fit_best_measurement_position(points)
+                suggested_target_raw = None
+                suggested_meas_pos_raw = None
+                note = ""
+                if suggested_z_cm is not None:
+                    suggested_target_raw = int(round(suggested_z_cm * self._counts_per_cm))
+                    half_height_counts = int(round(self._sample_height_cm * self._counts_per_cm / 2.0))
+                    suggested_meas_pos_raw = suggested_target_raw - half_height_counts
+                    if not (self._safe_min_raw <= suggested_target_raw <= self._safe_max_raw):
+                        note = (
+                            "Best-fit target falls outside the enforced safety range; "
+                            "review the scan window before applying it."
+                        )
+                result = (
+                    ScanResult(
+                        points=points,
+                        suggested_z_cm=suggested_z_cm,
+                        suggested_target_raw=suggested_target_raw,
+                        suggested_meas_pos_raw=suggested_meas_pos_raw,
+                        fit_method=fit_method,
+                        note=note,
                     )
-            self.scan_complete.emit(
-                ScanResult(
-                    points=points,
-                    suggested_z_cm=suggested_z_cm,
-                    suggested_target_raw=suggested_target_raw,
-                    suggested_meas_pos_raw=suggested_meas_pos_raw,
-                    fit_method=fit_method,
-                    note=note,
                 )
-            )
+            self._check_abort()
+            self.scan_complete.emit(result)
         except Exception as exc:
             self.scan_failed.emit(str(exc))
 
@@ -1462,6 +1596,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._calibration = read_calibration_from_settings(self.settings_profile.path)
         self._baseline_raw: tuple[float, float, float] | None = None
         self._scan_worker: ScanWorker | None = None
+        self._close_after_cleanup = False
         self._scan_points: list[ScanPoint] = []
         self._plot_suggested_z_cm: float | None = None
         self._plot_suggested_target_raw: int | None = None
@@ -1477,6 +1612,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_local_style()
         self.setMinimumSize(1660, 840)
         self.resize(1720, 940)
+        self._fit_to_screen()
         self._refresh_ports()
         self._populate_squid_ports()
         self._load_settings_into_widgets()
@@ -1507,6 +1643,53 @@ class MainWindow(QtWidgets.QMainWindow):
                 sample_height_counts=157500,
             )
 
+    def _fit_to_screen(self, screen=None) -> None:
+        screen = screen or self.screen() or QtWidgets.QApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        width, height = max(1, min(1720, int(area.width() * .92))), max(1, min(940, int(area.height() * .9)))
+        self.setMinimumSize(min(800, width), min(620, height))
+        self.setMaximumSize(width, height)
+        self.resize(width, height)
+        self._set_compact_layout(width < 1680)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, '_columns'):
+            self._set_compact_layout(self.width() < 1680)
+
+    def _set_compact_layout(self, compact):
+        if self._compact_layout == compact:
+            return
+        self._compact_layout = compact
+        if compact:
+            self._header_layout.setDirection(QtWidgets.QBoxLayout.Direction.TopToBottom)
+            for title, widget in zip(('Connections & Status', 'Settings & Console', 'Axis Profile', 'Motion & Scan'), (self._header, *self._columns)):
+                page = QtWidgets.QScrollArea()
+                page.setWidgetResizable(True)
+                page.setWidget(widget)
+                self._compact_pages.append(page)
+                self._compact_tabs.addTab(page, title)
+            self._shell_host.hide()
+            self._compact_tabs.show()
+        else:
+            for page in self._compact_pages:
+                page.takeWidget()
+            while self._compact_tabs.count():
+                self._compact_tabs.removeTab(0)
+            self._header_layout.setDirection(QtWidgets.QBoxLayout.Direction.LeftToRight)
+            self._outer_layout.insertWidget(0, self._header)
+            self._header.show()
+            for widget in self._columns:
+                self._shell_layout.addWidget(widget)
+                widget.show()
+            for page in self._compact_pages:
+                page.deleteLater()
+            self._compact_pages = []
+            self._compact_tabs.hide()
+            self._shell_host.show()
+
     def _build_ui(self) -> None:
         root = QtWidgets.QWidget(self)
         self.setCentralWidget(root)
@@ -1517,6 +1700,7 @@ class MainWindow(QtWidgets.QMainWindow):
         header = QtWidgets.QFrame()
         header.setObjectName("card")
         header_layout = QtWidgets.QHBoxLayout(header)
+        self._header_layout = header_layout
         header_layout.setContentsMargins(18, 16, 18, 16)
         header_layout.setSpacing(12)
         title_col = QtWidgets.QVBoxLayout()
@@ -1575,9 +1759,18 @@ class MainWindow(QtWidgets.QMainWindow):
         outer.addWidget(header)
         apply_card_shadow(header)
 
-        shell = QtWidgets.QHBoxLayout()
+        self._header = header
+        self._outer_layout = outer
+        self._shell_host = QtWidgets.QWidget()
+        shell = QtWidgets.QHBoxLayout(self._shell_host)
         shell.setSpacing(10)
-        outer.addLayout(shell, 1)
+        outer.addWidget(self._shell_host, 1)
+        self._shell_layout = shell
+        self._compact_tabs = QtWidgets.QTabWidget()
+        self._compact_tabs.hide()
+        outer.addWidget(self._compact_tabs, 1)
+        self._compact_layout = False
+        self._compact_pages = []
 
         left_host = QtWidgets.QWidget()
         left_host.setObjectName("columnHost")
@@ -1607,6 +1800,7 @@ class MainWindow(QtWidgets.QMainWindow):
         right_top.setSpacing(10)
         right_layout.addLayout(right_top, 1)
         shell.addWidget(right_host)
+        self._columns = (left_host, center_host, right_host)
 
         motion_host = QtWidgets.QWidget()
         motion_host.setObjectName("columnHost")
@@ -1851,6 +2045,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.move_target_btn.setObjectName("accent")
         self.move_meas_btn = QtWidgets.QPushButton("Move To Meas Target")
         self.home_top_btn = QtWidgets.QPushButton("Home To Top")
+        self.recover_stop_btn = QtWidgets.QPushButton("Recover: Verify Stopped In Place")
+        self.recover_stop_btn.clicked.connect(self._recover_lift_stop)
+        layout.addWidget(self.recover_stop_btn)
         self.pickup_btn = QtWidgets.QPushButton("Pickup")
         self.dropoff_btn = QtWidgets.QPushButton("Dropoff")
         self.susceptibility_btn = QtWidgets.QPushButton("Susc. Meter")
@@ -2574,6 +2771,9 @@ class MainWindow(QtWidgets.QMainWindow):
         return config
 
     def _reload_settings_profile(self) -> None:
+        if self._scan_worker is not None or self.controller.operation_active:
+            self._append('Wait for scan cleanup before reloading motor settings.')
+            return
         path = Path(self.settings_path_edit.text().strip())
         if not path.exists():
             QtWidgets.QMessageBox.warning(self, "Missing Settings", f"Could not find settings file:\n{path}")
@@ -2590,6 +2790,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_profile_to_ui(reset_motion=True)
 
     def _save_settings_file(self) -> None:
+        if self._scan_worker is not None or self.controller.operation_active:
+            self._append('Wait for scan cleanup before saving motor settings.')
+            return
         path = Path(self.settings_path_edit.text().strip())
         if not path.suffix:
             path = path.with_suffix(".ini")
@@ -2619,6 +2822,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._apply_profile_to_ui(reset_motion=False)
 
     def _connect_motor(self) -> None:
+        if self._scan_worker is not None:
+            self._append('Wait for scan cleanup before changing the motor connection.')
+            return
         port = self.motor_port_combo.currentText().strip()
         if not port:
             QtWidgets.QMessageBox.warning(self, "Missing Port", "Select the motor COM port first.")
@@ -2634,12 +2840,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._poll_live_state()
 
     def _disconnect_motor(self) -> None:
+        if self._scan_worker is not None or self.controller.operation_active:
+            self._append('Stop the scan and wait for verified cleanup before disconnecting the motor.')
+            return
         self.controller.disconnect()
         self._append("Disconnected motor")
         self._update_connections_status()
         self._poll_live_state()
 
     def _connect_squid(self) -> None:
+        if self._scan_worker is not None:
+            self._append('Wait for scan cleanup before changing the SQUID connection.')
+            return
         port = self.squid_port_combo.currentText().strip()
         if not port:
             QtWidgets.QMessageBox.warning(self, "Missing Port", "Select the SQUID COM port first.")
@@ -2654,6 +2866,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_connections_status()
 
     def _disconnect_squid(self) -> None:
+        if self._scan_worker is not None:
+            self._append('Wait for scan cleanup before disconnecting the SQUID.')
+            return
         self.squid.disconnect()
         self._append("Disconnected SQUID")
         self._update_connections_status()
@@ -3022,6 +3237,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_profile_model(current_raw)
 
     def _require_motor(self) -> bool:
+        if self._scan_worker is not None:
+            self._append('Wait for the active scan to settle before starting another lift operation.')
+            return False
         if self.controller.is_connected:
             return True
         QtWidgets.QMessageBox.warning(self, "Motor Not Connected", "Connect the up/down motor first.")
@@ -3134,6 +3352,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._poll_live_state()
 
     def _take_squid_baseline(self) -> None:
+        if self._scan_worker is not None:
+            self._append('Wait for scan cleanup before replacing the SQUID baseline.')
+            return
         if not self.squid.is_connected:
             QtWidgets.QMessageBox.warning(self, "SQUID Not Connected", "Connect the SQUID port first.")
             return
@@ -3279,13 +3500,29 @@ class MainWindow(QtWidgets.QMainWindow):
             self._set_motion_fault(message)
         self.scan_result_label.setText(message)
         self._append(f"Scan failed: {message}")
-        QtWidgets.QMessageBox.warning(self, "Scan Failed", message)
+        if not self._close_after_cleanup:
+            QtWidgets.QMessageBox.warning(self, "Scan Failed", message)
 
     def _scan_thread_finished(self) -> None:
         self.scan_start_btn.setEnabled(True)
         self.scan_stop_btn.setEnabled(False)
         self._scan_worker = None
         self._poll_live_state()
+        if self._close_after_cleanup:
+            QtCore.QTimer.singleShot(0, self.close)
+
+    def _recover_lift_stop(self) -> None:
+        if self._scan_worker is not None:
+            self._append('Stop the scan and wait for cleanup before explicit lift recovery.')
+            return
+        try:
+            record = self.controller.recover_stopped_in_place()
+            self._set_motion_fault(None)
+            self._append('Lift stop verified in place; recovery evidence saved as ' + record.treatment_id)
+            self._poll_live_state()
+        except Exception as exc:
+            self._set_motion_fault(str(exc))
+            self._append('Lift recovery remains pending: ' + str(exc))
 
     def _refresh_plot(self, suggested_z_cm: float | None = None, suggested_target_raw: int | None = None) -> None:
         self._plot_suggested_z_cm = suggested_z_cm
@@ -3309,9 +3546,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.apply_suggestion_btn.setEnabled(False)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
-        if self._scan_worker is not None:
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            self._close_after_cleanup = True
             self._scan_worker.request_stop()
-            self._scan_worker.wait(2000)
+            self._append('Stopping the scan; waiting for verified lift cleanup before closing.')
+            event.ignore()
+            return
         try:
             self._settings = UpDownSettings(
                 motor_port=self.motor_port_combo.currentText().strip(),

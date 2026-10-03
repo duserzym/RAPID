@@ -85,7 +85,7 @@ class HardwareSafetyStore:
             if envelope["sha256"] != hashlib.sha256(_canonical(state)).hexdigest():
                 raise ValueError("checksum mismatch")
             if (state["schema"] != self.schema or state["status"] not in {"pending", "verified"}
-                    or state["family"] not in {"pulse", "rrm", "af", "arm", "af_diagnostic"}
+                    or state["family"] not in {"pulse", "rrm", "af", "arm", "af_diagnostic", "motion_diagnostic"}
                     or not isinstance(state["token"], str) or len(state["token"]) != 32
                     or not isinstance(state["profile"], dict) or not isinstance(state["plan"], dict)):
                 raise ValueError("unsupported or incomplete state")
@@ -126,7 +126,7 @@ class HardwareSafetyStore:
                 temporary.unlink()
 
     def begin(self, family, plan, profile, *, sample_id="", run_id=""):
-        if family not in {"pulse", "rrm", "af", "arm", "af_diagnostic"}:
+        if family not in {"pulse", "rrm", "af", "arm", "af_diagnostic", "motion_diagnostic"}:
             raise HardwareSafetyError("Unsupported treatment safety family.")
         # Round-trip makes a detached, strict JSON snapshot before file I/O.
         plan, profile = json.loads(_canonical(plan)), json.loads(_canonical(profile))
