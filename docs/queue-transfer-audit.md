@@ -136,3 +136,10 @@ including fresh recorded pickup/support pose proofs consumed by vacuum transitio
 measured-height handoff at the empty hole, original-slot dropoff and accepted release
 delay. See `queue-transfer-coordinator.md`. This composition still needs MainWindow/
 MeasurementWorker wiring, startup/blank/operator stages and terminal recovery.
+
+The native backend can now bind its original coordinator and measured geometry;
+QueueCommandWorker/MeasurementWorker borrow the original durable session through
+I/O, cleanup and artifact publication, then emit completion after claim release.
+Borrowed generic motor cleanup is blocked and verified specimen return uses the
+coordinator. See `queue-worker-ownership.md`. MainWindow still must create the full
+session/coordinator, hold device leases and supply each specimen's slot/file context.

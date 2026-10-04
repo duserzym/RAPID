@@ -67,6 +67,7 @@ from rapid_main.rockmag import write_rockmag_run_artifact
 from rapid_main.thermal import write_thermal_run_artifact
 from rapid_main.workflow import WorkflowPhase, WorkflowStateMachine
 from rapid_main import software_version
+from rapid_main.worker_ownership import worker_claim
 from rapid_main.io.measurement_bundle import (
     SIMULATION_STATEMENT,
     SIMULATED_SUBDIR,
@@ -156,6 +157,7 @@ class MeasurementWorker(QtCore.QThread):
         self._labels = list(labels)
         self._output_dir = Path(output_dir)
         self._backend = backend or NoCommBackend()
+        self._pending_run_result = None
         sources: list[object] = [self._backend]
         for source in tuple(communication_sources or ()):
             if source is not None and all(source is not item for item in sources):
@@ -232,6 +234,33 @@ class MeasurementWorker(QtCore.QThread):
 
     def run(self) -> None:
         """QThread entry point — executes the full sequence."""
+        try:
+            with worker_claim(self._backend):
+                try:
+                    try:
+                        self._run_owned()
+                    finally:
+                        clear = getattr(self._backend, 'set_halt_check', None)
+                        if callable(clear):
+                            clear(None)
+                except Exception as exc:
+                    self._record_worker_failure(exc)
+        except Exception as exc:
+            self._record_worker_failure(exc)
+        finally:
+            self.run_finished.emit(self._pending_run_result is not False or bool(self._error_messages))
+
+    def _record_worker_failure(self, exc):
+        phase = WorkflowPhase.PREFLIGHT if self._pending_run_result is None else WorkflowPhase.RETURNING
+        self._emit_error(f'Measurement worker failed: {exc}', phase=phase)
+        self._emit_phase(WorkflowPhase.ERROR)
+        self._pending_run_result = True
+        try:
+            self._finish_run(aborted=True)
+        except Exception as artifact_error:
+            self._emit_error(f'Failed to record worker failure: {artifact_error}', phase=WorkflowPhase.SAVING)
+
+    def _run_owned(self) -> None:
         if self._halt_flag:
             self._emit_phase(WorkflowPhase.HALTED)
             self._finish_run(aborted=True)
@@ -1117,7 +1146,7 @@ class MeasurementWorker(QtCore.QThread):
         self._write_rockmag_run_artifact(aborted=aborted)
         self._write_thermal_run_artifact(aborted=aborted)
         self._write_artifact_index(aborted=aborted)
-        self.run_finished.emit(aborted)
+        self._pending_run_result = aborted
 
     def _write_rockmag_run_artifact(self, *, aborted: bool) -> None:
         if self._routine_context is None:

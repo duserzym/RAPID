@@ -408,6 +408,8 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._last_flip = False
         self._sample_loaded = False
         self._queue_specimen_geometry = None
+        self._queue_coordinator = None
+        self._retired_transport_recovery_records = []
         self._geometry_stage_token = None
         self._bracketed_geometry_signature = None
 
@@ -633,9 +635,20 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
     def transport_recovery_records(self):
         """Return immutable whole-block transport recovery evidence."""
 
+        previous = tuple(getattr(self, '_retired_transport_recovery_records', ()))
         if self._bracketed is None:
-            return ()
-        return tuple(self._bracketed.transport_recovery_records)
+            return previous
+        return previous + tuple(self._bracketed.transport_recovery_records)
+
+    def _retain_transport_recoveries(self):
+        bracketed = getattr(self, '_bracketed', None)
+        if bracketed is None:
+            return
+        records = list(getattr(self, '_retired_transport_recovery_records', ()))
+        for record in bracketed.transport_recovery_records:
+            if all(record is not item for item in records):
+                records.append(record)
+        self._retired_transport_recovery_records = records
 
     def holder_status(self):
         """Holder validity summary for the operator UI."""
@@ -664,6 +677,97 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
 
     # -- measurement -------------------------------------------------------
 
+    @contextmanager
+    def queue_worker_claim(self):
+        """Keep the borrowed stage store claimed through cleanup and publication."""
+        store = getattr(self, '_safety_store', None)
+        session = getattr(store, 'session', None)
+        coordinator = getattr(self, '_queue_coordinator', None)
+        geometry = getattr(self, '_queue_specimen_geometry', None)
+        if coordinator is not None and (session is None or coordinator.session is not session):
+            raise HardwareError('The native queue coordinator requires its original borrowed stage store.')
+        if geometry is not None and (session is None or geometry.session is not session):
+            raise HardwareError('The native measured geometry requires its original borrowed stage store.')
+        if session is None:
+            yield
+            return
+        if self._config.general.nocomm is not False or store is not session.child_store:
+            raise HardwareError('Only the original native queue can borrow a worker claim.')
+        with session.claim():
+            yield
+
+    def bind_queue_coordinator(self, coordinator):
+        """Attach original transfer services and borrow their durable stage store."""
+        from .queue_transfer_coordinator import QueueTransferCoordinator
+        if (not isinstance(coordinator, QueueTransferCoordinator) or self._config.general.nocomm is not False
+                or self._client is not coordinator.table.motor or self._axes != coordinator.table.axes):
+            raise HardwareError('Bind the original native motor station to its queue coordinator.')
+        session = coordinator.session
+        session.child_store._owned()
+        old_store = self._safety_store
+        old_session = getattr(old_store, 'session', None)
+        path = old_session.store.path if old_session is not None else old_store.path
+        if (path.resolve() != session.store.path.resolve() or (old_session is not None and old_session is not session)
+                or getattr(self, '_queue_specimen_geometry', None) is not None
+                or (getattr(self, '_queue_coordinator', None) is not None and self._queue_coordinator is not coordinator)):
+            raise HardwareError('Restore the original idle queue backend before borrowing transfer ownership.')
+        self._validate_queue_bindings(coordinator)
+        if getattr(self, '_queue_coordinator', None) is None:
+            previous_cancel = coordinator.table.should_cancel
+            coordinator.table.should_cancel = lambda: (previous_cancel()
+                or (self._halt_check is not None and self._halt_check()))
+        self._queue_coordinator = coordinator
+        self._safety_store = session.child_store
+
+    def _validate_queue_bindings(self, coordinator):
+        from .queue_station import QueueStationGeometry
+        session = coordinator.session
+        session.child_store._owned()
+        if (getattr(self, '_queue_coordinator', None) is coordinator
+                and self._safety_store is not session.child_store):
+            raise HardwareError('Restore the original borrowed queue stage store before I/O.')
+        root = session.store._queue(session.token)
+        station = QueueStationGeometry.from_config(self._config, use_xy_table=True)
+        snapshot = lambda value: json.loads(json.dumps(value, allow_nan=False))
+        if (station != coordinator.table.geometry
+                or self._client is not coordinator.table.motor or self._axes != coordinator.table.axes
+                or self._config.general.nocomm is not False
+                or self._config.motor_station.ports != {key: axis.port for key, axis in self._axes.items()}
+                or self._config.motor_station.addresses != {key: axis.address for key, axis in self._axes.items()}
+                or snapshot(dataclasses.asdict(_build_motor_controller_config(self._config)))
+                    != coordinator.table.profile['controller']
+                or root['profile']['stage_profiles'].get('acquisition') != snapshot(self._acquisition_safety_profile())
+                or any(root['profile']['stage_profiles'].get(family) != snapshot(self._safety_profile())
+                       for family in ('af', 'arm', 'pulse', 'rrm'))
+                or getattr(self._af_demag, '_controller', None) is not coordinator.fields.af
+                or self._arm_bias is not coordinator.fields.arm
+                or getattr(self._pulse_irm, 'daq', None) is not coordinator.fields.pulse.daq
+                or getattr(self._pulse_irm, 'relays', None) is not coordinator.fields.pulse.relays):
+            raise HardwareError('Queue transfer and measurement must retain original scientific and field circuit bindings.')
+        coordinator.table._validate(session)
+        coordinator.fields._validate(session)
+
+    def load_queue_specimen(self, original_slot, sample_id, *, file_id=''):
+        coordinator = getattr(self, '_queue_coordinator', None)
+        if coordinator is None or getattr(self, '_queue_specimen_geometry', None) is not None:
+            raise HardwareError('An original idle queue coordinator is required before loading a specimen.')
+        self._validate_queue_bindings(coordinator)
+        state = coordinator.load(original_slot, sample_id, file_id=file_id)
+        self.set_measurement_context(sample_name=sample_id)
+        self.bind_specimen_geometry(coordinator.session)
+        return state
+
+    def return_queue_specimen(self):
+        coordinator = getattr(self, '_queue_coordinator', None)
+        geometry = getattr(self, '_queue_specimen_geometry', None)
+        if coordinator is None or geometry is None or getattr(geometry, 'is_holder', False):
+            raise HardwareError('The original bound queue specimen is required before return.')
+        self._validate_queue_bindings(coordinator)
+        geometry.height(self._sample_name)
+        state = coordinator.return_specimen()
+        self.clear_specimen_geometry()
+        return state
+
     def bind_specimen_geometry(self, session):
         """Bind the original verified transfer before planning a sample stage."""
         from .queue_specimen_geometry import QueueSpecimenGeometry
@@ -673,6 +777,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             raise HardwareError('Native measured geometry cannot be borrowed by a simulated backend.')
         geometry = QueueSpecimenGeometry(session, self._config, self._client, self._axes, self._safety_store)
         geometry.height(self._sample_name)
+        self._retain_transport_recoveries()
         self._queue_specimen_geometry = geometry
         self._bracketed = None
         self._bracketed_geometry_signature = None
@@ -687,6 +792,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._holder_previous_sample = self._sample_name
         self._sample_name = geometry.context.sample_id
         self._measuring_holder = True
+        self._retain_transport_recoveries()
         self._queue_specimen_geometry = geometry
         self._bracketed = None
         self._bracketed_geometry_signature = None
@@ -704,6 +810,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             raise HardwareError('Verify blank-holder rod clearance before clearing its geometry.')
         self._sample_name = self._holder_previous_sample
         self._measuring_holder = False
+        self._retain_transport_recoveries()
         self._queue_specimen_geometry = None
         self._bracketed = None
         self._bracketed_geometry_signature = None
@@ -748,6 +855,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         state = QueueSpecimenState.read(value, geometry.session, geometry.station)
         if state.phase != 'clear' or dataclasses.replace(state, phase='lifted') != geometry.context:
             raise HardwareError('Verify the original specimen return before clearing its measured geometry.')
+        self._retain_transport_recoveries()
         self._queue_specimen_geometry = None
         self._bracketed = None
         self._bracketed_geometry_signature = None
@@ -1603,6 +1711,21 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
 
     def return_to_safe_state(self) -> None:
         store = getattr(self, "_safety_store", None)
+        session = getattr(store, 'session', None)
+        if session is not None:
+            session.child_store._owned()
+            pending = store.pending()
+            if pending:
+                raise HardwareError('Recover the original unfinished queue stage; generic return cannot replay transfer or release grip.')
+            if getattr(self, '_queue_coordinator', None) is None:
+                raise HardwareError('The original native queue coordinator is required for specimen return.')
+            geometry = getattr(self, '_queue_specimen_geometry', None)
+            if geometry is None:
+                raise HardwareError('Verify the original queue rod/support state before terminal cleanup.')
+            if getattr(geometry, 'is_holder', False):
+                raise HardwareError('Return the original blank holder through its queue coordinator.')
+            self.return_queue_specimen()
+            return
         pending = store.pending() if store is not None and not self._config.general.nocomm else None
         if pending:
             if pending['family'] == 'queue':

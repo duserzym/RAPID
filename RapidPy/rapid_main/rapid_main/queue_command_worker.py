@@ -1,6 +1,7 @@
 """Keep native queue commands and terminal recovery off the GUI thread."""
 import threading
 from PySide6 import QtCore
+from .worker_ownership import worker_claim
 
 
 class QueueCommandWorker(QtCore.QObject):
@@ -19,6 +20,16 @@ class QueueCommandWorker(QtCore.QObject):
 
     @QtCore.Slot()
     def run(self):
+        try:
+            with worker_claim(self.backend):
+                self._run_owned()
+        except Exception as exc:
+            self.ok = False
+            self.error = '; '.join(filter(None, (self.error, 'Queue worker ownership failed: ' + str(exc))))
+        finally:
+            self.settled.emit()
+
+    def _run_owned(self):
         check = getattr(self.backend, 'set_halt_check', None)
         initialized = False
         try:
@@ -47,5 +58,3 @@ class QueueCommandWorker(QtCore.QObject):
             except Exception as exc:
                 self.ok = False
                 self.error += '; cancellation hook could not be cleared: ' + str(exc)
-            finally:
-                self.settled.emit()

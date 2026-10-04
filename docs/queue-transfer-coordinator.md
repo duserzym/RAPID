@@ -36,7 +36,9 @@ sensor. Physical pressure, contact and dropoff qualification remain required.
 Injected native DLL/serial regressions exercise the complete load/return sequence,
 height/empty-hole handoff, support evidence, valve/home/cutoff/publication failures,
 stale/modified evidence, reconnect/recovery, changed calibration and repeated specimens.
-This coordinator is not yet attached to MainWindow/MeasurementWorker. Startup pump/
-empty-rod reference, blank-holder composition, measured backend binding, operator
+The native measurement backend can now bind this coordinator and load/return measured
+specimen geometry under the original worker claim; see `queue-worker-ownership.md`.
+MainWindow does not yet create/attach the complete coordinator. Startup pump/
+empty-rod reference, blank-holder composition, per-command measured specimen binding, operator
 interventions, terminal ownership/recovery and chain station transfers remain open
 full-system integration requirements.

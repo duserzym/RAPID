@@ -552,6 +552,7 @@ class _WorkerBackend:
         self.fail_susc = fail_susc
         self.simulated_record = simulated_record
         self.halt_check = None
+        self.halt_probes_during_susc = []
 
     @property
     def susceptibility_acquisition_records(self):
@@ -578,6 +579,7 @@ class _WorkerBackend:
 
     def read_susceptibility(self) -> float:
         self.calls.append("susc")
+        self.halt_probes_during_susc.append((callable(self.halt_check), self.halt_check() if callable(self.halt_check) else None))
         index = len(self.records)
         if self.fail_susc:
             self.records.append(_record(f"susc-{index}", outcome="failed"))
@@ -611,8 +613,19 @@ class WorkerSusceptibilityTests(unittest.TestCase):
         self.assertEqual(
             backend.calls, ["treat:NRM", "squid", "susc", "treat:SUSC", "squid", "safe"]
         )
-        self.assertTrue(callable(backend.halt_check))
-        self.assertFalse(backend.halt_check())
+        self.assertEqual(backend.halt_probes_during_susc, [(True, False)])
+        self.assertIsNone(backend.halt_check)
+
+    def test_failed_cancellation_hook_cleanup_emits_one_aborted_result(self) -> None:
+        class FailedClear(_WorkerBackend):
+            def set_halt_check(self, check):
+                if check is None:
+                    raise RuntimeError('cancellation hook could not be cleared')
+                super().set_halt_check(check)
+        with tempfile.TemporaryDirectory() as td:
+            errors, finished = self._run(FailedClear(), ['NRM'], Path(td) / 'S1')
+        self.assertEqual(finished, [True])
+        self.assertTrue(any('cancellation hook could not be cleared' in error for error in errors))
 
     def test_current_run_acquisitions_are_published_and_indexed_with_digest(self) -> None:
         backend = _WorkerBackend()

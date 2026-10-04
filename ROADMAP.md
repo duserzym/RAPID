@@ -1441,3 +1441,39 @@ height and empty-hole handoff, recorded support before valve release, retained g
 identity after home or valve failure, publication/cutoff failure, calibration changes,
 stale/modified/reconnected pose proofs and repeated specimens. Source six-panel/six-
 helper smoke, compile and diff checks pass. No physical instruments actuated.
+
+### Native worker claims and measured backend transfer binding (2026-10-04)
+
+QueueCommandWorker and MeasurementWorker now enter the native backend's original
+QueueWorkflowSession claim on their actual worker thread. Claims cover stage I/O,
+recovery, evidence publication and cancellation-hook cleanup. Completion signals are
+emitted after claim release; GUI settlement still waits for actual thread exit.
+Competing workers cannot touch instruments or clear another worker's halt probe.
+Released sessions and mismatched borrowed stores/geometry fail before native I/O.
+
+QueueHardwareBackend binds the original transfer coordinator, native motors, full
+scientific profiles and exact participating field circuit instances. Worker load
+composes native pickup/reference/empty-hole parking and binds measured specimen
+geometry; verified original-slot return clears that binding only after support,
+valve release and rod clearance. Halt probes reach transfer cancellation. Settings/
+controller changes fail before transfer; failed return retains original geometry and
+grip. SQUID recovery records survive geometry retirement for final worker artifacts.
+Borrowed queue cleanup cannot fall through to generic unstaged motor commands.
+
+The existing susceptibility regression now checks a live halt probe during acquisition
+and its removal at completion, rather than retaining a completed worker's callback.
+A failed hook cleanup emits one aborted terminal result. See docs/queue-worker-ownership.md.
+
+Still create the complete durable session/coordinator from MainWindow, hold all device
+leases, supply per-command slot/file/orientation metadata and replace legacy blank,
+InitUp and Flip paths. Startup empty-rod/pump/reference, operator interventions,
+original-panel terminal recovery/release, chain transfers, auxiliary tools, portable
+rebuilding and physical/scientific station acceptance remain required. The full-system
+goal remains active.
+
+Verification: all 1088 isolated tests pass in 204.520 seconds with clean process exit.
+Fifteen new regressions cover real QThread claims around staged SQUID/native stop I/O,
+competing/released/mismatched owners, owned failure-artifact rewriting before terminal
+signal, scientific/controller binding changes, measured specimen load/return, retained
+grip after failure, cancellation and typed SQUID recovery retention. Six-panel/six-helper
+source smoke, compile and diff checks pass. No physical instruments actuated.
