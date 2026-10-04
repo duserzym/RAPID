@@ -238,9 +238,14 @@ class TestDiagnosticServices(unittest.TestCase):
                 self._trace = trace
                 self.is_connected = False
                 self.is_enabled = False
+                self.acknowledgements = []
 
             def connect(self, port: str, baudrate: int) -> None:
+                self._port, self._baud = port, baudrate
                 self.is_connected = bool(port and baudrate)
+
+            def disconnect(self):
+                self.is_connected = False
 
             def set_enabled(self, enabled: bool) -> None:
                 commands = ("E", "10MFF", "O", "10VFF") if enabled else (
@@ -249,10 +254,12 @@ class TestDiagnosticServices(unittest.TestCase):
                 for command in commands:
                     self._trace("TX", command, "vacuum command")
                 self._trace("RX", "ACK", "vacuum response")
+                self.acknowledgements.append({'commands': list(commands), 'reply': 'ACK'})
                 self.is_enabled = bool(enabled)
 
         with mock.patch.object(diagnostic_services, "VacuumController", _Controller):
             backend = VacuumBackendAdapter(VacuumConfig(port="COM8", baud=9600))
+            backend.connect()
 
         backend.set_pump(True)
         events = backend.communication_events()
@@ -271,6 +278,8 @@ class TestDiagnosticServices(unittest.TestCase):
         )
         with self.assertRaisesRegex(HardwareUnavailableError, "no pressure telemetry"):
             backend.read_pressure()
+        backend.set_pump(False)
+        backend.disconnect()
 
     def test_live_vacuum_adapter_connection_failure_does_not_become_simulation(self) -> None:
         class _BrokenController:
@@ -282,10 +291,11 @@ class TestDiagnosticServices(unittest.TestCase):
 
         with mock.patch.object(diagnostic_services, "VacuumController", _BrokenController):
             with self.assertRaisesRegex(HardwareUnavailableError, "COM9:9600 refused"):
-                build_vacuum_backend(
+                backend = build_vacuum_backend(
                     VacuumConfig(port="COM9", baud=9600),
                     nocomm=False,
                 )
+                backend.connect()
 
     def test_af_demag_command_planning_and_no_comm_recording(self) -> None:
         cfg = AfDemagConfig(peak=200.0, ramp_speed="Slow (3 Hz)", settle=2.5, tumble=True)

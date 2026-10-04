@@ -14,6 +14,7 @@ import time
 import math
 import re
 import threading
+import copy
 from functools import wraps
 from dataclasses import dataclass, asdict
 from typing import Mapping, Protocol, runtime_checkable
@@ -449,6 +450,7 @@ def read_vacuum_snapshot(
     connected = False
     pump_on = False
     status = ""
+    pump_error = ''
     try:
         connected = bool(backend.is_connected())
     except Exception as exc:
@@ -456,6 +458,7 @@ def read_vacuum_snapshot(
     try:
         pump_on = bool(backend.is_pump_on())
     except Exception as exc:
+        pump_error = str(exc) or type(exc).__name__
         status = f"{status}; pump status unavailable: {exc}".strip("; ")
     try:
         backend_status = str(backend.status())
@@ -473,6 +476,9 @@ def read_vacuum_snapshot(
             fault_reason="Vacuum controller is not connected.",
         )
 
+    if pump_error:
+        return VacuumSnapshot(pressure_mtorr=None, pump_on=False, connected=True, status=status,
+                              fault=True, fault_reason='Vacuum output state is unverified: ' + pump_error)
     threshold = max(0.0, float(warn_threshold))
     pressure_telemetry_available = bool(
         getattr(backend, "pressure_telemetry_available", True)
@@ -1960,7 +1966,7 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
 
     def __init__(self, cfg: VacuumConfig | None = None) -> None:
         super().__init__(simulated=False)
-        self._cfg = cfg or VacuumConfig()
+        self._cfg = copy.deepcopy(cfg or VacuumConfig())
         self.pressure_telemetry_available = False
         self._communication_logger = CommunicationLogger(
             "VACUUM", port=str(self._cfg.port)
@@ -1968,13 +1974,42 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
         self._pump_only_controller: VacuumController | None
         self._pump_only_controller = None
         self._status = "Vacuum transport not connected"
+        from rapidpy_common.hardware_safety import HardwareSafetyStore, default_safety_path
+        self._safety_store = HardwareSafetyStore(default_safety_path())
+        self._hold_session = None
+        self._state_lock = threading.RLock()
+        self._operation_active = False
+        self.output_state_known = False
         if VacuumController is None:
             raise HardwareUnavailableError("Vacuum controller dependency is unavailable.")
         if not str(self._cfg.port).strip():
             raise HardwareUnavailableError("Vacuum serial port is not configured.")
-        self._connect()
-        if bool(self._cfg.auto_pump):
-            self.set_pump(True)
+
+    @property
+    def operation_active(self):
+        return self._operation_active
+
+    @property
+    def outputs_held(self):
+        return bool(self._hold_session and self._hold_session.active)
+
+    @property
+    def can_recover_pending(self):
+        pending = self._safety_store.pending()
+        return bool(pending and pending['family'] == 'station_diagnostic' and
+                    pending['profile'].get('helper') == 'rapid_main_vacuum')
+
+    def _binding(self):
+        return {'port': self._cfg.port.strip().upper(), 'baud': int(self._cfg.baud or 9600)}
+
+    def _check_pending(self):
+        from rapidpy_common.hardware_safety import HardwareSafetyError
+        pending = self._safety_store.pending()
+        if pending is not None:
+            expected = {'helper': 'rapid_main_vacuum', 'resources': {'vacuum': self._binding()}}
+            if pending['family'] != 'station_diagnostic' or pending['profile'] != expected:
+                raise HardwareSafetyError('Recover the unfinished operation in its original panel with its original wiring.')
+        return pending
 
     def _trace(self, direction: str, payload: str, detail: str) -> None:
         if direction == "TX":
@@ -1987,19 +2022,45 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
             self._communication_logger.info(detail or payload)
 
     def _connect(self) -> None:
-        from rapidpy_common.hardware_safety import HardwareSafetyStore, default_safety_path
-        store = HardwareSafetyStore(default_safety_path())
-        with store.operation_lease():
-            if store.pending() is not None:
-                raise HardwareUnavailableError('Recover the original unfinished hardware operation before connecting vacuum controls.')
-            controller = VacuumController(trace=self._trace)
-            controller.connect(self._cfg.port, baudrate=int(self._cfg.baud or 9600))
-        if not controller.is_connected:
-            raise HardwareUnavailableError(
-                f"Vacuum controller did not connect on {self._cfg.port}:{self._cfg.baud}."
-            )
-        self._pump_only_controller = controller
-        self._status = f"Connected to vacuum serial ({self._cfg.port}:{self._cfg.baud})"
+        from rapidpy_common.vacuum_diagnostic_safety import VacuumHoldSession
+        with self._state_lock:
+            if self.outputs_held:
+                raise HardwareError('Release the held vacuum before changing connections.')
+            self._operation_active = True
+            try:
+                with self._safety_store.operation_lease():
+                    self._check_pending()
+                    if self.is_connected():
+                        return
+                    controller = VacuumController(trace=self._trace)
+                    try:
+                        controller.connect(self._cfg.port, baudrate=int(self._cfg.baud or 9600))
+                        if not controller.is_connected:
+                            raise HardwareUnavailableError('Vacuum transport did not connect.')
+                    except Exception as exc:
+                        try:
+                            controller.disconnect()
+                        except Exception:
+                            pass
+                        raise HardwareUnavailableError(f'Vacuum connection failed at {self._cfg.port}:{self._cfg.baud}: {exc}') from exc
+                    self._pump_only_controller = controller
+                    self._hold_session = VacuumHoldSession(controller, store=self._safety_store, helper='rapid_main_vacuum')
+                    self.output_state_known = False
+                    self._status = 'Connected; vacuum outputs are unverified. Use Release / Verify Off or an explicit Pump On command.'
+            finally:
+                self._operation_active = False
+
+    def connect(self):
+        self._connect()
+
+    def disconnect(self):
+        with self._state_lock:
+            if self.outputs_held:
+                raise HardwareError('Release and verify vacuum off before disconnecting.')
+            if self._pump_only_controller is not None:
+                self._pump_only_controller.disconnect()
+            self.output_state_known = False
+            self._status = 'Vacuum transport disconnected; physical output state is unverified.'
 
     def communication_events(self) -> tuple[CommunicationEvent, ...]:
         return tuple(self._communication_logger.transcript.events)
@@ -2014,22 +2075,49 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
         return bool(self._pump_only_controller and self._pump_only_controller.is_connected)
 
     def status(self) -> str:
+        if self.outputs_held:
+            return 'Vacuum release is unverified; recover the original hold.' if self._hold_session.faulted else 'Vacuum commanded on; station ownership is retained until verified release.'
+        if self.can_recover_pending:
+            return 'Vacuum recovery is required with the original port and baud.'
         return self._status
 
     def set_pump(self, on: bool) -> None:
-        from rapidpy_common.hardware_safety import HardwareSafetyStore, default_safety_path
-        store = HardwareSafetyStore(default_safety_path())
-        with store.operation_lease():
-            if store.pending() is not None:
-                raise HardwareUnavailableError('Recover the original unfinished hardware operation before changing vacuum outputs.')
-            controller = self._require_controller()
-            controller.set_enabled(on)
-            if bool(controller.is_enabled) != bool(on):
-                raise HardwareError(
-                    f"Vacuum controller did not confirm pump {'on' if on else 'off'} state."
-                )
+        with self._state_lock:
+            self._operation_active = True
+            try:
+                pending = self._check_pending()
+                self._require_controller()
+                session = self._hold_session
+                if on:
+                    if session.active:
+                        if session.faulted:
+                            raise HardwareError('Recover the failed vacuum release before enabling outputs.')
+                        return
+                    if pending is not None:
+                        raise HardwareError('Release the unfinished vacuum operation before enabling outputs.')
+                    session.start()
+                    self.output_state_known = True
+                else:
+                    if session.active:
+                        session.close()
+                    elif pending is not None:
+                        session.recover()
+                    else:
+                        session.start(enabled=False)
+                    self.output_state_known = True
+                    self._status = 'Vacuum valve and pump off commands acknowledged; no physical pressure telemetry.'
+            except Exception:
+                self.output_state_known = False
+                raise
+            finally:
+                self._operation_active = False
+
+    def recover_release(self):
+        self.set_pump(False)
 
     def is_pump_on(self) -> bool:
+        if not self.output_state_known:
+            raise HardwareUnavailableError('Vacuum output state has not been acknowledged in this session.')
         return bool(self._require_controller().is_enabled)
 
     def read_pressure(self) -> float:

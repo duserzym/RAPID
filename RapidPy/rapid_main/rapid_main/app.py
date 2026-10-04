@@ -413,6 +413,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._owned_dialogs: dict[str, QtWidgets.QWidget] = {}
         self._shutdown_cleanup_requested = False
         self._shutdown_retry_pending = False
+        self._shutdown_requested_dialogs = set()
         self._shutdown_timer = QtCore.QTimer(self)
         self._shutdown_timer.setSingleShot(True)
         self._shutdown_timer.timeout.connect(self._retry_shutdown)
@@ -1370,8 +1371,15 @@ class MainWindow(QtWidgets.QMainWindow):
         if getattr(self, '_shutdown_cleanup_requested', False):
             raise DeviceOwnershipError('Shutdown cleanup is in progress; wait for active hardware owners to finish.')
         backend = getattr(self,"_measurement_backend",None)
-        dc_recovery = resource == 'changer' and owner == 'dc_motors_panel' and getattr(getattr(self, '_dc_motor_backend', None), 'can_recover_pending', False) is True
-        if resource in {"measurement","changer","af_demag"} and owner!="irm_panel" and not dc_recovery and (getattr(backend,"has_unresolved_hardware_fault",False) is True or getattr(backend,"has_unresolved_pulse_fault",False) is True or getattr(backend,"has_unresolved_rotation_fault",False) is True):
+        from rapidpy_common.hardware_safety import HardwareSafetyError
+        try:
+            dc_recovery = resource == 'changer' and owner == 'dc_motors_panel' and getattr(getattr(self, '_dc_motor_backend', None), 'can_recover_pending', False) is True
+            vacuum_recovery = resource == 'vacuum' and owner == 'vacuum_panel' and getattr(getattr(self, '_vacuum_backend', None), 'can_recover_pending', False) is True
+            irm_recovery = resource == 'af_demag' and owner == 'irm_panel'
+            unresolved = any(getattr(backend, name, False) is True for name in ('has_unresolved_hardware_fault', 'has_unresolved_pulse_fault', 'has_unresolved_rotation_fault'))
+        except HardwareSafetyError as exc:
+            raise DeviceOwnershipError(str(exc)) from exc
+        if resource in {'measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptibility'} and not (irm_recovery or dc_recovery or vacuum_recovery) and unresolved:
             raise DeviceOwnershipError("Hardware safe state is unverified. Recover the unfinished operation with its original panel or helper before using other controls.")
         return self._ownership.acquire(resource, owner, allow_reentrant=allow_reentrant)
 
@@ -1566,7 +1574,25 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     # ── No-Comm toggle ────────────────────────────────────────────────────────
+    def _operating_mode_change_blocker(self, on):
+        if self._shutdown_cleanup_requested or self._has_active_automation() or self._owned_dialog_leases or self._external_process_leases:
+            return 'Close hardware diagnostics and finish active work before changing operator or operating mode.'
+        from rapidpy_common.hardware_safety import HardwareSafetyStore, default_safety_path, HardwareSafetyError
+        try:
+            if HardwareSafetyStore(default_safety_path()).pending() is not None and on:
+                return 'Recover the unfinished hardware operation before entering No-Comm. Hardware mode remains available for original-panel recovery.'
+        except HardwareSafetyError as exc:
+            return str(exc)
+        return ''
+
     def _on_nocomm_toggled(self, on: bool) -> None:
+        reason = self._operating_mode_change_blocker(on)
+        if reason:
+            self._nocomm_btn.blockSignals(True)
+            self._nocomm_btn.setChecked(bool(self.config.general.nocomm))
+            self._nocomm_btn.blockSignals(False)
+            self.set_status(reason)
+            return
         self.config.general.nocomm = bool(on)
         self.config.save()
         self._rebuild_diagnostic_backends(nocomm=bool(on))
@@ -1740,6 +1766,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "vacuum",
             "vacuum_panel",
             lambda owner: VacuumDialog(owner, backend=self._vacuum_backend),
+            modal=False,
         )
 
     def _launch_squid(self) -> None:
@@ -1998,6 +2025,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
                 self._owned_dialog_leases[resource] = lease
                 self._owned_dialogs[resource] = dlg
+                blocked = getattr(dlg, 'shutdown_blocked', None)
+                if blocked is not None:
+                    blocked.connect(self._diagnostic_shutdown_blocked)
 
                 @QtCore.Slot(object)
                 def _release_owner(_obj: object) -> None:
@@ -2030,8 +2060,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
             self._shutdown_cleanup_requested = True
 
-        for dialog in list(self._owned_dialogs.values()):
-            dialog.close()
+        for resource, dialog in list(self._owned_dialogs.items()):
+            if resource not in self._shutdown_requested_dialogs:
+                self._shutdown_requested_dialogs.add(resource)
+                dialog.close()
+        if not self._shutdown_cleanup_requested:
+            event.ignore()
+            return
         if self._owned_dialog_leases or self._has_active_automation():
             event.ignore()
             self.set_status('Shutdown is waiting for hardware workers and diagnostic cleanup.')
@@ -2049,6 +2084,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._shutdown_retry_pending = False
         if self._shutdown_cleanup_requested:
             self.close()
+
+    @QtCore.Slot(str)
+    def _diagnostic_shutdown_blocked(self, reason):
+        self._shutdown_cleanup_requested = False
+        self._shutdown_retry_pending = False
+        self._shutdown_requested_dialogs.clear()
+        self._shutdown_timer.stop()
+        self.set_status('Shutdown remains open for diagnostic recovery: ' + reason)
 
     def _has_active_automation(self) -> bool:
         """Return true when a live measurement or queue run is active."""
@@ -2324,15 +2367,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self._nav_select(0)
 
     def _launch_login(self) -> None:
-        if self._has_active_automation():
+        reason = self._operating_mode_change_blocker(False)
+        if reason:
             QtWidgets.QMessageBox.warning(
                 self,
                 "Change Operator",
-                "Halt or finish the active run before changing operator identity.",
+                reason,
             )
             return
         dialog = LoginDialog(self)
         if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        reason = self._operating_mode_change_blocker(bool(dialog.nocomm))
+        if reason:
+            self.set_status(reason)
             return
         self.config.general.operator = dialog.operator_name
         self.config.general.nocomm = bool(dialog.nocomm)

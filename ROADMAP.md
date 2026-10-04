@@ -1011,3 +1011,47 @@ integrated motor lifecycle regressions. Six-panel/six-helper source smoke passes
 Native motor transport/routing tests pass (16 tests). Compact controls and feedback
 were visually inspected. All hardware tests use injected interfaces; physical
 instruments were not actuated. The portable pilot still requires rebuilding.
+
+### Integrated vacuum hold, explicit recovery and safe shutdown — 3 October 2026
+
+Diagnostics > Vacuum now constructs the native backend without connecting or
+enabling outputs. Explicit Connect, Pump On, Release / Verify Off and Disconnect
+run in workers. Saved AutoPump settings never enable live outputs on startup or
+connect. Connection cache flags do not prove output state: the UI and shared
+snapshot distinguish unverified state from acknowledged on/off commands.
+
+A commanded hold persists the exact original vacuum port/baud and main-panel owner
+before output, retaining one station_diagnostic OS lease until checked release.
+Other hardware controls remain gated. Restart recovery matches the original main
+panel and connection; an Up/Down hold cannot be released merely because ports match.
+Release never enables outputs or replays motion. Missing valve/pump-off replies
+retain the live owner and connection. Publication failure after acknowledged off
+retains durable recovery without trapping a live hold.
+
+Closing during a command waits for terminal completion, then requests checked
+release and disconnect. Unverified release leaves the window open for explicit
+recovery and cancels parent shutdown without automatic repeated release commands.
+The parent requests each owned dialog's closure once. Mode/operator changes cannot
+replace active hardware owners; pending recovery blocks entry into No-Comm while
+allowing hardware mode for original-panel recovery. Corrupt journals produce visible
+faults and fail before output. SQUID and susceptibility panels also respect the
+shared unresolved hardware gate.
+
+Compact windows keep Pump, Release / Verify Off and Close outside a scroll area.
+Live labels report commanded state and the absence of physical pressure/grip
+telemetry. Wrapped faults remain readable. Fresh shared holds clear previous lift
+participation and observations. Immutable checkpoints retain linked prior record
+identities without unbounded live history; native acknowledgement logs are bounded
+and restarted per lifetime. See docs/vacuum-diagnostic-safety.md.
+
+The full-system goal remains active. Other embedded output lifetimes and motor
+helpers, durable main-app acquisition and non-treatment motion recovery, calibration/
+probe tooling, portable rebuilding and physical/scientific acceptance remain open.
+No physical instruments were actuated by development tests or visual checks.
+
+Verification: 845 isolated main-app tests pass in 121.203 seconds, including 15
+integrated vacuum regressions. Current diagnostic-service tests pass (36 tests),
+shared vacuum/transport tests pass (18 tests), and six-panel/six-helper source smoke
+passes. The actual native dialog was rendered with an injected transport at 360x520
+inside a 1280x720 work area; unverified and commanded-held views were inspected.
+No physical instruments were actuated. The portable pilot still requires rebuilding.

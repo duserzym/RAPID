@@ -1132,6 +1132,9 @@ class VacuumController:
     def acknowledgements(self):
         return tuple(dict(item) for item in self._acknowledgements)
 
+    def reset_acknowledgements(self):
+        self._acknowledgements.clear()
+
     def _emit_trace(self, direction: str, payload: str = "", detail: str = "") -> None:
         if self._trace is None:
             return
@@ -1231,6 +1234,7 @@ class VacuumController:
             "RX", response, f"vacuum response to {self._last_command or 'unknown'}"
         )
         self._acknowledgements.append({'command': self._last_command, 'reply': response})
+        del self._acknowledgements[:-4096]
         return response
 
     def reset(self) -> None:

@@ -196,7 +196,8 @@ class VacuumHoldTests(unittest.TestCase):
     def test_native_main_vacuum_controls_cannot_touch_held_or_crashed_station(self):
         from rapid_main import diagnostic_services as services
         self.session.start(self.controller)
-        backend = object.__new__(services.VacuumBackendAdapter)
+        backend = services.VacuumBackendAdapter(services.VacuumConfig(port='COM2', baud=9600))
+        backend._safety_store = self.store
         backend._pump_only_controller = Mock()
         backend._cfg = SimpleNamespace(port='COM2', baud=9600)
         backend._trace = Mock()

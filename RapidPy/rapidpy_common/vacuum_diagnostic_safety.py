@@ -35,7 +35,10 @@ class StationDiagnosticRecord:
 
 
 class VacuumHoldSession:
-    def __init__(self, vacuum, *, store=None):
+    def __init__(self, vacuum, *, store=None, helper='updown_control'):
+        if helper not in {'updown_control', 'rapid_main_vacuum'}:
+            raise HardwareSafetyError('Unknown vacuum diagnostic owner.')
+        self.helper = helper
         self.vacuum = vacuum
         self.store = store if store is not None else HardwareSafetyStore(default_safety_path())
         self.active = False
@@ -48,10 +51,17 @@ class VacuumHoldSession:
         self._lift = None
         self._axis = None
         self.observations = []
-        self.operation = {'action': 'updown_vacuum_hold'}
+        self._ack_start = 0
+        self.operation = {'action': 'updown_vacuum_hold' if helper == 'updown_control' else 'rapid_main_vacuum_hold'}
+
+    def _start_acknowledgement_log(self):
+        reset = getattr(self.vacuum, 'reset_acknowledgements', None)
+        if callable(reset):
+            reset()
+        self._ack_start = len(self.vacuum.acknowledgements)
 
     def _publish(self, *, error='', cleanup_error='', held=True, safe=False, recovery=False):
-        acknowledgements = copy.deepcopy(self.vacuum.acknowledgements)
+        acknowledgements = copy.deepcopy(self.vacuum.acknowledgements[self._ack_start:])
         record = StationDiagnosticRecord('station-' + uuid.uuid4().hex, self.operation, copy.deepcopy(self.profile),
             datetime.now(timezone.utc).isoformat(), tuple(copy.deepcopy(self.observations) +
                 [{'vacuum_acknowledgements': acknowledgements}]), error, cleanup_error, held, safe,
@@ -59,6 +69,7 @@ class VacuumHoldSession:
         publish_diagnostic_record(self.store, record, family='station')
         self.store.finish(self.token, self.profile, record)
         self.evidence_unverified = False
+        self.observations = [{'previous_record_id': record.treatment_id, 'operation_token': self.token}]
         return record
 
     def start(self, lift=None, *, enabled=True):
@@ -69,13 +80,19 @@ class VacuumHoldSession:
         self._lease = self.store.operation_lease()
         self._lease.__enter__()
         try:
-            self.profile = {'helper': 'updown_control', 'resources': {'vacuum': vacuum_binding(self.vacuum)}}
+            self.profile = {'helper': self.helper, 'resources': {'vacuum': vacuum_binding(self.vacuum)}}
             self.token = self.store.begin('station_diagnostic', self.operation, self.profile)
+            self._lift = self._axis = None
+            self.observations = []
+            self.faulted = self.vacuum_unverified = self.evidence_unverified = False
+            self._start_acknowledgement_log()
             self.active = True
             if lift is not None and lift.is_connected:
                 self.bind_lift(lift)
             if enabled:
                 self.vacuum.set_enabled(True)
+                if self.vacuum.is_enabled is not True:
+                    raise HardwareSafetyError('Vacuum enable state was not acknowledged.')
                 self.observations.append({'vacuum_command': 'enable', 'acknowledged': True})
                 self._publish()
             else:
@@ -144,6 +161,8 @@ class VacuumHoldSession:
         cleanup_error = ''
         try:
             self.vacuum.set_enabled(False)
+            if self.vacuum.is_enabled is not False:
+                raise HardwareSafetyError('Vacuum off state was not acknowledged.')
         except Exception as exc:
             cleanup_error = str(exc)
             self.vacuum_unverified = True
@@ -173,14 +192,19 @@ class VacuumHoldSession:
             pending = self.store.pending()
             if pending is None or pending['family'] != 'station_diagnostic':
                 raise HardwareSafetyError('No held vacuum station is available for this recovery.')
+            if pending['profile'].get('helper') != self.helper:
+                raise HardwareSafetyError('Recover the held vacuum in its original panel or helper.')
             resources = pending['profile'].get('resources', {})
             if resources.get('vacuum') != vacuum_binding(self.vacuum):
                 raise HardwareSafetyError('Restore the original vacuum port/baud before recovery.')
+            self._lift = self._axis = None
             if 'lift' in resources:
                 if lift is None or not lift.is_connected or resources['lift'] != lift.safety_profile():
                     raise HardwareSafetyError('Connect the original participating lift before releasing vacuum.')
                 self._lift, self._axis = lift, copy.deepcopy(lift.profile.updown_axis)
             self.token, self.profile, self.operation = pending['token'], pending['profile'], pending['plan']
+            self.observations = [{'recovery_of_token': pending['token'], 'previous_record_id': (pending.get('record') or {}).get('treatment_id', '')}]
+            self._start_acknowledgement_log()
             self.active = True
             return self.close(recovery=True)
         except BaseException:

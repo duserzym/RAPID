@@ -77,7 +77,7 @@ cannot acquire a second lease and overwrite the first panel's ownership.
 Development validation uses injected motor/SQUID interfaces, including restart,
 cross-owner exclusion, cancellation, readback drift, failed stop and failed evidence
 publication and DC dialog worker closure. Physical instruments were not actuated.
-The Up/Down helper has vacuum/gripper lifetime ownership; the integrated main vacuum
-panel still needs that same ownership. Other motor/direct diagnostics, durable main-app non-treatment motion
+The Up/Down helper and integrated main vacuum panel have vacuum/gripper lifetime
+ownership. Other motor/direct diagnostics, durable main-app non-treatment motion
 and acquisition recovery, calibration/probe tooling, the portable rebuild and
 physical/scientific station acceptance remain required full-system work.
