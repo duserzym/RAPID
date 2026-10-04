@@ -411,17 +411,23 @@ class AdwinAFController:
             raise AdwinError(f"ADWIN boot failed (return code {ret}) using {boot_path}.")
         self._raise_if_error(f"ADboot(dev={self._dev}, file={Path(boot_path).name})", raw_return=ret)
 
-    def recover_safe_field(self) -> int:
+    def recover_safe_field(self, *, clear_relays=True) -> int:
         """Stop outputs on the existing board without rebooting its relays.
 
         VB6 Adwin.bas Process_Status uses Get_Par(-100 + ProcessNo):
         1 is running, 0 stopped and -1 absent. Acknowledgements and status
         are both checked before disabling the ramp DAC and coil relays.
         """
-        errors = []
+        if type(clear_relays) is not bool:
+            raise ValueError('Relay recovery permission must be explicit.')
+        errors, observations = [], []
+        self.last_safe_field_recovery = dict(schema='rapidpy.adwin.outputs_off.v1',
+            observations=observations, outputs_zero_confirmed=False,
+            safe_state_confirmed=False, simulated=False, errors=errors)
         for proc in range(1, 11):
             try:
                 status = self.get_par(-100 + proc)
+                observations.append(dict(action='process_status_before', process=proc, value=status))
                 if status not in {-1, 0, 1}:
                     raise AdwinError(f"Unknown process {proc} status {status} during recovery.")
                 if status == 1:
@@ -429,7 +435,9 @@ class AdwinAFController:
                     self._raise_if_error(f"Stop_Process({proc})", raw_return=result)
                     if result != 0:
                         raise AdwinError(f"Stop_Process({proc}) failed with code {result}.")
-                if self.get_par(-100 + proc) not in {-1, 0}:
+                final_status = self.get_par(-100 + proc)
+                observations.append(dict(action='process_status_after', process=proc, value=final_status))
+                if final_status not in {-1, 0}:
                     raise AdwinError(f"Process {proc} stop was not verified.")
             except Exception as exc:
                 errors.append(str(exc))
@@ -438,13 +446,25 @@ class AdwinAFController:
         for channel in (1, 2):
             try:
                 self.set_dac(channel, 0.0)
+                observations.append(dict(action='dac_zero_acknowledged', channel=channel, target_v=0.0))
             except Exception as exc:
                 errors.append(f"DAC {channel} reset: {exc}")
         if errors:
             raise AdwinError("; ".join(errors))
-        self.set_digout(0)
-        if self.get_digout() != 0:
-            raise AdwinError("AF recovery relay clear was not verified.")
+        self.last_safe_field_recovery['outputs_zero_confirmed'] = True
+        if not clear_relays:
+            observations.append(dict(action='relay_clear_withheld'))
+            return 0
+        try:
+            self.set_digout(0)
+            relay_word = self.get_digout()
+            observations.append(dict(action='relay_readback', value=relay_word))
+            if relay_word != 0:
+                raise AdwinError("AF recovery relay clear was not verified.")
+        except Exception as exc:
+            errors.append(str(exc))
+            raise
+        self.last_safe_field_recovery['safe_state_confirmed'] = True
         return 0
 
     def clear_all_processes(self) -> None:

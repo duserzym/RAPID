@@ -122,3 +122,11 @@ and connection-bound reference evidence. Table/blank-holder APIs can consume its
 typed proof; see `queue-xy-reference.md`. The coordinator still must establish empty
 rod/field-off preconditions and invoke the reference workflow; imported coordinates
 and legacy Boolean attestations do not independently qualify automatic live operation.
+
+`QueueFieldOutputs` now records participating ARM, AF and pulse cutoff under the
+original queue claim. It verifies AF process/DAC shutdown before allowing pulse
+discharge recovery to clear shared relays, retains independent failure evidence,
+and publishes a live typed proof consumed by table/reference, blank-holder, lift
+and vacuum phases. Subsequent field treatments invalidate older cutoff evidence.
+See `queue-field-outputs.md` for control-feedback limits and remaining coordinator
+and original-panel recovery integration.

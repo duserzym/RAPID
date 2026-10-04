@@ -74,14 +74,15 @@ class QueueLiftTransfer:
         if self.dropoff_delay_s != self.table.transfer_settings['dropoff_delay_s']:
             raise HardwareSafetyError('Restore the original queue dropoff settling delay before transfer.')
         self.table._check_cancel()
-        if field_outputs_off_verified is not True:
-            raise HardwareSafetyError('Verify field outputs off before specimen transfer.')
+        from .queue_field_outputs import field_outputs_proof
+        field_proof = field_outputs_proof(session, field_outputs_off_verified)
         binding = self.vacuum._queue_binding
         if binding is None or binding.session is not session:
             raise HardwareSafetyError('Specimen transfer requires the original queue vacuum owner.')
         binding._validate_owner()
         if self.vacuum.is_pump_on() is not True:
             raise HardwareSafetyError('Specimen transfer requires acknowledged pump power.')
+        return field_proof
 
     def _state(self, session, phase):
         state = self.context(session)
@@ -105,8 +106,8 @@ class QueueLiftTransfer:
             self.table.sleep(min(.05, remaining))
         self.table._check_cancel()
 
-    def _execute(self, session, state, action, command, before, after):
-        operation = dict(action=action, transfer_context=state.to_dict())
+    def _execute(self, session, state, action, command, before, after, *, field_proof=None):
+        operation = dict(action=action, transfer_context=state.to_dict(), field_outputs_proof=field_proof)
         child = session.child_store
         token = child.begin('motion', operation, self.table.profile, sample_id=state.sample_id,
             run_id=session.store._queue(session.token)['run_id'])
@@ -147,7 +148,7 @@ class QueueLiftTransfer:
         return record
 
     def pickup(self, session, original_slot, sample_id, *, file_id='', field_outputs_off_verified=False):
-        self._validate(session, field_outputs_off_verified)
+        field_proof = self._validate(session, field_outputs_off_verified)
         previous = self.context(session)
         if previous and previous.phase != 'clear':
             raise HardwareSafetyError('Return the original specimen before loading another.')
@@ -168,10 +169,10 @@ class QueueLiftTransfer:
                 raise HardwareSafetyError('Pickup cannot retain a set top-reference switch.')
             return replace(state, phase='picked', pickup_position_raw=actual)
         return self._execute(session, state, 'specimen_pickup',
-            lambda: self.table.motor.sample_pickup(self.table.axes['updown']), before, after)
+            lambda: self.table.motor.sample_pickup(self.table.axes['updown']), before, after, field_proof=field_proof)
 
     def home_loaded(self, session, *, field_outputs_off_verified=False):
-        self._validate(session, field_outputs_off_verified)
+        field_proof = self._validate(session, field_outputs_off_verified)
         state = self._state(session, 'picked')
         if self.vacuum.is_valve_connected() is not True:
             raise HardwareSafetyError('Lift home requires the original acknowledged specimen grip.')
@@ -189,10 +190,10 @@ class QueueLiftTransfer:
             if not 0 < height <= abs(self.table.motor.config.sample_bottom):
                 raise HardwareSafetyError('Referenced specimen height is outside the accepted travel envelope.')
             return replace(state, phase='lifted', sample_height=height)
-        return self._execute(session, state, 'specimen_home_reference', command, before, after)
+        return self._execute(session, state, 'specimen_home_reference', command, before, after, field_proof=field_proof)
 
     def raise_loaded_to_clearance(self, session, *, field_outputs_off_verified=False):
-        self._validate(session, field_outputs_off_verified)
+        field_proof = self._validate(session, field_outputs_off_verified)
         state = self._state(session, 'lifted')
         if self.vacuum.is_valve_connected() is not True:
             raise HardwareSafetyError('Returning lift requires the original acknowledged specimen grip.')
@@ -209,10 +210,10 @@ class QueueLiftTransfer:
                 raise HardwareSafetyError('Returning specimen lift did not reach zero.')
             return state
         return self._execute(session, state, 'specimen_raise_for_return',
-            lambda: self.table.motor.updown_move(self.table.axes['updown'], 0, 2), empty, after)
+            lambda: self.table.motor.updown_move(self.table.axes['updown'], 0, 2), empty, after, field_proof=field_proof)
 
     def lower_for_dropoff(self, session, *, field_outputs_off_verified=False):
-        self._validate(session, field_outputs_off_verified)
+        field_proof = self._validate(session, field_outputs_off_verified)
         state = self._state(session, 'lifted')
         if self.vacuum.is_valve_connected() is not True:
             raise HardwareSafetyError('Dropoff requires the original acknowledged specimen grip.')
@@ -227,10 +228,10 @@ class QueueLiftTransfer:
                 raise HardwareSafetyError('The original-slot supported dropoff pose is unverified.')
             return replace(state, phase='supported')
         return self._execute(session, state, 'specimen_supported_dropoff',
-            lambda: self.table.motor.updown_move(self.table.axes['updown'], target, 0), before, after)
+            lambda: self.table.motor.updown_move(self.table.axes['updown'], target, 0), before, after, field_proof=field_proof)
 
     def clear_after_release(self, session, *, field_outputs_off_verified=False):
-        self._validate(session, field_outputs_off_verified)
+        field_proof = self._validate(session, field_outputs_off_verified)
         state = self._state(session, 'supported')
         if self.vacuum.is_valve_connected() is not False:
             raise HardwareSafetyError('Lift clearance requires acknowledged original-slot valve release.')
@@ -248,4 +249,4 @@ class QueueLiftTransfer:
             if abs(samples['updown'][-1]['position_raw']) > 150:
                 raise HardwareSafetyError('Post-release lift clearance did not reach zero.')
             return replace(state, phase='clear')
-        return self._execute(session, state, 'specimen_clear_after_release', command, before, after)
+        return self._execute(session, state, 'specimen_clear_after_release', command, before, after, field_proof=field_proof)

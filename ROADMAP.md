@@ -1384,3 +1384,31 @@ blank-holder/specimen transfer and measurement claims into the complete automati
 coordinator. Operator loading/tray inversion/per-file orientation, original-panel
 recovery/terminal vacuum release, auxiliary tools, portable rebuilding and physical/
 scientific station acceptance remain required. The full-system goal remains active.
+
+### Verified participating field cutoff before native transfer (2026-10-04)
+
+QueueFieldOutputs now stages off-only ARM/AF/pulse recovery under the original queue
+claim before I/O. Native MCC gate readback verifies inactive ARM bias; all ten AF
+processes and both DAC zero acknowledgements are checked before pulse recovery can
+change shared relays. Three bounded capacitor readbacks must verify discharge before
+relay clearing. Failed AF stops still attempt ARM cutoff and pulse bleed while
+withholding relay changes. Independent failures and initial/final AF evidence remain
+in the original pending stage; recovery reuses only its original token and profile.
+
+An immutable linked event supplies a typed live field-off proof. Native XY reference/
+table, blank-holder, specimen lift and vacuum phases revalidate it and retain the
+proof snapshot before commands. Copied evidence, another service instance, changed
+calibration, pending stages and later AF/ARM/pulse/RRM treatments invalidate it.
+Control acknowledgements do not measure residual magnetic field or analog DAC voltage;
+accepted feedback calibration and physical station qualification remain required.
+
+Verification: all 1058 isolated tests pass in 214.936 seconds with clean process exit.
+Seventeen new injected native DLL/serial regressions cover ordering, no charge/fire,
+independent cleanup, failed reads/stops/publication, original off-only recovery, proof
+freshness and actual native transfer/grip borrowing. Six-panel/six-helper source
+smoke, compile and diff checks pass. No instruments actuated. See docs/queue-field-outputs.md.
+
+Still wire the complete automatic queue coordinator and MeasurementWorker claims,
+operator initial loading/tray inversion/per-file orientation, original-panel recovery
+and terminal vacuum release. Auxiliary tools, portable rebuilding and physical/
+scientific station acceptance remain required. The full-system goal remains active.

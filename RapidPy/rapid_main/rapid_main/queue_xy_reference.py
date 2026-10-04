@@ -130,8 +130,10 @@ class QueueXYReference:
     def home(self, session, *, empty_rod_confirmed=False, field_outputs_off_verified=False):
         self.table._validate(session)
         self.table._check_cancel()
-        if empty_rod_confirmed is not True or field_outputs_off_verified is not True:
+        if empty_rod_confirmed is not True:
             raise HardwareSafetyError('Confirm the empty rod and verified field outputs off before native XY referencing.')
+        from .queue_field_outputs import field_outputs_proof
+        field_proof = field_outputs_proof(session, field_outputs_off_verified)
         binding = self.vacuum._queue_binding
         if binding is None or binding.session is not session:
             raise HardwareSafetyError('XY referencing requires the original queue vacuum owner.')
@@ -147,7 +149,7 @@ class QueueXYReference:
         state = QueueXYReferenceState(session.token, uuid.uuid4().hex, self.table.motor._connection_id,
                                       tuple(self.table.geometry.xy_home))
         operation = dict(action='xy_home_reference', empty_rod_confirmed=True, field_outputs_off_verified=True,
-                         timeout_s=self.timeout_s, reference_context=state.to_dict())
+                         timeout_s=self.timeout_s, reference_context=state.to_dict(), field_outputs_proof=field_proof)
         profile, child = self.table.profile, session.child_store
         token = child.begin('motion', operation, profile, run_id=session.store._queue(session.token)['run_id'])
         deadline = self.monotonic() + self.timeout_s

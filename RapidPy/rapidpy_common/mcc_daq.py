@@ -36,6 +36,7 @@ class MccDaq:
                 "cbToEngUnits": [ctypes.c_int, ctypes.c_int, ctypes.c_ushort, ctypes.POINTER(ctypes.c_float)],
                 "cbDConfigBit": [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int],
                 "cbDBitOut": [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_ushort],
+                "cbDBitIn": [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_ushort)],
             }
             for function, args in signatures.items():
                 getattr(dll, function).argtypes = args
@@ -83,3 +84,13 @@ class MccDaq:
         if not math.isfinite(voltage.value):
             raise MccError("MCC ADC conversion returned a non-finite voltage.")
         return float(voltage.value)
+
+    def digital_input(self, port: int, bit: int):
+        """Read an existing bit without configuring it or changing its direction."""
+        if type(port) is not int or type(bit) is not int or port < 0 or bit < 0:
+            raise ValueError('MCC digital port and bit must be explicit nonnegative integers.')
+        value = ctypes.c_ushort()
+        self._checked('cbDBitIn', self.dll.cbDBitIn(self.board, port, bit, ctypes.byref(value)))
+        if value.value not in (0, 1):
+            raise MccError('MCC bit readback is not binary.')
+        return int(value.value)

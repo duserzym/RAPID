@@ -79,8 +79,8 @@ class QueueBlankHolderMotion:
     def _validate(self, session, field_outputs_off_verified):
         self.table._validate(session)
         self.table._check_cancel()
-        if field_outputs_off_verified is not True:
-            raise HardwareSafetyError('Verify field outputs off before blank-holder motion.')
+        from .queue_field_outputs import field_outputs_proof
+        field_proof = field_outputs_proof(session, field_outputs_off_verified)
         binding = self.vacuum._queue_binding
         if binding is None or binding.session is not session:
             raise HardwareSafetyError('Blank-holder motion requires the original queue vacuum owner.')
@@ -93,6 +93,7 @@ class QueueBlankHolderMotion:
         if (self.vacuum.output_state_known is not True or self.vacuum.is_pump_on() is not True
                 or self.vacuum.is_valve_connected() is not False):
             raise HardwareSafetyError('A blank holder requires acknowledged pump ON and valve OFF.')
+        return field_proof
 
     def _at_hole(self, samples, hole):
         x, y = (samples[key][-1]['position_raw'] for key in ('changer_x', 'changer_y'))
@@ -100,22 +101,23 @@ class QueueBlankHolderMotion:
             raise HardwareSafetyError('Both XY readbacks must verify the calibrated empty hole.')
 
     def prepare(self, session, hole, *, reference_verified=False, field_outputs_off_verified=False):
-        self._validate(session, field_outputs_off_verified)
+        field_proof = self._validate(session, field_outputs_off_verified)
         reference_proof = self.table._reference_proof(session, reference_verified)
         state = QueueHolderState(session.token, f'holder-{hole:03d}', hole)
         QueueHolderState.read(state.to_dict(), session, self.table.geometry)
-        return self._execute(session, state, 'verify_blank_holder_pose', move=False, reference_proof=reference_proof)
+        return self._execute(session, state, 'verify_blank_holder_pose', move=False, reference_proof=reference_proof,
+                             field_proof=field_proof)
 
     def return_to_clearance(self, session, *, field_outputs_off_verified=False):
-        self._validate(session, field_outputs_off_verified)
+        field_proof = self._validate(session, field_outputs_off_verified)
         state = QueueHolderState.read(session.store.latest_holder_context(session.token), session, self.table.geometry)
         if state.phase != 'ready':
             raise HardwareSafetyError('Recover the original blank-holder acquisition before returning the rod.')
-        return self._execute(session, state, 'return_blank_holder_clearance', move=True)
+        return self._execute(session, state, 'return_blank_holder_clearance', move=True, field_proof=field_proof)
 
-    def _execute(self, session, state, action, *, move, reference_proof=None):
+    def _execute(self, session, state, action, *, move, reference_proof=None, field_proof=None):
         operation = dict(action=action, holder_context=state.to_dict(), field_outputs_off_verified=True,
-                         reference_proof=reference_proof)
+                         reference_proof=reference_proof, field_outputs_proof=field_proof)
         child, profile = session.child_store, self.table.profile
         token = child.begin('motion', operation, profile, sample_id=state.sample_id,
                             run_id=session.store._queue(session.token)['run_id'])

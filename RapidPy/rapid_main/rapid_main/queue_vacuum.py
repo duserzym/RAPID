@@ -116,8 +116,11 @@ class QueueVacuumBinding:
             raise HardwareSafetyError('Queue pump and valve states must be explicit booleans.')
         if valve_connected and not pump_enabled:
             raise HardwareSafetyError('Queue grip requires the vacuum pump powered.')
+        if valve_connected:
+            from .queue_field_outputs import field_outputs_proof
+            field_outputs_proof(self.session, field_outputs_off_verified)
         if valve_connected and not (motors_stopped_verified is True
-                and specimen_at_pickup_verified is True and field_outputs_off_verified is True):
+                and specimen_at_pickup_verified is True):
             raise HardwareSafetyError('Verify motor stop, specimen pickup position and field outputs off before connecting grip.')
         return self._set_enabled(valve_connected, pump_ready=pump_enabled and not valve_connected,
             motors_stopped_verified=motors_stopped_verified, specimen_secured=specimen_secured,
@@ -137,8 +140,11 @@ class QueueVacuumBinding:
             raise HardwareSafetyError('Queue vacuum command must be an explicit boolean.')
         if (enabled or pump_ready) and (self.session.is_recovery or self._recovery_required):
             raise HardwareSafetyError('Queue restart recovery may release outputs but never replay vacuum enable.')
-        if not enabled and not (motors_stopped_verified is True and specimen_secured is True
-                and field_outputs_off_verified is True):
+        field_proof = None
+        if not enabled or field_outputs_off_verified is not False:
+            from .queue_field_outputs import field_outputs_proof
+            field_proof = field_outputs_proof(self.session, field_outputs_off_verified)
+        if not enabled and not (motors_stopped_verified is True and specimen_secured is True):
             raise HardwareSafetyError('Verify motor stop, specimen support and field outputs off before queue vacuum release.')
         child = self.session.child_store
         pending = child.pending()
@@ -147,7 +153,8 @@ class QueueVacuumBinding:
                 raise HardwareSafetyError('Recover the unfinished original queue stage before changing vacuum outputs.')
             token = pending['token']  # An explicit OFF request recovers; never replay ON.
         else:
-            token = child.begin('vacuum', {'action': 'pump_ready' if pump_ready else 'enable' if enabled else 'release'}, self.profile)
+            token = child.begin('vacuum', {'action': 'pump_ready' if pump_ready else 'enable' if enabled else 'release',
+                                         'field_outputs_proof': field_proof}, self.profile)
         self.held = True
         self.adapter.output_state_known = False
         reset = getattr(controller, 'reset_acknowledgements', None)

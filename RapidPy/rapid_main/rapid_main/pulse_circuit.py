@@ -79,8 +79,10 @@ class PulseCircuit:
         self.sleep,self.monotonic = sleep,monotonic
         self.clock = clock or (lambda:datetime.now(timezone.utc))
 
-    def recover_safe_state(self,*,sample_id,run_id):
+    def recover_safe_state(self,*,sample_id,run_id,clear_relays=True):
         """Zero/bleed only: never charge or assert the active-low fire switch."""
+        if type(clear_relays) is not bool:
+            raise ValueError('Relay recovery permission must be explicit.')
         phases,readings,errors = [],[],[]
         discharged = False
         def action(name,operation):
@@ -119,6 +121,8 @@ class PulseCircuit:
                 discharged = True
             except Exception as exc:
                 errors.append(str(exc))
+            if not clear_relays:
+                errors.append('Recovery relay clear withheld until participating AF outputs are verified stopped and zero.')
             if discharged and not errors:
                 action("recovery_relay_clear",lambda:self.relays.set_digout(0))
                 actual = action("recovery_relay_readback",self.relays.get_digout)

@@ -1,8 +1,26 @@
 """Independent calibrated ARM DC bias, including active-low gate cleanup."""
 import math
 import time
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+import uuid
 from .communication_log import CommunicationLogger
 from rapidpy_common.mcc_daq import MccDaq
+
+
+@dataclass(frozen=True)
+class ArmBiasOffRecord:
+    record_id: str
+    configuration: dict
+    gate_readback: int | None
+    safe_state_confirmed: bool
+    error: str
+    timestamp_iso: str
+    simulated: bool = False
+    schema: str = 'rapidpy.arm.outputs_off.v1'
+
+    def to_dict(self):
+        return asdict(self)
 
 
 def plan_arm_bias(bias_mT, cfg):
@@ -102,3 +120,23 @@ class ArmBiasBackend:
                 errors.append(str(exc))
         if errors:
             raise RuntimeError("ARM bias cleanup failed: " + "; ".join(errors))
+
+    def clear_bias_verified(self):
+        """Zero the DAC, disconnect the active-low gate and read that gate back."""
+        errors, gate = [], None
+        if not isinstance(self.controller, MccDaq) or self.controller.board != self.cfg.arm_board:
+            raise ValueError('ARM off verification requires the original native MCC board.')
+        try:
+            self.clear_bias()
+        except Exception as exc:
+            errors.append(str(exc))
+        try:
+            gate = self.controller.digital_input(self.cfg.arm_digital_port, self.cfg.arm_gate_bit)
+            if gate != 1:
+                raise RuntimeError('ARM active-low gate remains enabled.')
+        except Exception as exc:
+            errors.append(str(exc))
+        record = ArmBiasOffRecord(uuid.uuid4().hex, asdict(self.cfg), gate, not errors,
+                                  '; '.join(errors), datetime.now(timezone.utc).isoformat())
+        self.last_off_record = record
+        return record

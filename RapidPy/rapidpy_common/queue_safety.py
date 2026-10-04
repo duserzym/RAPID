@@ -14,7 +14,7 @@ import uuid
 
 from .hardware_safety import HardwareSafetyError, HardwareSafetyStore, _canonical
 
-STAGE_FAMILIES = frozenset({'pulse', 'rrm', 'af', 'arm', 'motion', 'acquisition', 'vacuum'})
+STAGE_FAMILIES = frozenset({'pulse', 'rrm', 'af', 'arm', 'motion', 'acquisition', 'vacuum', 'field_outputs'})
 QUEUE_CHECKS = frozenset({'vacuum_off_verified', 'motors_stopped_verified', 'field_outputs_off_verified'})
 
 
@@ -298,7 +298,11 @@ class QueueSafetyStore(HardwareSafetyStore):
         """Read the original live station reference from verified linked evidence."""
         return self._latest_context(token, 'reference_context')
 
-    def _latest_context(self, token, key):
+    def latest_field_context(self, token):
+        """A later field treatment consumes an earlier off-state proof."""
+        return self._latest_context(token, 'field_context', invalidating_families={'af', 'arm', 'pulse', 'rrm'})
+
+    def _latest_context(self, token, key, *, invalidating_families=()):
         state = self._queue(token)
         self.verify_history(state)
         stage = state['stage']
@@ -314,6 +318,8 @@ class QueueSafetyStore(HardwareSafetyStore):
             if hashlib.sha256(payload).hexdigest() != head['sha256']:
                 raise HardwareSafetyError('Queue transfer evidence changed during read.')
             event = json.loads(payload)
+            if event['stage']['family'] in invalidating_families:
+                raise HardwareSafetyError('Verify participating field outputs off again after the latest treatment.')
             context = event['stage']['record'].get(key)
             if context is not None:
                 context = _snapshot(context)

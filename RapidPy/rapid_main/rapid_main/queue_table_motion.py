@@ -104,12 +104,13 @@ class QueueXYTableMotion:
                      sample_id='', run_id=''):
         self._validate(session)
         self._check_cancel()
-        if field_outputs_off_verified is not True:
-            raise HardwareSafetyError('Verify the live XY reference and field outputs off before table transfer.')
+        from .queue_field_outputs import field_outputs_proof
+        field_proof = field_outputs_proof(session, field_outputs_off_verified)
         reference_proof = self._reference_proof(session, reference_verified)
         target_x, target_y = self.geometry.xy_target(slot)
         operation = dict(action='xy_slot_move', slot=slot, target_x=target_x, target_y=target_y,
-                         reference_verified=True, reference_proof=reference_proof, field_outputs_off_verified=True)
+                         reference_verified=True, reference_proof=reference_proof, field_outputs_off_verified=True,
+                         field_outputs_proof=field_proof)
         child = session.child_store
         token = child.begin('motion', operation, self.profile, sample_id=sample_id, run_id=run_id)
         observations, error, target_verified = [], '', False
