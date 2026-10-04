@@ -1,4 +1,4 @@
-"""Hardware service contracts used by rapid_main workflows.
+﻿"""Hardware service contracts used by rapid_main workflows.
 
 This module defines the stable protocol used by the measurement engine and
 serves as the core abstraction boundary for later real-backend adapters.
@@ -406,6 +406,9 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._last_hole = 1
         self._last_flip = False
         self._sample_loaded = False
+        self._queue_specimen_geometry = None
+        self._geometry_stage_token = None
+        self._bracketed_geometry_signature = None
 
         self._holder_store = holder_store if holder_store is not None else _default_holder_store(config)
         self._bracketed: "BracketedSquidBackend | None" = None
@@ -536,6 +539,11 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         return {name: dataclasses.asdict(getattr(self._config, name))
                 for name in ("motor_station", "changer", "motion", "af_demag", "irm_arm", "pulse_irm")}
 
+    def _acquisition_safety_profile(self):
+        return dict(helper='rapid_main_queue_acquisition',
+            **{name: dataclasses.asdict(getattr(self._config, name))
+               for name in ('motion', 'squid', 'calibration', 'susceptibility')})
+
     def _durable_fault_family(self):
         from .hardware_safety import HardwareSafetyError
         store = getattr(self, "_safety_store", None)
@@ -556,6 +564,10 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         if store is None:  # private object.__new__ fixtures have no native constructor
             return None
         snapshot = dataclasses.asdict(plan)
+        geometry = getattr(self, '_queue_specimen_geometry', None)
+        if geometry is not None:
+            self._sample_height()
+            snapshot['specimen_geometry'] = geometry.context.to_dict()
         if family == "arm":
             snapshot["bias_mT"] = bias_mT
         return store.begin(family, snapshot, self._safety_profile(),
@@ -568,11 +580,20 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
     @contextmanager
     def _safety_operation(self, family, plan, *, bias_mT=None):
         store = getattr(self, "_safety_store", None)
+        geometry = getattr(self, '_queue_specimen_geometry', None)
+        if geometry is not None and store is not geometry.session.child_store:
+            raise HardwareError('Measured queue treatments require the original borrowed stage store.')
         if store is None:
             yield None
             return
         with store.operation_lease():
-            yield self._begin_safety_operation(family, plan, bias_mT=bias_mT)
+            token = self._begin_safety_operation(family, plan, bias_mT=bias_mT)
+            previous = getattr(self, '_geometry_stage_token', None)
+            self._geometry_stage_token = token
+            try:
+                yield token
+            finally:
+                self._geometry_stage_token = previous
 
     @property
     def acquisition_error(self) -> str:
@@ -635,6 +656,38 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
 
     # -- measurement -------------------------------------------------------
 
+    def bind_specimen_geometry(self, session):
+        """Bind the original verified transfer before planning a sample stage."""
+        from .queue_specimen_geometry import QueueSpecimenGeometry
+        if self._config.general.nocomm:
+            raise HardwareError('Native measured geometry cannot be borrowed by a simulated backend.')
+        geometry = QueueSpecimenGeometry(session, self._config, self._client, self._axes, self._safety_store)
+        geometry.height(self._sample_name)
+        self._queue_specimen_geometry = geometry
+        self._bracketed = None
+        self._bracketed_geometry_signature = None
+
+    def _sample_height(self):
+        geometry = getattr(self, '_queue_specimen_geometry', None)
+        if geometry is None:
+            return int(self._config.motion.sample_height)
+        return geometry.height(self._sample_name, own_stage_token=getattr(self, '_geometry_stage_token', None))
+
+    def clear_specimen_geometry(self):
+        """Discard sample geometry only after its verified original-slot return."""
+        geometry = getattr(self, '_queue_specimen_geometry', None)
+        if geometry is None:
+            return
+        from .queue_lift_transfer import QueueSpecimenState
+        geometry._validate_station()
+        value = geometry.session.store.latest_transfer_context(geometry.session.token)
+        state = QueueSpecimenState.read(value, geometry.session, geometry.station)
+        if state.phase != 'clear' or dataclasses.replace(state, phase='lifted') != geometry.context:
+            raise HardwareError('Verify the original specimen return before clearing its measured geometry.')
+        self._queue_specimen_geometry = None
+        self._bracketed = None
+        self._bracketed_geometry_signature = None
+
     def read_squid(self):
         """Return one coherent bracketed block, or fail.
 
@@ -648,6 +701,16 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         if not self._measuring_holder:
             self._holder_store.require_valid(is_up=self._direction_up)
         return self._bracketed.read_squid()
+
+    def _check_acquisition_geometry_stage(self):
+        geometry = getattr(self, '_queue_specimen_geometry', None)
+        if geometry is None:
+            return
+        root = geometry._validate_station()
+        stage = root['stage']
+        if stage and stage['status'] == 'pending' and (
+                stage['family'] != 'acquisition' or stage['token'] != self._geometry_stage_token):
+            raise HardwareError('Complete the original stage before starting specimen acquisition.')
 
     def read_susceptibility(self) -> float:
         """Run the VB6 ``Susceptibility_Measure`` sequence for the current sample.
@@ -707,7 +770,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         if not math.isfinite(scale) or scale == 0.0:
             blockers.append("Susceptibility scale factor must be finite and nonzero.")
         positions = getattr(self._config, "motion", None)
-        sample_height = int(positions.sample_height) if positions is not None else 0
+        sample_height = self._sample_height() if positions is not None else 0
         if positions is None or not positions.configured:
             blockers.append(
                 positions.unconfigured_reason()
@@ -749,6 +812,8 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             SusceptibilityAcquisitionService,
         )
 
+        self._check_acquisition_geometry_stage()
+        sample_height = self._sample_height()
         bridge = self._susceptibility
         if not _to_bool_connected(getattr(bridge, "is_connected", False)):
             # Opening the bridge happens only inside an operator-started run
@@ -760,7 +825,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             MotorVerticalController(self._client, self._axes["updown"]),
             config=SusceptibilityAcquisitionConfig(
                 coil_position=int(cfg.coil_position),
-                sample_height=int(self._config.motion.sample_height),
+                sample_height=sample_height,
                 moment_factor_cgs=float(cfg.moment_factor_cgs),
             ),
             clock=getattr(self._acquisition_clock, "now", None),
@@ -979,7 +1044,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         try:
             if is_af:
                 from .af_treatment import plan_af_treatment
-                plan_af_treatment(label, self._config.af_demag, self._config.motion.sample_height)
+                plan_af_treatment(label, self._config.af_demag, self._sample_height())
             elif kind == "IRM":
                 from .treatment_labels import parse_field_treatment
                 self._plan_pulse_treatment(field, axis=parse_field_treatment(label).axis)
@@ -989,7 +1054,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                 from .af_treatment import plan_af_treatment
                 peak = cfg.arm_peak_af if field is None else field
                 plan_arm_bias(cfg.arm_bias if bias is None else bias, cfg)
-                plan_af_treatment(f"AFZ{peak:g}", self._config.af_demag, self._config.motion.sample_height)
+                plan_af_treatment(f"AFZ{peak:g}", self._config.af_demag, self._sample_height())
                 reasons.extend(self._actuator_blockers(f"AFZ{peak:g}", "AFZ", peak, None))
         except (TypeError, ValueError, MotorHardwareError, DiagnosticContractError) as exc:
             reasons.append(str(exc))
@@ -1008,12 +1073,13 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             raise ValueError("Pulse IRM axis must be Z, X or Y.")
         cfg = self._config.pulse_irm
         validate_pulse_bindings(cfg)
-        pulse_motion_target(cfg,self._config.motion.sample_height)
+        pulse_motion_target(cfg,self._sample_height())
         return plan_pulse_irm(field,coil,cfg),angle
 
     def _execute_pulse_treatment(self,field, *, axis=None):
         from .pulse_treatment import PulseTreatmentService,PulseTreatmentError
         from .squid_transport import MotorTurningController,MotorVerticalController
+        sample_height = self._sample_height()
         plan,angle = self._plan_pulse_treatment(field, axis=axis)
         self._ensure_connected()
         options = {"should_cancel":self._halt_check}
@@ -1025,7 +1091,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         with self._safety_operation("pulse", plan) as token:
             try:
                 record = service.execute(plan,sample_id=self._sample_name or "sample",run_id=self._run_id,
-                                         sample_height=self._config.motion.sample_height,orientation_deg=angle)
+                                         sample_height=sample_height,orientation_deg=angle)
             except PulseTreatmentError as exc:
                 self._pulse_treatment_records.append(exc.record)
                 self._finish_safety_operation(token, exc.record)
@@ -1038,7 +1104,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         from .squid_transport import MotorTurningController, MotorVerticalController
 
         af_label = label if peak_af_mT is None else f"AFZ{peak_af_mT:g}"
-        plan = plan_af_treatment(af_label, self._config.af_demag, self._config.motion.sample_height)
+        plan = plan_af_treatment(af_label, self._config.af_demag, self._sample_height())
         if peak_af_mT is not None:
             plan = AfTreatmentPlan(label, plan.target_position, plan.passes)
         self._ensure_connected()
@@ -1066,7 +1132,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         reasons = []
         try:
             from .rrm_treatment import plan_rrm_treatment
-            plan = plan_rrm_treatment(label, self._config)
+            plan = plan_rrm_treatment(label, self._config, sample_height=self._sample_height())
             if plan.bias_mT is not None:
                 bias = getattr(self, "_arm_bias", None)
                 if bias is None or not callable(getattr(bias, "set_bias_mT", None)) or bias.simulated or not bias.is_connected():
@@ -1087,7 +1153,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         from .rrm_treatment import RrmTreatmentService, plan_rrm_treatment
         from .af_treatment import AfTreatmentError
         from .squid_transport import MotorTurningController, MotorVerticalController
-        plan = plan_rrm_treatment(label, self._config)
+        plan = plan_rrm_treatment(label, self._config, sample_height=self._sample_height())
         self._ensure_connected()
         options = {"should_cancel": self._halt_check, "bias_adapter": getattr(self, "_arm_bias", None) if plan.bias_mT is not None else None}
         if self._acquisition_clock is not None:
@@ -1212,8 +1278,17 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
 
     def _ensure_bracketed(self) -> None:
         """Compose the bracketed acquisition once transports exist."""
-        if self._bracketed is not None or self._config.general.nocomm:
+        if self._config.general.nocomm:
             return
+        self._check_acquisition_geometry_stage()
+        geometry = getattr(self, '_queue_specimen_geometry', None)
+        if geometry is None and self._bracketed is not None:
+            return
+        sample_height = self._sample_height()
+        signature = (sample_height, self._sample_name) if geometry is not None else None
+        if self._bracketed is not None and self._bracketed_geometry_signature == signature:
+            return
+        self._bracketed = None
         from .acquisition import BracketedAcquisitionService
         from .squid_transport import (
             BracketedSquidBackend,
@@ -1251,8 +1326,8 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                 MotorTurningController(self._client, self._axes["turning"]),
                 config=acquisition_config_from_app_config(
                     self._config,
-                    zero_position=positions.zero_position(),
-                    measurement_position=positions.measurement_position(),
+                    zero_position=math.floor(positions.zero_pos + sample_height / 2),
+                    measurement_position=math.floor(positions.meas_pos + sample_height / 2),
                 ),
                 clock=self._acquisition_clock,
                 cancel_check=self._halt_check,
@@ -1268,6 +1343,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             simulated=self.simulated,
             communication_events_provider=transport.communication_events,
         )
+        self._bracketed_geometry_signature = signature
         self._acquisition_error = ""
 
     def _holder_positions(self):

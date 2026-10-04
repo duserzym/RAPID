@@ -28,7 +28,7 @@ class RrmTreatmentPlan:
     bias_mT: float | None = None
 
 
-def plan_rrm_treatment(label, config):
+def plan_rrm_treatment(label, config, *, sample_height=None):
     match = re.fullmatch(r"(RRMZ|RRM)\s*(\d+(?:\.\d+)?)\s*/\s*(-?\d+(?:\.\d+)?)(?:\s*RPS)?(?:\s*@\s*(\d+(?:\.\d+)?))?", label.strip().upper())
     if not match:
         raise ValueError("RRM requires field and signed spin speed: RRM100/5 or RRMZ100/-5 (mT/rps).")
@@ -50,7 +50,9 @@ def plan_rrm_treatment(label, config):
     RoutedMotorSerialClient(motor, [MotorAxisConfig(axis, index, station.addresses.get(axis, 0), port)
                                    for index, (axis, port) in enumerate(station.ports.items(), 1)])
     cfg = config.af_demag
-    height = config.motion.sample_height
+    height = config.motion.sample_height if sample_height is None else sample_height
+    if isinstance(height, bool) or not isinstance(height, (int, float)) or not math.isfinite(height) or int(height) != height:
+        raise ValueError('RRM specimen height must be an integer count.')
     if cfg.coil_position == 0 or height <= 0:
         raise ValueError("RRM coil position and specimen height must be configured.")
     target = math.floor(cfg.coil_position + height / 2)

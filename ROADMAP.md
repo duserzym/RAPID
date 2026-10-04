@@ -1261,3 +1261,33 @@ plans, establish the live XY reference, restore operator tray inversion/per-file
 orientation, and implement original-panel stop/field/support recovery and terminal
 vacuum release. Auxiliary tools, portable rebuilding and physical/scientific station
 acceptance remain required. The full-system goal remains active.
+
+### Verified measured-height consumers (2026-10-03)
+
+QueueHardwareBackend can now bind the original verified loaded specimen geometry
+under its worker claim. The binding checks the fixed journal, native routing, accepted
+controller/XY map/home calibration and original motion/SQUID/calibration/susceptibility
+profile. Changed settings, wrong or returned specimens, recovery sessions and unrelated
+pending stages cannot reuse cached geometry or fall back to nominal height.
+
+Bracketed SQUID zero/measurement positions, AF/ARM plans, pulse IRM planning/execution,
+RRM planning/execution and susceptibility configuration consume measured height.
+Accepted motor/config calibration stays unchanged. Exact owned field stages persist
+specimen geometry in their durable plans and retain it for execution/cleanup; foreign
+stores and unfinished field stages cannot authorize acquisition. Geometry can be
+cleared only after the same specimen's verified original-slot return. XY home pairs
+are now part of immutable geometry binding.
+
+Corrected susceptibility's negative odd-height target rounding to VB6 Int/floor,
+verified against active modSusceptibility.bas. Truncation had shifted half-count
+negative centres by one count. Source/configuration helpers retain their existing
+nominal-height contract outside a bound live queue specimen.
+
+Verification: all 983 isolated tests pass in 156.847 seconds, including 14 new
+measured-geometry regressions using native transfer evidence and injected actuator
+services. Six-panel/six-helper source smoke passes. No physical instruments actuated.
+Still invoke these APIs from the complete automatic queue coordinator, stage ordinary
+acquisition/transfer work, implement blank-holder geometry, live reference/field/support
+proof, operator tray inversion/per-file orientation and original-panel recovery/terminal
+release. Auxiliary tools, portable rebuilding and physical/scientific station acceptance
+remain open full-system requirements. Goal active.

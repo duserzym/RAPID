@@ -26,6 +26,7 @@ class QueueStationGeometry:
     hole_slot: int
     one_step: float
     xy_positions: tuple = ()
+    xy_home: tuple = ()
 
     def __post_init__(self):
         if not isinstance(self.calibration_source, str) or not self.calibration_source.strip():
@@ -59,6 +60,10 @@ class QueueStationGeometry:
         if len({entry[0] for entry in positions}) != len(positions):
             raise ValueError('Duplicate XY slot calibration.')
         object.__setattr__(self, 'xy_positions', tuple(sorted(positions)))
+        home = tuple(_integer(value, 'XY home') for value in self.xy_home)
+        if home and (len(home) != 2 or any(not -(2**31) <= value < 2**31 for value in home)):
+            raise ValueError('XY home requires two signed controller counts.')
+        object.__setattr__(self, 'xy_home', home)
 
     @classmethod
     def from_config(cls, config, *, use_xy_table):
@@ -84,7 +89,8 @@ class QueueStationGeometry:
                 coordinates.append((int(key), *values))
         return cls(config.motor_station.calibration_source, use_xy_table,
                    controller.slot_min, controller.slot_max,
-                   config.motor_station.hole_slot, controller.one_step, tuple(coordinates))
+                   config.motor_station.hole_slot, controller.one_step, tuple(coordinates),
+                   tuple(station.xy_home) if use_xy_table else ())
 
     def is_empty(self, slot):
         slot = _integer(slot, "slot")

@@ -61,7 +61,7 @@ class QueueTableMotionTests(unittest.TestCase):
         self.motor.connect()
         self.addCleanup(self.motor.disconnect)
         self.geometry = QueueStationGeometry('station.ini', True, 1, 100, 46, -1010.1010101,
-                                             ((46, 0, 39), (1, 9590, -11916)))
+                                             ((46, 0, 39), (1, 9590, -11916)), (-3, -2))
         self.cancelled = False
         self.motion = QueueXYTableMotion(self.motor, self.axes, self.geometry,
             sleep=lambda seconds: None, should_cancel=lambda: self.cancelled)

@@ -84,6 +84,15 @@ accepted DropoffVacuumDelay. Native failure, cancellation and failed publication
 preserve the original journal/outputs. Recovery never replays transfer. See
 `queue-lift-transfer.md` for phase requirements and remaining integration work.
 
+`QueueHardwareBackend.bind_specimen_geometry` now consumes the verified loaded
+context under the original worker claim. SQUID zero/measurement, AF/ARM, pulse IRM,
+RRM and susceptibility targets use measured height while baseline calibration remains
+unchanged. The binding includes the original scientific settings and XY home pair.
+Wrong/returned specimens, changed settings and unrelated pending stages fail closed;
+own field stages retain immutable geometry in their durable plans. Acquisition cannot
+borrow an unfinished field stage. See `queue-specimen-geometry.md`. The coordinator
+still must invoke this binding and stage ordinary acquisition/transfer I/O.
+
 Wire the separate pump/valve phases under the durable parent queue and record each
 remaining native motion/acquisition/transfer stage. Wire accepted empty-hole resolution and
 fresh readback verification into those stages, persist the specimen's original slot

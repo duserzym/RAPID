@@ -54,8 +54,10 @@ and unsafe-phase rejection, delays, cancellation, publication failure, corrupt h
 and no replay. The acquisition pose is injected; these tests do not qualify real
 measurements, grip or sample transfer. No physical instruments are actuated.
 
-Still wire these phases into the automatic queue coordinator and measurement worker,
-propagate measured height into bracketed SQUID/AF/ARM/IRM/RRM/susceptibility plans,
+The native backend now offers `bind_specimen_geometry` to propagate verified measured
+height into bracketed SQUID/AF/ARM/IRM/RRM/susceptibility plans without changing the
+station calibration. See `queue-specimen-geometry.md` for its profile and claim gates.
+Still wire these phases and geometry binding into the automatic queue coordinator and measurement worker,
 establish/verify the live XY reference, restore operator tray inversion and per-file
 orientation, and implement original-panel stop/field/support recovery and terminal
 vacuum release. Automatic live startup remains gated until that integration and

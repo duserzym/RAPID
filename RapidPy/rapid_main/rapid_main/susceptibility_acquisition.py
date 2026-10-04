@@ -66,9 +66,9 @@ class SusceptibilityAcquisitionConfig:
 
     @property
     def target_position(self) -> int:
-        """VB6 ``Int(SCoilPos + SampleHeight / 2)`` (truncate toward zero)."""
+        """VB6 ``Int(SCoilPos + SampleHeight / 2)`` (floor, including negatives)."""
 
-        return int(int(self.coil_position) + int(self.sample_height) / 2)
+        return math.floor(int(self.coil_position) + int(self.sample_height) / 2)
 
     def validate(self) -> None:
         coil = int(self.coil_position)

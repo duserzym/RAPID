@@ -39,6 +39,8 @@ class QueueXYTableMotion:
             raise HardwareSafetyError('Queue XY transfers require the native routed station and XY geometry.')
         if set(axes) != {'changer_x', 'changer_y', 'updown', 'turning'}:
             raise HardwareSafetyError('Queue table transfers require all four bound motor axes.')
+        if len(geometry.xy_home) != 2:
+            raise HardwareSafetyError('Queue XY motion requires the original accepted home-coordinate pair.')
         if ((geometry.slot_min, geometry.slot_max, geometry.one_step)
                 != (motor.config.slot_min, motor.config.slot_max, motor.config.one_step)
                 or motor.config.sample_bottom == 0):

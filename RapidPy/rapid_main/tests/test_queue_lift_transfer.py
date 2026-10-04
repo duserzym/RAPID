@@ -45,7 +45,7 @@ class Clock:
     def sleep(self, seconds): self.time += seconds
 
 
-class QueueLiftTransferTests(unittest.TestCase):
+class QueueLiftFixture:
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -68,7 +68,7 @@ class QueueLiftTransferTests(unittest.TestCase):
         self.motor.connect()
         self.addCleanup(self.motor.disconnect)
         self.geometry = QueueStationGeometry('station.ini', True, 1, 100, 46, config.one_step,
-                                             ((1, 9590, -11916), (46, 0, 39)))
+                                             ((1, 9590, -11916), (46, 0, 39)), (-3, -2))
         self.clock = Clock()
         self.table = QueueXYTableMotion(self.motor, self.axes, self.geometry, sleep=self.clock.sleep,
             transfer_settings={'grip_settle_s': .3, 'dropoff_delay_s': 1.2})
@@ -76,6 +76,7 @@ class QueueLiftTransferTests(unittest.TestCase):
         self.vacuum._safety_store = HardwareSafetyStore(self.path)
         self.profile = dict(helper='rapid_main_queue', resources={'vacuum': self.vacuum._binding()},
             stage_profiles={'motion': self.table.profile, 'vacuum': self.vacuum.queue_station_binding(), 'acquisition': {'test': 1}})
+        self.profile['stage_profiles'].update(self.additional_stage_profiles())
         self.session = QueueWorkflowSession.start(self.store, {'sample': 'S1'}, self.profile, run_id='run-1')
         self.addCleanup(self.session.release)
         self.lift = QueueLiftTransfer(self.table, self.vacuum, monotonic=self.clock.monotonic)
@@ -89,6 +90,9 @@ class QueueLiftTransferTests(unittest.TestCase):
         return self.vacuum.queue_set_outputs(self.session, pump_enabled=True, valve_connected=valve,
             motors_stopped_verified=True, specimen_secured=True, specimen_at_pickup_verified=True,
             field_outputs_off_verified=True)
+
+    def additional_stage_profiles(self):
+        return {}
 
     def call(self, method, *args, **kwargs):
         with self.session.claim():
@@ -104,6 +108,7 @@ class QueueLiftTransferTests(unittest.TestCase):
 
     def lift_serial(self): return self.motor._connections['COM5']._serial
 
+class QueueLiftTransferTests(QueueLiftFixture, unittest.TestCase):
     def test_pickup_and_top_reference_persist_dynamic_height_and_original_identity(self):
         record = self.load()
         context = self.context()
