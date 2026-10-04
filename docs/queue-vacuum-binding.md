@@ -20,6 +20,22 @@ controller state before publishing a held stage. Evidence retains the raw comman
 and terminated replies accepted by the legacy serial driver. It establishes
 commanded state; it does not establish measured pressure or specimen grip.
 
+The transfer API `queue_set_outputs` now distinguishes pump power from gripper
+valve connection. Pump ON / valve OFF persists a `pump_ready` stage before native
+`C`, `10V00`, `E`, `10MFF` commands. Both fresh replies and both requested controller
+states are required. Its phase record explicitly reports no acknowledged grip and
+no safe terminal state. The durable queue treats this as retained output ownership,
+allows the next claimed stage, and forbids transport detach or queue completion.
+The adapter reports pump and valve command states separately.
+
+Connecting grip through the transfer API requires strict verified motor stop,
+specimen pickup position and field outputs off. Disconnecting the valve while
+leaving the pump powered requires verified stop, specimen support and fields off.
+Pump OFF / valve ON is rejected. A failed valve-OFF acknowledgement does not proceed
+to pump enable. Restart/lost-link recovery refuses pump-ready as well as grip enable;
+full OFF recovery remains the only allowed output transition. Failed evidence
+publication retains the pending stage and unknown state for that OFF recovery.
+
 Release requires strict motor-stop, specimen-support and field-output-off checks
 from the coordinator before any release I/O. Native release attempts valve OFF
 (`C`, `10V00`) and pump OFF (`D`, `10M00`) independently, even after one fails.

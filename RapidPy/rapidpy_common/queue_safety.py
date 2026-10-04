@@ -63,6 +63,28 @@ def _verified_hold(record):
         and all(isinstance(reply, str) and reply.strip() for reply in record['raw_acknowledgements']))
 
 
+def _verified_pump_ready(record):
+    if not isinstance(record, dict):
+        return False
+    evidence = record.get('command_evidence')
+    return (record.get('schema') == 'rapidpy.queue_vacuum_phase.v1'
+        and record.get('operation') == 'pump_ready'
+        and record.get('pump_enabled') is True and record.get('valve_connected') is False
+        and record.get('output_state_acknowledged') is True
+        and record.get('safe_state_confirmed') is False and record.get('simulated') is False
+        and isinstance(evidence, list) and len(evidence) == 2
+        and all(isinstance(item, dict) for item in evidence)
+        and [item.get('command') for item in evidence] == ['10V00', '10MFF']
+        and all(isinstance(item.get('reply'), str) and item['reply'].strip() for item in evidence))
+
+
+def _verified_vacuum_stage(stage):
+    action = stage['plan'].get('action')
+    return (stage['family'] == 'vacuum' and (
+        (action == 'enable' and _verified_hold(stage['record']))
+        or (action == 'pump_ready' and _verified_pump_ready(stage['record']))))
+
+
 def _validate_queue_record(record):
     if (not isinstance(record, dict) or record.get('schema') != 'rapidpy.queue_safe_state.v1'
             or not isinstance(record.get('checks'), dict) or set(record['checks']) != QUEUE_CHECKS
@@ -142,8 +164,7 @@ def validate_queue_state(state):
         if (not isinstance(record, dict) or record.get('safe_state_confirmed') is not True
                 or record.get('simulated') is not False or state['history_head'] is None):
             raise ValueError('queue stage lacks verified physical evidence')
-    if stage['status'] == 'held' and (stage['family'] != 'vacuum' or stage['plan'].get('action') != 'enable'
-            or not _verified_hold(stage['record']) or state['history_head'] is None):
+    if stage['status'] == 'held' and (not _verified_vacuum_stage(stage) or state['history_head'] is None):
         raise ValueError('queue vacuum hold lacks native acknowledgement evidence')
     if state['status'] == 'verified' and stage['status'] != 'verified':
         raise ValueError('queue was cleared with an unfinished stage')
@@ -273,7 +294,7 @@ class QueueSafetyStore(HardwareSafetyStore):
             stage['record'] = snapshot
             if record.safe_state_confirmed is True and record.simulated is False:
                 stage['status'] = 'verified'
-            elif stage['family'] == 'vacuum' and stage['plan'].get('action') == 'enable' and _verified_hold(snapshot):
+            elif _verified_vacuum_stage(stage):
                 stage['status'] = 'held'
             state['history_head'] = self._publish_event(state, stage)
             validate_queue_state(state)

@@ -21,10 +21,14 @@ class QueueVacuumRecord:
     simulated: bool = False
     record_id: str = ''
     timestamp_iso: str = ''
+    pump_enabled: bool = False
+    valve_connected: bool = False
+    output_state_acknowledged: bool = False
 
     def to_dict(self):
         snapshot = asdict(self)
         snapshot['schema'] = ('rapidpy.queue_vacuum_hold.v1' if self.operation == 'enable'
+            else 'rapidpy.queue_vacuum_phase.v1' if self.operation == 'pump_ready'
             else 'rapidpy.queue_vacuum_release.v1')
         # Retain exact commands/replies in addition to the hold schema's text.
         snapshot['command_evidence'] = list(snapshot['raw_acknowledgements'])
@@ -105,14 +109,33 @@ class QueueVacuumBinding:
         if vacuum_binding(controller) != {key: self.profile[key] for key in ('port', 'baud')}:
             raise HardwareSafetyError('The actual vacuum transport differs from the original queue binding.')
 
+    def set_outputs(self, *, pump_enabled, valve_connected, motors_stopped_verified=False,
+                    specimen_secured=False, specimen_at_pickup_verified=False,
+                    field_outputs_off_verified=False):
+        if type(pump_enabled) is not bool or type(valve_connected) is not bool:
+            raise HardwareSafetyError('Queue pump and valve states must be explicit booleans.')
+        if valve_connected and not pump_enabled:
+            raise HardwareSafetyError('Queue grip requires the vacuum pump powered.')
+        if valve_connected and not (motors_stopped_verified is True
+                and specimen_at_pickup_verified is True and field_outputs_off_verified is True):
+            raise HardwareSafetyError('Verify motor stop, specimen pickup position and field outputs off before connecting grip.')
+        return self._set_enabled(valve_connected, pump_ready=pump_enabled and not valve_connected,
+            motors_stopped_verified=motors_stopped_verified, specimen_secured=specimen_secured,
+            field_outputs_off_verified=field_outputs_off_verified)
+
     def set_enabled(self, enabled, *, motors_stopped_verified=False, specimen_secured=False,
                     field_outputs_off_verified=False):
+        return self._set_enabled(enabled, motors_stopped_verified=motors_stopped_verified,
+            specimen_secured=specimen_secured, field_outputs_off_verified=field_outputs_off_verified)
+
+    def _set_enabled(self, enabled, *, pump_ready=False, motors_stopped_verified=False,
+                     specimen_secured=False, field_outputs_off_verified=False):
         self._validate_owner()
         controller = self.adapter._require_controller()
         self._validate_controller(controller)
         if type(enabled) is not bool:
             raise HardwareSafetyError('Queue vacuum command must be an explicit boolean.')
-        if enabled and (self.session.is_recovery or self._recovery_required):
+        if (enabled or pump_ready) and (self.session.is_recovery or self._recovery_required):
             raise HardwareSafetyError('Queue restart recovery may release outputs but never replay vacuum enable.')
         if not enabled and not (motors_stopped_verified is True and specimen_secured is True
                 and field_outputs_off_verified is True):
@@ -120,11 +143,11 @@ class QueueVacuumBinding:
         child = self.session.child_store
         pending = child.pending()
         if pending:
-            if enabled or pending['family'] != 'vacuum' or pending['profile'] != self.profile:
+            if enabled or pump_ready or pending['family'] != 'vacuum' or pending['profile'] != self.profile:
                 raise HardwareSafetyError('Recover the unfinished original queue stage before changing vacuum outputs.')
             token = pending['token']  # An explicit OFF request recovers; never replay ON.
         else:
-            token = child.begin('vacuum', {'action': 'enable' if enabled else 'release'}, self.profile)
+            token = child.begin('vacuum', {'action': 'pump_ready' if pump_ready else 'enable' if enabled else 'release'}, self.profile)
         self.held = True
         self.adapter.output_state_known = False
         reset = getattr(controller, 'reset_acknowledgements', None)
@@ -133,8 +156,12 @@ class QueueVacuumBinding:
         reset()
         error = ''
         try:
-            controller.set_enabled(enabled)
-            expected_commands = ['10MFF', '10VFF'] if enabled else ['10V00', '10M00']
+            if pump_ready:
+                controller.set_valve_connect(False)
+                controller.set_motor_power(True)
+            else:
+                controller.set_enabled(enabled)
+            expected_commands = ['10V00', '10MFF'] if pump_ready else ['10MFF', '10VFF'] if enabled else ['10V00', '10M00']
             acknowledgements = controller.acknowledgements
             if ([item.get('command') for item in acknowledgements] != expected_commands
                     or any(not isinstance(item.get('reply'), str) or not item['reply'].strip() for item in acknowledgements)):
@@ -142,18 +169,19 @@ class QueueVacuumBinding:
             if enabled:
                 if controller.is_enabled is not True:
                     raise HardwareSafetyError('Queue vacuum hold state is unverified.')
-            elif controller._valve_connected is not False or controller._motor_powered is not False:
-                raise HardwareSafetyError('Both queue valve and pump OFF states must be acknowledged.')
+            elif controller._valve_connected is not False or controller._motor_powered is not pump_ready:
+                raise HardwareSafetyError('The requested queue valve and pump states must both be acknowledged.')
             if enabled and self.profile['warn_threshold'] > 0:
                 pressure = float(self.adapter.read_pressure())
                 if not math.isfinite(pressure) or pressure < 0 or pressure > self.profile['warn_threshold']:
                     raise HardwareSafetyError('Queue vacuum pressure is outside its original acceptance threshold.')
         except Exception as exc:
             error = str(exc) or type(exc).__name__
-        record = QueueVacuumRecord('enable' if enabled else 'release', copy.deepcopy(self.profile),
+        record = QueueVacuumRecord('pump_ready' if pump_ready else 'enable' if enabled else 'release', copy.deepcopy(self.profile),
             tuple(copy.deepcopy(controller.acknowledgements)), enabled and not error,
-            not enabled and not error, error, record_id=uuid.uuid4().hex,
-            timestamp_iso=datetime.now(timezone.utc).isoformat())
+            not enabled and not pump_ready and not error, error, record_id=uuid.uuid4().hex,
+            timestamp_iso=datetime.now(timezone.utc).isoformat(), pump_enabled=enabled or pump_ready,
+            valve_connected=enabled, output_state_acknowledged=not bool(error))
         try:
             child.finish(token, self.profile, record)
         except Exception:
@@ -162,7 +190,7 @@ class QueueVacuumBinding:
         if error:
             self.error = error
             raise HardwareSafetyError('Queue vacuum state remains unverified: ' + error)
-        self.held = enabled
+        self.held = enabled or pump_ready
         self.error = ''
         self.adapter.output_state_known = True
         return record

@@ -2080,6 +2080,10 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
 
     def status(self) -> str:
         if self._queue_binding is not None:
+            if (not self._queue_binding.error and self.output_state_known
+                    and self._pump_only_controller._motor_powered is True
+                    and self._pump_only_controller._valve_connected is False):
+                return 'Queue pump ON and gripper valve OFF are acknowledged; original queue ownership is retained.'
             return self._queue_binding.error or ('Queue vacuum output state is unverified; original queue ownership is retained.'
                 if not self.output_state_known else 'Queue vacuum is commanded held; original queue ownership is retained.'
                 if self.outputs_held else 'Queue vacuum release is acknowledged; the queue still owns the transport.')
@@ -2153,6 +2157,16 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
             finally:
                 self._operation_active = False
 
+    def queue_set_outputs(self, session, **states_and_checks):
+        with self._state_lock:
+            self._operation_active = True
+            try:
+                if self._queue_binding is None or self._queue_binding.session is not session:
+                    raise HardwareError('Connect vacuum under its original queue lifetime first.')
+                return self._queue_binding.set_outputs(**states_and_checks)
+            finally:
+                self._operation_active = False
+
     def queue_disconnect(self, session):
         with self._state_lock:
             self._operation_active = True
@@ -2169,7 +2183,16 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
     def is_pump_on(self) -> bool:
         if not self.output_state_known:
             raise HardwareUnavailableError('Vacuum output state has not been acknowledged in this session.')
-        return bool(self._require_controller().is_enabled)
+        controller = self._require_controller()
+        # Diagnostic operations use the historical combined-output interface.
+        # Queue transfers use the validated native transport and split states.
+        return bool(controller._motor_powered if self._queue_binding is not None else controller.is_enabled)
+
+    def is_valve_connected(self) -> bool:
+        if not self.output_state_known:
+            raise HardwareUnavailableError('Vacuum output state has not been acknowledged in this session.')
+        controller = self._require_controller()
+        return bool(controller._valve_connected if self._queue_binding is not None else controller.is_enabled)
 
     def read_pressure(self) -> float:
         self._require_controller()

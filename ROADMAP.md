@@ -1168,3 +1168,29 @@ Separate pump/valve phases, actual specimen pickup/return, operator tray inversi
 per-file orientation, durable acquisition ownership, original-panel recovery,
 portable rebuilding and physical/scientific acceptance remain open. The full-system
 goal remains active. No physical instruments were actuated.
+
+### Separate queue pump and gripper phases (2026-10-03)
+
+The claimed native vacuum adapter now exposes queue_set_outputs with separate pump
+power and gripper valve states. Pump ON / valve OFF persists the pump_ready phase
+before native commands, verifies both exact replies and controller state, and retains
+parent output ownership without reporting gripper hold or safe shutdown. Native
+queue status reports the two states separately; diagnostics retain their combined
+output interface. Pump OFF / valve ON is rejected.
+
+Transfer grip requires strict motor-stop, specimen-at-pickup and field-output-off
+checks. Valve release while retaining pump power requires verified stop, specimen
+support and fields off. Failed valve release never proceeds to pump enable. Missing
+replies, malformed phase evidence and publication failure remain pending. Restart
+and lost-link recovery cannot replay pump-ready or grip; full OFF recovery preserves
+the original token. This transport API still needs wiring into the transfer worker.
+
+Verification: all 927 isolated tests pass in 129.426 seconds. All 139 queue tests
+pass, including 26 native-controller/injected-serial vacuum regressions. The full
+suite initially exposed an incompatible diagnostic status getter; retaining its
+combined-output contract fixed that error and the resulting pending-hold cascade.
+Six-panel/six-helper source smoke passes. No physical instruments were actuated.
+Actual pickup/return with dynamic sample height, empty-hole/clearance verification,
+operator tray inversion and per-file orientation, durable acquisition integration,
+original-panel coordinated recovery, auxiliary tools, portable rebuilding and
+physical/scientific acceptance remain open full-system requirements. Goal active.

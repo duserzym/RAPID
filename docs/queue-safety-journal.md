@@ -22,6 +22,13 @@ remain pending. A failed release cannot be disguised as a new held enable. A hol
 record proves commanded state, not pressure or specimen grip. The queue driver must
 still apply the configured pressure/command-only acceptance gate.
 
+A separately acknowledged pump-ON/valve-OFF `pump_ready` phase also retains output
+ownership as a held stage. Its distinct phase schema requires the exact valve-OFF
+and pump-ON command replies, strict requested output states and acknowledgement
+flag. It does not assert gripper hold or safe shutdown. Missing or malformed phase
+evidence remains pending; full OFF recovery is required before detach or terminal
+queue completion. See `queue-vacuum-binding.md` for the transfer preconditions.
+
 Every finished stage writes a separate immutable event, flushes it and links its
 SHA-256 identity before updating the live journal. The journal retains one latest
 stage and history head. The newest event is checked before beginning the next stage;

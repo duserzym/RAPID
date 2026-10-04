@@ -60,6 +60,141 @@ class QueueVacuumTests(unittest.TestCase):
     def commands(self):
         return [value.decode('ascii') for value in self.serial.writes if value != b'\r']
 
+    def outputs(self, pump=True, valve=False, **overrides):
+        checks = dict(motors_stopped_verified=True, specimen_secured=True,
+                      specimen_at_pickup_verified=True, field_outputs_off_verified=True)
+        checks.update(overrides)
+        with self.session.claim():
+            return self.adapter.queue_set_outputs(self.session, pump_enabled=pump,
+                valve_connected=valve, **checks)
+
+    def test_pump_ready_retains_parent_ownership_without_claiming_specimen_grip(self):
+        self.connect()
+        original_write = self.serial.write
+        def write(payload):
+            if payload != b'\r':
+                stage = self.store.pending()['stage']
+                self.assertEqual(stage['status'], 'pending')
+                self.assertEqual(stage['plan']['action'], 'pump_ready')
+            return original_write(payload)
+        self.serial.write = write
+        record = self.outputs()
+        self.serial.write = original_write
+        self.assertEqual(self.commands(), ['C', '10V00', 'E', '10MFF'])
+        self.assertFalse(record.hold_acknowledged)
+        self.assertFalse(record.safe_state_confirmed)
+        self.assertTrue(record.output_state_acknowledged)
+        self.assertTrue(self.controller._motor_powered)
+        self.assertFalse(self.controller._valve_connected)
+        self.assertTrue(self.adapter.outputs_held)
+        self.assertTrue(self.adapter.output_state_known)
+        self.assertTrue(self.adapter.is_pump_on())
+        self.assertFalse(self.adapter.is_valve_connected())
+        self.assertIn('gripper valve OFF', self.adapter.status())
+        root = self.store.pending()
+        self.assertEqual(root['stage']['status'], 'held')
+        self.assertEqual(root['stage']['record']['schema'], 'rapidpy.queue_vacuum_phase.v1')
+        self.assertEqual(self.store.verify_history(root), 1)
+        with self.session.claim(), self.assertRaises(HardwareSafetyError):
+            self.adapter.queue_disconnect(self.session)
+        self.release()
+
+    def test_transfer_grip_and_supported_valve_release_keep_pump_powered(self):
+        self.connect()
+        self.outputs()
+        grip = self.outputs(valve=True)
+        self.assertTrue(grip.hold_acknowledged)
+        self.assertTrue(self.controller.is_enabled)
+        release = self.outputs()
+        self.assertFalse(release.valve_connected)
+        self.assertTrue(release.pump_enabled)
+        self.assertFalse(release.safe_state_confirmed)
+        self.assertNotIn('10M00', self.commands())
+        self.assertEqual(self.store.verify_history(self.store.pending()), 3)
+        self.release()
+        self.assertEqual(self.store.verify_history(self.store.pending()), 4)
+
+    def test_transfer_preconditions_and_boolean_states_fail_before_io(self):
+        self.connect()
+        for pump, valve in ((False, True), (1, False), (True, 'true')):
+            with self.assertRaises(HardwareSafetyError):
+                self.outputs(pump, valve)
+        for key in ('motors_stopped_verified', 'specimen_secured', 'field_outputs_off_verified'):
+            for value in (False, 1, 'true'):
+                with self.assertRaises(HardwareSafetyError):
+                    self.outputs(**{key: value})
+        for key in ('motors_stopped_verified', 'specimen_at_pickup_verified', 'field_outputs_off_verified'):
+            with self.assertRaises(HardwareSafetyError):
+                self.outputs(valve=True, **{key: False})
+        self.assertEqual(self.commands(), [])
+        self.assertIsNone(self.store.pending()['stage'])
+
+    def test_failed_valve_release_does_not_continue_to_pump_enable(self):
+        self.enable()
+        del self.serial._responses['10V00']
+        count = self.commands().count('10MFF')
+        with self.assertRaises(HardwareSafetyError):
+            self.outputs()
+        self.assertEqual(self.commands().count('10MFF'), count)
+        self.assertFalse(self.adapter.output_state_known)
+        token = self.store.pending()['stage']['token']
+        self.assertEqual(self.store.pending()['stage']['status'], 'pending')
+        self.serial._responses['10V00'] = 'VALVE CLOSED'
+        self.release()
+        self.assertEqual(self.store.pending()['stage']['token'], token)
+
+    def test_pump_ready_acknowledgement_cannot_clear_the_outer_queue(self):
+        self.connect()
+        record = self.outputs()
+        with self.assertRaises(HardwareSafetyError):
+            self.store.finish_queue(self.session.token, self.profile, record)
+        self.assertIsNotNone(self.store.pending())
+
+    def test_failed_pump_ready_publication_retains_pending_stage_for_off_recovery(self):
+        self.connect()
+        with patch.object(self.store, '_write', side_effect=OSError('disk full')):
+            # begin cannot persist, so no native output is allowed.
+            with self.assertRaises(OSError):
+                self.outputs()
+        self.assertEqual(self.commands(), [])
+        with patch.object(self.session.child_store, 'finish', side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):
+                self.outputs()
+        self.assertTrue(self.controller._motor_powered)
+        self.assertFalse(self.adapter.output_state_known)
+        self.assertTrue(self.adapter.outputs_held)
+        self.assertEqual(self.store.pending()['stage']['status'], 'pending')
+        self.release()
+
+    def test_restart_cannot_replay_pump_ready(self):
+        self.connect()
+        self.outputs()
+        self.session.release()
+        recovered = QueueWorkflowSession.recover(self.store, self.profile)
+        self.addCleanup(recovered.release)
+        self.session = recovered
+        self.connect()
+        before = self.commands()
+        with self.assertRaisesRegex(HardwareSafetyError, 'never replay'):
+            self.outputs()
+        self.assertEqual(self.commands(), before)
+        self.release()
+
+    def test_malformed_phase_evidence_cannot_become_a_held_stage(self):
+        from dataclasses import replace
+        self.connect()
+        valid = self.outputs()
+        for overrides in (dict(pump_enabled=1), dict(valve_connected=True),
+                          dict(output_state_acknowledged=1), dict(simulated=True),
+                          dict(raw_acknowledgements=({'command': '10MFF', 'reply': 'ON'},))):
+            with self.subTest(overrides=overrides), self.session.claim() as child:
+                token = child.begin('vacuum', {'action': 'pump_ready'}, self.adapter.queue_station_binding())
+                child.finish(token, self.adapter.queue_station_binding(), replace(valid, **overrides))
+                self.assertEqual(self.store.pending()['stage']['status'], 'pending')
+                with self.assertRaises(HardwareSafetyError):
+                    child.begin('af', {}, {'board': 1})
+            self.release()
+
     def test_connect_borrows_lease_without_enabling_or_guessing_off(self):
         self.connect()
         self.assertTrue(self.adapter.is_connected())
