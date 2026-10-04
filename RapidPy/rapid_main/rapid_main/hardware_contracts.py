@@ -318,7 +318,8 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
     """
 
     queue_commands_require_worker = True
-    preflight_timeout: float | None = 12.0
+    # Keep the queue claim on its original worker; adapters own I/O deadlines.
+    preflight_timeout: float | None = None
     # Physical multi-pass ramps and motion are bounded by their adapters.
     # An outer worker timeout cannot cancel those calls or safely interrupt
     # their cleanup; use the installed cooperative halt check instead.
@@ -473,6 +474,11 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             if bracketed is not None:
                 attribute = getattr(bracketed, name, None)
                 if attribute is not None:
+                    if name == 'recover_flux_count_discontinuity' and self.__dict__.get('_queue_specimen_geometry') is not None:
+                        def recover(validation=None):
+                            from .queue_acquisition import run_queue_acquisition
+                            return run_queue_acquisition(self, 'flux_recovery', lambda: attribute(validation))
+                        return recover
                     return attribute
         raise AttributeError(name)
 
@@ -689,6 +695,13 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._bracketed_geometry_signature = None
 
     def read_squid(self):
+        """Acquire a bracketed block and settle its original queue stage."""
+        if getattr(self, '_queue_specimen_geometry', None) is not None:
+            from .queue_acquisition import run_queue_acquisition
+            return run_queue_acquisition(self, 'squid', self._read_squid_unowned)
+        return self._read_squid_unowned()
+
+    def _read_squid_unowned(self):
         """Return one coherent bracketed block, or fail.
 
         A sample block requires a valid holder correction; a holder block
@@ -696,6 +709,8 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         """
         self._ensure_bracketed()
         if self._bracketed is None:
+            if getattr(self, '_queue_specimen_geometry', None) is not None:
+                raise HardwareError('A native queue specimen requires bracketed SQUID evidence.')
             measurement = self._require_measurement()
             return measurement.read_squid()
         if not self._measuring_holder:
@@ -713,6 +728,13 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             raise HardwareError('Complete the original stage before starting specimen acquisition.')
 
     def read_susceptibility(self) -> float:
+        """Acquire susceptibility and settle its original queue stage."""
+        if getattr(self, '_queue_specimen_geometry', None) is not None:
+            from .queue_acquisition import run_queue_acquisition
+            return run_queue_acquisition(self, 'susceptibility', self._read_susceptibility_unowned)
+        return self._read_susceptibility_unowned()
+
+    def _read_susceptibility_unowned(self) -> float:
         """Run the VB6 ``Susceptibility_Measure`` sequence for the current sample.
 
         The value is ``(scaled_sample - holder.susceptibility_raw) *

@@ -91,7 +91,11 @@ unchanged. The binding includes the original scientific settings and XY home pai
 Wrong/returned specimens, changed settings and unrelated pending stages fail closed;
 own field stages retain immutable geometry in their durable plans. Acquisition cannot
 borrow an unfinished field stage. See `queue-specimen-geometry.md`. The coordinator
-still must invoke this binding and stage ordinary acquisition/transfer I/O.
+still must invoke this binding and stage remaining transfer I/O. Public bound-specimen
+SQUID/susceptibility reads and flux recovery now stage ordinary acquisition under the
+original claim, validate measurement evidence and independently verify all four motor
+stops before publication/handoff. Failures retain the journal and specimen grip. See
+`queue-acquisition.md`; the worker/coordinator integration remains open.
 
 Wire the separate pump/valve phases under the durable parent queue and record each
 remaining native motion/acquisition/transfer stage. Wire accepted empty-hole resolution and

@@ -35,11 +35,12 @@ and lease retention. No physical instruments are actuated.
 This checkpoint does not qualify live queue operation. Queue vacuum must gain a
 coordinated lifetime: the main vacuum panel's diagnostic hold currently prevents
 native queue preflight, while a disconnected or released vacuum prevents queue
-startup. Durable ordinary acquisition and non-treatment motion recovery also
-remain required. Preserve the legacy sample-transfer order when implementing that
+startup. Bound-specimen ordinary acquisition now has durable settlement and four-axis
+stop evidence; see `queue-acquisition.md`. Queue worker/coordinator claim wiring and
+non-treatment motion recovery remain required. Preserve the legacy sample-transfer order when implementing that
 coordinator; physical gripper, pressure, clearance and scientific acceptance remain
 open. The portable pilot must be rebuilt after the remaining software work.
 
 The durable parent/stage primitive is now implemented in the shared
 `queue_safety` module; see `queue-safety-journal.md`. Operator workflow wiring and
-native motion/acquisition/output verification still remain required.
+remaining native motion/output verification still remain required.

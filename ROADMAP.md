@@ -1291,3 +1291,30 @@ acquisition/transfer work, implement blank-holder geometry, live reference/field
 proof, operator tray inversion/per-file orientation and original-panel recovery/terminal
 release. Auxiliary tools, portable rebuilding and physical/scientific station acceptance
 remain open full-system requirements. Goal active.
+
+### Durable bound-specimen acquisition (2026-10-03)
+
+Public bound-specimen SQUID and susceptibility reads now begin acquisition stages
+before instrument connection/reset/motion I/O. Original measured geometry and scientific
+settings remain bound through cleanup. SQUID settlement requires six coherent observations,
+matching sample/run/position audit and completed command evidence; susceptibility requires
+a new typed physical record, matching measured-height target, successful phases, finite
+result and verified safe return. Failed bridge evidence is retained. Flux-count recovery
+also starts a distinct owned stage and cannot replay a pending acquisition.
+
+All four original motor axes receive independent Stop and stable register 1/7 checks.
+Cancellation, acquisition failure, missing Stop acknowledgement, configuration changes
+and evidence publication failure retain the pending stage and specimen grip. Native
+preflight stays on the original worker instead of crossing a timeout thread boundary.
+See docs/queue-acquisition.md for evidence requirements and integration boundaries.
+
+Verification: all 998 isolated tests pass in 179.054 seconds, including 15 new queue
+acquisition regressions using the real journal, native routed stop telemetry and injected
+measurement instruments. Six-panel/six-helper source smoke passes; compile and diff checks
+pass. No physical instruments actuated.
+
+Still wire the original queue claim and geometry APIs into the complete automatic
+coordinator/MeasurementWorker, implement blank-holder geometry and live reference/field/
+support proof, restore operator tray inversion/per-file orientation, and implement original-
+panel recovery and terminal vacuum release. Auxiliary tools, portable rebuilding and
+physical/scientific station acceptance remain open. The full-system goal stays active.
