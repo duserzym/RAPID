@@ -14,12 +14,44 @@ This module recovers the same values:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
+import hashlib
 from pathlib import Path
 from typing import Iterable
 
 from rapid_main.data_model import SampleIndexRegistration, SampleIndexRegistrations, SpecimenMeta
 from rapid_main.io.specimen_reader import read_specimen
+
+
+def _source_digest(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def capture_specimen_metadata(name: str, *, sample_dir: Path,
+                              registrations: SampleIndexRegistrations) -> dict:
+    """Freeze header selection, including absent candidates, before queue I/O."""
+    paths = candidate_specimen_paths(name, sample_dir=sample_dir)
+    sources = {str(path.resolve()): _source_digest(path) for path in paths}
+    resolution = resolve_specimen_meta(name, sample_dir=sample_dir, registrations=registrations)
+    if sources != {str(path.resolve()): _source_digest(path) for path in paths}:
+        raise ValueError('Specimen header changed while preparing the queue.')
+    return dict(meta=asdict(resolution.meta), source=resolution.source,
+                header_path=str(resolution.header_path.resolve()) if resolution.header_path else None,
+                registration=asdict(resolution.registration) if resolution.registration else None,
+                defaulted_fields=list(resolution.defaulted_fields), sources=sources)
+
+
+def restore_specimen_metadata(snapshot: dict) -> 'SpecimenMetaResolution':
+    """Verify original inputs and return detached frozen scientific metadata."""
+    for path, digest in snapshot['sources'].items():
+        if _source_digest(Path(path)) != digest:
+            raise ValueError('The original specimen header changed after queue preparation.')
+    return SpecimenMetaResolution(meta=SpecimenMeta(**snapshot['meta']), source=snapshot['source'],
+        header_path=Path(snapshot['header_path']) if snapshot['header_path'] else None,
+        registration=SampleIndexRegistration(**snapshot['registration']) if snapshot['registration'] else None,
+        defaulted_fields=tuple(snapshot['defaulted_fields']))
 
 
 @dataclass(frozen=True)

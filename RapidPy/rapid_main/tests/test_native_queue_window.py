@@ -11,6 +11,8 @@ from PySide6 import QtCore, QtWidgets
 from rapid_main.app import MainWindow
 from rapid_main.device_ownership import DeviceOwnershipError
 from rapid_main.queue_compiler import QueueSample, QueueOptions
+from rapid_main.data_model import SpecimenMeta
+from rapid_main.io.specimen_writer import write_header
 from tests import test_queue_startup as startup_fixture
 
 
@@ -23,14 +25,27 @@ class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestC
         path.write_text('S1 2 OriginalUnit OriginalSite\n', encoding='latin-1')
         identity = os.path.normcase(str(path.resolve()))
         sample = QueueSample('S1', identity, 1, source_file=identity)
+        header = path.parent / 'S1'
+        write_header(header, SpecimenMeta('S1', comment='Original header', volume=8.2, core_plate_strike=123))
         with self.arm_xy_edges(), patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.StandardButton.Yes):
             self.assertTrue(self.window.start_queue_run([sample], QueueOptions()))
             self.wait_for(lambda: bool(self.started), timeout=30)
         source, registrations = self.window.queue_measurement_source('S1')
         self.assertEqual(source, path.resolve())
         self.assertEqual(registrations.entries[0].formation, 'OriginalUnit')
+        metadata = self.window.queue_measurement_metadata('S1')
+        self.assertEqual((metadata.meta.volume, metadata.meta.core_plate_strike), (8.2, 123))
         before = len(self.commands), len(self.vacuum_serial.writes)
         captured = self.window._queue_source_indexes[identity]
+        captured['specimens']['S1']['meta']['volume'] = 99
+        with self.assertRaisesRegex(ValueError, 'journaled index metadata'):
+            self.window.queue_measurement_metadata('S1')
+        captured['specimens']['S1']['meta']['volume'] = 8.2
+        original_header = header.read_bytes()
+        header.write_bytes(original_header + b'changed\n')
+        with self.assertRaisesRegex(ValueError, 'header changed'):
+            self.window.queue_measurement_metadata('S1')
+        header.write_bytes(original_header)
         captured['entries'][0]['formation'] = 'Changed'
         with self.assertRaisesRegex(ValueError, 'journaled index metadata'):
             self.window.queue_measurement_source('S1')

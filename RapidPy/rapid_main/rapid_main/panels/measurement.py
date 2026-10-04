@@ -526,11 +526,14 @@ class MeasurementPanel(QtWidgets.QWidget):
 
         labels = getattr(mw, "_sequence_labels", [])
         queue_source = None
+        queue_metadata = None
         if queue_run and hasattr(mw, 'queue_measurement_labels'):
             try:
                 labels = mw.queue_measurement_labels(sample)
                 if hasattr(mw, 'queue_measurement_source'):
                     queue_source = mw.queue_measurement_source(sample)
+                if hasattr(mw, 'queue_measurement_metadata'):
+                    queue_metadata = mw.queue_measurement_metadata(sample)
             except Exception as exc:
                 mw.set_status('Queue sequence cannot start: ' + str(exc))
                 return False
@@ -569,7 +572,7 @@ class MeasurementPanel(QtWidgets.QWidget):
         # VB6 reads comment, orientation, volume, and the sample hierarchy from
         # the specimen header and the .sam registry, and writes them into every
         # output. Resolve the same values instead of starting with blanks.
-        resolution = resolve_specimen_meta(
+        resolution = queue_metadata or resolve_specimen_meta(
             self._current_sample,
             sample_dir=(queue_source[0].parent if queue_source else (cfg.general.sample_dir if cfg else None)),
             data_dir=(None if queue_source else (cfg.general.data_dir if cfg else None)),

@@ -25,6 +25,7 @@ from . import software_version
 from .config import AppConfig
 from .data_model import SampleIndexRegistration, SampleIndexRegistrations
 from .io.sample_index import read_sample_index_registrations
+from .specimen_metadata import capture_specimen_metadata, restore_specimen_metadata
 from .hardware_contracts import (
     MeasurementAutomationBackend,
     QueueHardwareBackend,
@@ -999,6 +1000,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 matches = [entry for entry in self._queue_source_indexes[identity]['entries'] if entry['specimen_name'] == sample.sample_name]
                 if len(matches) != 1:
                     raise ValueError('Each queued specimen must match exactly one entry in its original source index.')
+                source = self._queue_source_indexes[identity]
+                snapshots = source.setdefault('specimens', {})
+                if sample.sample_name not in snapshots:
+                    snapshots[sample.sample_name] = capture_specimen_metadata(sample.sample_name,
+                        sample_dir=path.parent, registrations=SampleIndexRegistrations([
+                            SampleIndexRegistration(**entry) for entry in source['entries']]))
             for plan in (self._rockmag_routine_plan, self._thermal_routine_plan):
                 if plan is not None and any(command.command_type == 'Meas'
                         and list(command.measurement_labels) != list(plan.to_queue_labels()) for command in self._queue_plan):
@@ -1368,6 +1375,13 @@ class MainWindow(QtWidgets.QMainWindow):
             raise ValueError('The original sample index changed after queue preparation.')
         registrations = SampleIndexRegistrations([SampleIndexRegistration(**entry) for entry in source['entries']])
         return path, registrations
+
+    def queue_measurement_metadata(self, sample_name: str):
+        source = self.queue_measurement_source(sample_name)
+        if source is None:
+            return None
+        snapshot = self._queue_source_indexes[self._queue_current_command.file_id]['specimens'][sample_name]
+        return restore_specimen_metadata(snapshot)
 
     def _set_queue_sample_status(self, sample_name: str, status: str) -> None:
         command = self._queue_current_command

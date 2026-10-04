@@ -74,7 +74,7 @@ for reads. Manually grouped rows without a source retain their prior metadata pa
 this does not invent source-index provenance for old queues.
 
 This proves source-index routing and integrity, not full legacy registry or final
-scientific acceptance. Source specimen-header snapshots/digests, registry progress
+scientific acceptance. Registry progress
 counters, standalone selection provenance, complete scientific bundle acceptance,
 earlier-stage/restart recovery and the other qualification gates remain required.
 
@@ -96,3 +96,17 @@ exhaust its bound, retain the pending token and remove its temporary file. The
 native-window pause test allows 30 seconds for its combined startup/holder/load/
 QThread-exit observation while preserving its original no-start/no-reload assertions;
 production hardware deadlines are unchanged.
+
+Index-backed queues also capture specimen metadata before native root creation.
+The snapshot contains header selection, complete resolved metadata, registration,
+defaulted fields and SHA-256 for each candidate source (or explicit absence).
+Changes while preparing the snapshot fail admission. The original journal links
+these values; handoff rejects changed/removed header files, newly created headers,
+and edited in-memory metadata. Workers receive detached frozen metadata rather
+than resolving headers again at measurement time. The digest conservatively covers
+the whole source specimen file, including any measurement records after its header.
+Manually grouped rows keep their existing resolution behavior.
+
+This closes the queue's header snapshot/routing gap. Final scientific artifact
+provenance/acceptance, standalone selection provenance, path containment, registry
+progress/eligibility/.UP handling and all remaining qualification gates still apply.

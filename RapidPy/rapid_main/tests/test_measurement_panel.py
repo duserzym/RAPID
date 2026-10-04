@@ -7,9 +7,11 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
-from rapid_main.data_model import MeasurementStep
+from rapid_main.data_model import MeasurementStep, SpecimenMeta
+from rapid_main.io.specimen_writer import write_header
+from rapid_main.specimen_metadata import capture_specimen_metadata, restore_specimen_metadata
 from rapid_main.dialogs.plots import PlotsDialog
 from rapid_main.hardware_contracts import NoCommBackend
 from rapid_main.measurement_worker import StepResult
@@ -43,12 +45,20 @@ class _WindowWithNonCallableBackendAttr:
 
 
 class TestMeasurementPanelHelpers(unittest.TestCase):
+    @staticmethod
+    def _dispose_window(window):
+        window.deleteLater()
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
+        QtWidgets.QApplication.instance().processEvents()
+
     def test_queue_uses_original_index_metadata_and_separate_outputs_for_duplicate_names(self):
         window = QtWidgets.QMainWindow()
+        self.addCleanup(self._dispose_window, window)
         panel = MeasurementPanel(window)
         window._sequence_labels = ['IRM100']
         window.queue_measurement_labels = lambda name: ['NRM']
         window.measurement_backend = lambda: NoCommBackend()
+        window.set_status = lambda message: None
         window.sample_registrations = SampleIndexRegistrations([SampleIndexRegistration('SAME', formation='WrongUnit', location='WrongSite')])
         folders = []
         with tempfile.TemporaryDirectory() as directory:
@@ -61,15 +71,21 @@ class TestMeasurementPanelHelpers(unittest.TestCase):
                 index.parent.mkdir()
                 index.write_text('SAME 2 ' + unit + ' Site\n', encoding='latin-1')
                 registrations = read_sample_index_registrations(index)
+                write_header(index.parent / 'SAME', SpecimenMeta('SAME', comment='Header', volume=8.2, core_plate_strike=123))
+                snapshot = capture_specimen_metadata('SAME', sample_dir=index.parent, registrations=registrations)
                 window.queue_measurement_source = lambda name, index=index, registrations=registrations: (index, registrations)
+                window.queue_measurement_metadata = lambda name, snapshot=snapshot: restore_specimen_metadata(snapshot)
                 with patch.object(MeasurementWorker, 'start', lambda worker: None):
                     self.assertTrue(panel.start_measurement_for_sample('SAME', queue_run=True))
                 self.assertEqual(panel._worker._meta.site, unit)
                 self.assertEqual(panel._worker._meta.location, 'Site')
+                self.assertEqual((panel._worker._meta.volume, panel._worker._meta.core_plate_strike), (8.2, 123))
                 folders.append(panel._worker._output_dir)
+                worker = panel._worker
+                (index.parent / 'SAME').write_bytes(b'Changed header\n')
+                self.assertFalse(panel.start_measurement_for_sample('SAME', queue_run=True))
+                self.assertIs(panel._worker, worker)
             self.assertNotEqual(folders[0], folders[1])
-        window.deleteLater()
-
     @classmethod
     def setUpClass(cls) -> None:
         cls._app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])

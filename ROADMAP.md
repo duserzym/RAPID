@@ -1782,3 +1782,29 @@ process exit. Resolving this full-suite teardown regression remains required.
 Focused source/queue/panel/row-identity/orchestration runs exited normally; source
 smoke passed all six panels, compilation and diff checks passed. Injected interfaces
 were used throughout; no physical scientific station was actuated or qualified.
+
+Queue specimen-header provenance checkpoint: index-backed specimens now freeze
+resolved orientation, volume, folding parameters, comment/hierarchy, selected header
+path, defaulted fields and registration before native root creation. Candidate paths
+record SHA-256 or absence. Captures reject a source changed during parsing; handoff
+rejects changed/removed headers and a header created after an absent capture. The
+resolved metadata is detached on each handoff and compared through the original
+journaled index snapshot, preventing in-memory metadata edits from replacing it.
+Measurement workers use the frozen resolution rather than reopening headers.
+
+Four pure metadata cases exited normally (0.167 seconds); 16 panel cases passed
+and exited normally with explicit test-window cleanup (3.660 seconds); 15 injected
+native MainWindow cases passed and exited normally (164.911 seconds), including
+header-byte and captured-metadata tampering with no further hardware I/O. Full-suite
+verification is in progress. Header/index provenance in final scientific artifact
+bundles, standalone selection provenance, input/output path containment, registry
+step-progress/eligibility/.UP handling and the existing completion gates remain
+required. Physical/scientific station qualification is not established by fixtures.
+
+Full checkpoint run: all 1,206 assertions passed in 531.845 seconds. The owned
+process reached Qt shutdown and interpreter return but has not exited normally;
+its original process/session is retained for continued diagnosis, not restarted.
+The explicit panel fixture cleanup passed focused verification but does not yet
+establish resolution of the full-suite teardown regression. Source smoke passed
+six panels and exited normally; compileall and diff checks passed. Full-system
+completion remains unproven and the goal remains active.
