@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import hashlib
+from copy import deepcopy
 import json
 import re
 import threading
@@ -48,6 +49,7 @@ from PySide6 import QtCore
 from rapid_main.analysis import ReadingCycleStatistics, reading_cycle_statistics
 from rapid_main.communication_log import CommunicationEvent, CommunicationLogger
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
+from rapid_main.specimen_metadata import validate_specimen_provenance
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
 from rapid_main.geometry import Cartesian3D, cartesian3d_to_angular3d
 from rapid_main.magnetometer import (
@@ -151,9 +153,14 @@ class MeasurementWorker(QtCore.QThread):
         routine_context: Mapping[str, Any] | None = None,
         thermal_context: Mapping[str, Any] | None = None,
         parent: Optional[QtCore.QObject] = None,
+        *,
+        specimen_provenance: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(parent)
-        self._meta = meta
+        self._specimen_provenance = deepcopy(dict(specimen_provenance)) if specimen_provenance is not None else None
+        if self._specimen_provenance is not None:
+            validate_specimen_provenance(self._specimen_provenance, meta)
+        self._meta = deepcopy(meta)
         self._labels = list(labels)
         self._output_dir = Path(output_dir)
         self._backend = backend or NoCommBackend()
@@ -939,6 +946,7 @@ class MeasurementWorker(QtCore.QThread):
             "calibration_records": list(self._calibration_records),
             "rockmag_routine": dict(self._routine_context) if self._routine_context else None,
             "thermal_routine": dict(self._thermal_context) if self._thermal_context else None,
+            "specimen_source": deepcopy(self._specimen_provenance),
         }
 
     def _run_provenance(self) -> dict[str, object]:
@@ -1252,6 +1260,7 @@ class MeasurementWorker(QtCore.QThread):
                 SIMULATION_STATEMENT.strip() if self._simulated else ""
             ),
             "published_paths": dict(self._published_paths),
+            "specimen_source": deepcopy(self._specimen_provenance),
             "rockmag_routine": (
                 str(self._routine_context.get("routine_name", ""))
                 if self._routine_context is not None
@@ -1269,6 +1278,13 @@ class MeasurementWorker(QtCore.QThread):
             ],
             "generated_at_iso": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
             "artifacts": [
+                entry(
+                    "measurement_provenance",
+                    self._publish_dir / 'provenance.json',
+                    required=not aborted,
+                    producer='MeasurementBundleWriter',
+                    description='Scientific metadata and original queue source provenance.',
+                ),
                 entry(
                     "vb6_specimen_file",
                     self._publish_dir / self._meta.name,

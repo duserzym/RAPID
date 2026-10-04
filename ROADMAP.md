@@ -1808,3 +1808,33 @@ The explicit panel fixture cleanup passed focused verification but does not yet
 establish resolution of the full-suite teardown regression. Source smoke passed
 six panels and exited normally; compileall and diff checks passed. Full-system
 completion remains unproven and the goal remains active.
+
+Scientific source-artifact checkpoint: the MainWindow exports only original,
+journal-verified index/header snapshots at the measurement handoff. The panel
+validates source provenance against frozen metadata before worker leases. Workers
+copy both metadata and source context, reject mismatches/nonfinite JSON, and publish
+source file/index SHA-256, file/row identity and complete specimen snapshot in
+provenance.json and artifact_index.json. Aborted manifests retain source evidence
+without publishing a scientific bundle. Legacy/manual rows carry no invented source.
+The artifact manifest now includes required completed-run provenance.json with its
+SHA-256; previously that generated file was absent from the manifest.
+
+Focused verification exited normally: three source-artifact cases (0.164 seconds),
+five metadata cases (0.189 seconds), 16 panel cases (2.902 seconds), 22 worker cases
+(2.369 seconds) and 15 injected native MainWindow cases (148.777 seconds). The source
+smoke exited normally with six panels; compilation and diff checks passed. The
+retained earlier full-suite process was still live after interpreter return and
+was stopped after exact PID/parent/command validation because this changed source
+requires new verification. A fresh 1,210-test full run is underway.
+
+Source provenance does not establish complete scientific bundle acceptance,
+per-file step progress/.UP combination/eligibility, standalone selection provenance,
+path containment, full-suite teardown, restart recovery, chain station support,
+remaining VB6 auxiliary functions, portable/performance or physical qualification.
+The full-system goal remains active.
+
+Full source-artifact checkpoint: all 1,210 assertions passed in 566.000 seconds.
+The owned process has reached Qt shutdown/interpreter return but has not yet exited
+normally; its original handle is retained for continued diagnosis. This is passing
+assertion evidence, not a clean full-suite process-exit result. The recorded
+full-suite teardown issue remains a completion gate.

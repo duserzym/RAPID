@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import json
 import hashlib
+from copy import deepcopy
 import os
 import subprocess
 import uuid
@@ -25,7 +26,7 @@ from . import software_version
 from .config import AppConfig
 from .data_model import SampleIndexRegistration, SampleIndexRegistrations
 from .io.sample_index import read_sample_index_registrations
-from .specimen_metadata import capture_specimen_metadata, restore_specimen_metadata
+from .specimen_metadata import capture_specimen_metadata, restore_specimen_metadata, validate_specimen_provenance
 from .hardware_contracts import (
     MeasurementAutomationBackend,
     QueueHardwareBackend,
@@ -1382,6 +1383,18 @@ class MainWindow(QtWidgets.QMainWindow):
             return None
         snapshot = self._queue_source_indexes[self._queue_current_command.file_id]['specimens'][sample_name]
         return restore_specimen_metadata(snapshot)
+
+    def queue_measurement_provenance(self, sample_name: str):
+        metadata = self.queue_measurement_metadata(sample_name)
+        if metadata is None:
+            return None
+        command = self._queue_current_command
+        source = self._queue_source_indexes[command.file_id]
+        provenance = deepcopy(dict(schema='rapidpy.queue_specimen_source.v1', file_id=command.file_id,
+            row_id=command.row_id, source_file=source['source_file'], index_sha256=source['sha256'],
+            specimen=source['specimens'][sample_name]))
+        validate_specimen_provenance(provenance, metadata.meta)
+        return provenance
 
     def _set_queue_sample_status(self, sample_name: str, status: str) -> None:
         command = self._queue_current_command

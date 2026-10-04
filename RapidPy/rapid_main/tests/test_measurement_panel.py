@@ -75,11 +75,15 @@ class TestMeasurementPanelHelpers(unittest.TestCase):
                 snapshot = capture_specimen_metadata('SAME', sample_dir=index.parent, registrations=registrations)
                 window.queue_measurement_source = lambda name, index=index, registrations=registrations: (index, registrations)
                 window.queue_measurement_metadata = lambda name, snapshot=snapshot: restore_specimen_metadata(snapshot)
+                provenance = dict(schema='rapidpy.queue_specimen_source.v1', source_file=str(index),
+                    file_id=str(index), index_sha256='a' * 64, row_id='b' * 32, specimen=snapshot)
+                window.queue_measurement_provenance = lambda name, provenance=provenance: provenance
                 with patch.object(MeasurementWorker, 'start', lambda worker: None):
                     self.assertTrue(panel.start_measurement_for_sample('SAME', queue_run=True))
                 self.assertEqual(panel._worker._meta.site, unit)
                 self.assertEqual(panel._worker._meta.location, 'Site')
                 self.assertEqual((panel._worker._meta.volume, panel._worker._meta.core_plate_strike), (8.2, 123))
+                self.assertEqual(panel._worker._base_provenance()['specimen_source'], provenance)
                 folders.append(panel._worker._output_dir)
                 worker = panel._worker
                 (index.parent / 'SAME').write_bytes(b'Changed header\n')

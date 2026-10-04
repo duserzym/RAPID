@@ -110,3 +110,17 @@ Manually grouped rows keep their existing resolution behavior.
 This closes the queue's header snapshot/routing gap. Final scientific artifact
 provenance/acceptance, standalone selection provenance, path containment, registry
 progress/eligibility/.UP handling and all remaining qualification gates still apply.
+
+The original captured scientific source is now exported into completed-run
+provenance.json and every run's artifact_index.json (including aborted runs).
+It carries source index path/SHA-256, compiled file/row identity and the complete
+frozen specimen snapshot. The MainWindow verifies the original journal and source
+bytes; the panel checks provenance/metadata equality before worker leases, and the
+worker copies both inputs. Mismatched or nonfinite source metadata is rejected.
+Completed-run provenance.json is a required manifest artifact with its own SHA-256.
+Aborted runs retain source context without publishing the scientific bundle.
+Manually grouped rows have no fabricated source provenance.
+
+These links support source traceability; full scientific acceptance still requires
+per-step/file progress and .UP combination/eligibility, artifact checks across real
+formats, standalone provenance, containment and all other completion gates.

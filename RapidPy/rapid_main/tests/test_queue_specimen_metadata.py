@@ -63,3 +63,8 @@ class QueueSpecimenMetadataTests(unittest.TestCase):
         with patch.object(specimen_metadata, 'resolve_specimen_meta', changing_resolver):
             with self.assertRaisesRegex(ValueError, 'header changed while preparing'):
                 self.capture()
+
+    def test_nonfinite_header_metadata_cannot_enter_a_queue_snapshot(self):
+        write_header(self.root / 'A', SpecimenMeta('A', volume=float('nan')))
+        with self.assertRaises(ValueError):
+            self.capture()

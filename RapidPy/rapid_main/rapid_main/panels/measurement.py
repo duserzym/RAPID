@@ -12,7 +12,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from rapid_main.analysis import ReadingCycleStatistics, reading_cycle_statistics
 from rapid_main.calibration_registry import CalibrationRegistry, CalibrationRegistryError
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
-from rapid_main.specimen_metadata import resolve_specimen_meta
+from rapid_main.specimen_metadata import resolve_specimen_meta, validate_specimen_provenance
 from rapid_main.device_ownership import DeviceOwnershipError
 from rapid_main.dialogs.plots import build_quicklook_summary, write_quicklook_json
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
@@ -527,6 +527,7 @@ class MeasurementPanel(QtWidgets.QWidget):
         labels = getattr(mw, "_sequence_labels", [])
         queue_source = None
         queue_metadata = None
+        queue_provenance = None
         if queue_run and hasattr(mw, 'queue_measurement_labels'):
             try:
                 labels = mw.queue_measurement_labels(sample)
@@ -534,6 +535,12 @@ class MeasurementPanel(QtWidgets.QWidget):
                     queue_source = mw.queue_measurement_source(sample)
                 if hasattr(mw, 'queue_measurement_metadata'):
                     queue_metadata = mw.queue_measurement_metadata(sample)
+                if hasattr(mw, 'queue_measurement_provenance'):
+                    queue_provenance = mw.queue_measurement_provenance(sample)
+                if queue_provenance is not None:
+                    if queue_metadata is None:
+                        raise ValueError('Queue source provenance requires its original resolved metadata.')
+                    validate_specimen_provenance(queue_provenance, queue_metadata.meta)
             except Exception as exc:
                 mw.set_status('Queue sequence cannot start: ' + str(exc))
                 return False
@@ -647,6 +654,7 @@ class MeasurementPanel(QtWidgets.QWidget):
             ),
             routine_context=routine_context,
             thermal_context=thermal_context,
+            specimen_provenance=queue_provenance,
             parent=self,
         )
         self._worker.step_started.connect(self._on_step_started)

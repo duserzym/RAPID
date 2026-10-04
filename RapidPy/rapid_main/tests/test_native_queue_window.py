@@ -35,6 +35,11 @@ class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestC
         self.assertEqual(registrations.entries[0].formation, 'OriginalUnit')
         metadata = self.window.queue_measurement_metadata('S1')
         self.assertEqual((metadata.meta.volume, metadata.meta.core_plate_strike), (8.2, 123))
+        provenance = self.window.queue_measurement_provenance('S1')
+        self.assertEqual(provenance['source_file'], str(path.resolve()))
+        self.assertEqual(provenance['specimen']['meta']['volume'], 8.2)
+        provenance['specimen']['meta']['volume'] = 999
+        self.assertEqual(self.window.queue_measurement_provenance('S1')['specimen']['meta']['volume'], 8.2)
         before = len(self.commands), len(self.vacuum_serial.writes)
         captured = self.window._queue_source_indexes[identity]
         captured['specimens']['S1']['meta']['volume'] = 99

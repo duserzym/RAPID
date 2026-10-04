@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
 import hashlib
+import json
 from pathlib import Path
 from typing import Iterable
 
@@ -37,10 +38,20 @@ def capture_specimen_metadata(name: str, *, sample_dir: Path,
     resolution = resolve_specimen_meta(name, sample_dir=sample_dir, registrations=registrations)
     if sources != {str(path.resolve()): _source_digest(path) for path in paths}:
         raise ValueError('Specimen header changed while preparing the queue.')
-    return dict(meta=asdict(resolution.meta), source=resolution.source,
+    snapshot = dict(meta=asdict(resolution.meta), source=resolution.source,
                 header_path=str(resolution.header_path.resolve()) if resolution.header_path else None,
                 registration=asdict(resolution.registration) if resolution.registration else None,
                 defaulted_fields=list(resolution.defaulted_fields), sources=sources)
+    json.dumps(snapshot, allow_nan=False)
+    return snapshot
+
+
+def validate_specimen_provenance(provenance: dict, meta: SpecimenMeta) -> None:
+    snapshot = provenance.get('specimen')
+    if (provenance.get('schema') != 'rapidpy.queue_specimen_source.v1'
+            or not isinstance(snapshot, dict) or snapshot.get('meta') != asdict(meta)):
+        raise ValueError('Specimen provenance must match the original resolved metadata.')
+    json.dumps(provenance, allow_nan=False)
 
 
 def restore_specimen_metadata(snapshot: dict) -> 'SpecimenMetaResolution':
