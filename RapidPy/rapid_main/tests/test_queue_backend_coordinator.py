@@ -12,7 +12,7 @@ from tests import test_queue_field_outputs as field_fixture
 from tests import test_queue_specimen_geometry as geometry_fixture
 
 
-class QueueBackendCoordinatorTests(QueueLiftFixture, unittest.TestCase):
+class QueueBackendCoordinatorFixture(QueueLiftFixture):
     def additional_stage_profiles(self):
         scientific = geometry_fixture.QueueSpecimenGeometryTests.additional_stage_profiles(self)
         fields = field_fixture.QueueFieldOutputsTests.additional_stage_profiles(self)
@@ -49,6 +49,8 @@ class QueueBackendCoordinatorTests(QueueLiftFixture, unittest.TestCase):
         worker = self.command(lambda: self.backend.load_queue_specimen(1, 'S1', file_id='F1'))
         self.assertTrue(worker.ok, worker.error)
 
+
+class QueueBackendCoordinatorTests(QueueBackendCoordinatorFixture, unittest.TestCase):
     def test_worker_load_binds_measured_geometry_and_return_clears_only_after_support_release(self):
         self.load_backend()
         self.assertIs(self.backend._safety_store, self.session.child_store)

@@ -41,11 +41,15 @@ def main() -> int:
         # still alive, rather than leaving C++ teardown to interpreter shutdown.
         application = QtCore.QCoreApplication.instance()
         if application is not None:
+            if args.stall_trace:
+                print('Test teardown: flushing deferred Qt deletions', flush=True)
             QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
             application.processEvents()
+            if args.stall_trace:
+                print('Test teardown: shutting down Qt application', flush=True)
             application.shutdown()
         if args.stall_trace:
-            faulthandler.cancel_dump_traceback_later()
+            print('Test teardown: returning to interpreter shutdown', flush=True)
         return 0 if result.wasSuccessful() else 1
 
 if __name__ == "__main__":

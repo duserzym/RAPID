@@ -118,7 +118,8 @@ class QueueVacuumBinding:
             raise HardwareSafetyError('Queue grip requires the vacuum pump powered.')
         if transfer_pose is not None:
             from .queue_lift_transfer import QueueVacuumPoseProof
-            if not isinstance(transfer_pose, QueueVacuumPoseProof):
+            from .queue_terminal import QueueTerminalPoseProof
+            if not isinstance(transfer_pose, (QueueVacuumPoseProof, QueueTerminalPoseProof)):
                 raise HardwareSafetyError('Native original specimen pose proof is required.')
             transfer_pose.require(self.session, valve_connected)
             motors_stopped_verified = True

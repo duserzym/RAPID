@@ -13,6 +13,10 @@ MeasurementWorker reports claim/hook failure once as an aborted result. The pare
 queue journal remains latched after a worker exits; claim release is not terminal
 output or workflow release.
 
+The native backend now has an explicit terminal lifetime finish and exact verified-
+record settlement claim; see `queue-terminal-cleanup.md`. Its OS lease is released
+only after the actual worker exits.
+
 `bind_queue_coordinator` attaches the native backend to its original routed motors,
 scientific stage profiles, AF/ARM/pulse circuit instances and fixed journal under
 the existing queue claim. Load/return revalidate these bindings before commands.

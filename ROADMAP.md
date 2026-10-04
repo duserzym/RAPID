@@ -1477,3 +1477,35 @@ competing/released/mismatched owners, owned failure-artifact rewriting before te
 signal, scientific/controller binding changes, measured specimen load/return, retained
 grip after failure, cancellation and typed SQUID recovery retention. Six-panel/six-helper
 source smoke, compile and diff checks pass. No physical instruments actuated.
+
+### Verified terminal queue output and transport settlement (2026-10-04)
+
+QueueHardwareBackend now finishes its original native lifetime through staged terminal
+cleanup. A bound specimen first returns through measured-height original-slot support,
+valve release and rod clearance. Cleared specimen/holder contexts or a referenced empty
+station then require fresh participating field cutoff, all-four-axis Stop/stable telemetry
+and top/clearance proof before both native vacuum OFF acknowledgements.
+
+A pending terminal close stage records pose, field and linked vacuum release evidence
+before independently closing the original vacuum/motor handles. Failed closes retain
+original client/serial identities and the borrowed owner. Live retries close only those
+handles; they never reopen ports, repeat output commands or replay transfer. Failed close
+or root publication retains ownership. A lost acknowledgement after successful root
+publication permits exact verified-record settlement; new child stage I/O remains denied.
+
+Only published independent output/transport proof can finish the parent queue and restore
+the backend's parent store. The OS lease remains held until the actual worker exits and
+its owner releases the session. See docs/queue-terminal-cleanup.md. Restart recovery cannot
+borrow this live close retry; original-panel restart recovery still needs implementation.
+
+MainWindow startup/full lease wiring, per-command slot/file/orientation, blank-holder and
+operator stages, chain transfers, auxiliary tools, portable rebuilding and physical/
+scientific station acceptance remain required. The full-system goal remains active.
+
+Verification: all 1,102 isolated main-app tests pass in 267.498 seconds with
+normal Qt teardown and process exit code zero. The 14 focused terminal regressions
+pass in 21.472 seconds; six-panel/six-helper source smoke, compilation and diff
+checks pass. Two earlier full attempts stalled at shutdown; --stall-trace now
+reports teardown boundaries and keeps its traceback timer available through
+interpreter exit. The diagnostic rerun completed normally. No physical instruments
+actuated; portable and physical/scientific qualification remain open.

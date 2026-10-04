@@ -434,6 +434,30 @@ class QueueWorkflowSession:
         finally:
             self._lock.release()
 
+    @contextmanager
+    def claim_verified_finish(self, record):
+        """Settle an acknowledged finish only; child I/O remains unavailable."""
+        if not self._lock.acquire(blocking=False):
+            raise HardwareSafetyError('Another queue worker still owns terminal settlement.')
+        try:
+            if self._lease is None:
+                raise HardwareSafetyError('Queue ownership has already been released.')
+            state = self.store.read()
+            if (not state or state['family'] != 'queue' or state['token'] != self.token
+                    or state['status'] != 'verified' or state['record'] != _record_snapshot(record)):
+                raise HardwareSafetyError('The exact original verified queue finish is required for settlement.')
+            self.store.verify_history(state)
+            self._owner = threading.get_ident()
+            self._depth += 1
+            try:
+                yield self.child_store
+            finally:
+                self._depth -= 1
+                if not self._depth:
+                    self._owner = None
+        finally:
+            self._lock.release()
+
 
 class QueueStageStore:
     """Treatment store adapter; only the current claimed worker may borrow it."""

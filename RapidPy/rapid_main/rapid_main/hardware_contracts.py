@@ -693,7 +693,14 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             return
         if self._config.general.nocomm is not False or store is not session.child_store:
             raise HardwareError('Only the original native queue can borrow a worker claim.')
-        with session.claim():
+        terminal = getattr(self, '_queue_terminal_cleanup', None)
+        state = session.store.read()
+        if (terminal is not None and terminal.last_root_record is not None
+                and state and state['status'] == 'verified'):
+            claim = session.claim_verified_finish(terminal.last_root_record)
+        else:
+            claim = session.claim()
+        with claim:
             yield
 
     def bind_queue_coordinator(self, coordinator):
@@ -718,6 +725,31 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                 or (self._halt_check is not None and self._halt_check()))
         self._queue_coordinator = coordinator
         self._safety_store = session.child_store
+        from .queue_terminal import QueueTerminalCleanup
+        self._queue_terminal_cleanup = QueueTerminalCleanup(coordinator)
+
+    def finish_queue_lifetime(self):
+        coordinator = getattr(self, '_queue_coordinator', None)
+        terminal = getattr(self, '_queue_terminal_cleanup', None)
+        if coordinator is None or terminal is None or terminal.coordinator is not coordinator:
+            raise HardwareError('The original native queue terminal owner is required.')
+        if terminal._close_token is None:
+            self._validate_queue_bindings(coordinator)
+            if getattr(self, '_queue_specimen_geometry', None) is not None:
+                self.return_queue_specimen()
+        record = terminal.finish()
+        state = coordinator.session.store.read()
+        if (state['token'] != coordinator.session.token or state['status'] != 'verified'
+                or state['record'] != record.to_dict()):
+            raise HardwareError('The original queue terminal record must verify before detaching its backend.')
+        self._safety_store = coordinator.session.store
+        self._queue_coordinator = None
+        self._queue_terminal_cleanup = None
+        self._connected = False
+        self._retain_transport_recoveries()
+        self._bracketed = None
+        self._bracketed_geometry_signature = None
+        return record
 
     def _validate_queue_bindings(self, coordinator):
         from .queue_station import QueueStationGeometry

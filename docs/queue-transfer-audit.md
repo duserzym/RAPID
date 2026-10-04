@@ -143,3 +143,10 @@ I/O, cleanup and artifact publication, then emit completion after claim release.
 Borrowed generic motor cleanup is blocked and verified specimen return uses the
 coordinator. See `queue-worker-ownership.md`. MainWindow still must create the full
 session/coordinator, hold device leases and supply each specimen's slot/file context.
+
+`finish_queue_lifetime` now stages terminal empty-rod clearance, participating field
+cutoff, acknowledged vacuum OFF and independent original motor/vacuum handle close.
+Close/root-publication failures retain the original owner; live close-only retries
+and exact verified-record settlement never replay outputs or motion. See
+`queue-terminal-cleanup.md`. MainWindow attachment and original-panel restart
+recovery remain open alongside startup, blank/operator and chain integration.
