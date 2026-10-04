@@ -1172,10 +1172,8 @@ class VacuumController:
 
     def disconnect(self) -> None:
         if self._serial is not None:
-            try:
-                self._serial.close()
-            finally:
-                self._serial = None
+            self._serial.close()
+            self._serial = None
         self._valve_connected = False
         self._motor_powered = False
 

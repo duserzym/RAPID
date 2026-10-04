@@ -55,3 +55,8 @@ motion/acquisition stage records and original-panel coordinated recovery. Integr
 those paths while preserving the legacy sample-transfer order and independent
 treatment cleanup. Physical pressure/gripper, clearance and scientific acceptance,
 remaining auxiliary tooling and a fresh portable build remain required.
+
+The main native vacuum adapter now supplies a claimed queue transport path; see
+`queue-vacuum-binding.md`. The transfer audit in `queue-transfer-audit.md` identifies
+the distinct pump/valve phases, blank-hole resolution and operator tray flipping
+which must be restored before enabling live queue startup.

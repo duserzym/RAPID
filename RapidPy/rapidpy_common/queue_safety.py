@@ -299,8 +299,9 @@ class QueueSafetyStore(HardwareSafetyStore):
 
 class QueueWorkflowSession:
     """An OS lease plus an exclusive worker capability for borrowed treatments."""
-    def __init__(self, store, token, lease):
+    def __init__(self, store, token, lease, *, recovering=False):
         self.store, self.token, self._lease = store, token, lease
+        self.is_recovery = recovering
         self._lock = threading.RLock()
         self._owner = None
         self._depth = 0
@@ -326,7 +327,7 @@ class QueueWorkflowSession:
             if not state or state['family'] != 'queue':
                 raise HardwareSafetyError('No matching unfinished queue exists.')
             store.verify_history(state)
-            return cls(store, state['token'], lease)
+            return cls(store, state['token'], lease, recovering=True)
         except BaseException:
             lease.__exit__(None, None, None)
             raise

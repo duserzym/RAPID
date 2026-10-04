@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable
 
 
@@ -134,13 +134,15 @@ def compile_queue(
             and measured_count % options.samples_between_holder == 0
             and cmds[-1].command_type != "Holder"
         ):
-            cmds.append(QueueCommand("Holder", item.hole))
+            # Holder is a blank at a station-resolved empty hole, never the
+            # specimen slot just measured. Zero requests that empty-hole path.
+            cmds.append(QueueCommand("Holder", 0))
 
     goto_hole = -1 if options.use_xy_table else _first_hole(samples, options.ascending)
     if options.load_return:
         cmds.append(QueueCommand("Goto", goto_hole))
 
-    cmds = preprocess_queue(cmds, per_file)
+    cmds = preprocess_queue(cmds, per_file, options=options)
 
     if options.do_return:
         cmds.append(QueueCommand("Goto", goto_hole))
@@ -148,31 +150,34 @@ def compile_queue(
     return cmds
 
 
-def preprocess_queue(commands: list[QueueCommand], per_file: dict[str, QueueSample]) -> list[QueueCommand]:
+def preprocess_queue(commands: list[QueueCommand], per_file: dict[str, QueueSample], *, options: QueueOptions | None = None) -> list[QueueCommand]:
     """Apply VB6-style preprocessing for dual-side sample measurements.
 
     For files marked doBoth+doUp, insert a Flip marker and duplicate Meas
     entries later in the queue so both orientations are measured.
     """
-    processed: list[QueueCommand] = []
+    options = options or QueueOptions()
+    appended: list[QueueCommand] = []
     needs_second_pass: dict[str, bool] = {}
+    second_pass_count = 0
 
     for cmd in commands:
-        processed.append(cmd)
         if cmd.command_type == "InitUp" and cmd.file_id:
             item = per_file.get(cmd.file_id)
             if item and item.do_both and item.do_up and item.measurement_step_count <= 1:
                 needs_second_pass[cmd.file_id] = True
-                processed.append(QueueCommand("Flip", -1, cmd.file_id, ""))
-                processed.append(QueueCommand("Holder", cmd.hole))
+                appended.append(QueueCommand("Flip", -1 if options.use_xy_table else 0, cmd.file_id, ""))
+                appended.append(QueueCommand("Holder", 0))
+        elif cmd.command_type == "Flip" and cmd.file_id:
+            needs_second_pass[cmd.file_id] = False
+        elif cmd.command_type == "Meas" and needs_second_pass.get(cmd.file_id, False):
+            appended.append(replace(cmd))
+            second_pass_count += 1
+            if (options.repeat_holder and options.samples_between_holder > 0
+                    and second_pass_count % options.samples_between_holder == 0):
+                appended.append(QueueCommand("Holder", 0))
 
-    if not needs_second_pass:
-        return processed
-
-    second_pass: list[QueueCommand] = []
-    for cmd in processed:
-        second_pass.append(cmd)
-        if cmd.command_type == "Meas" and cmd.file_id in needs_second_pass:
-            second_pass.append(QueueCommand("Meas", cmd.hole, cmd.file_id, cmd.sample_name))
-
-    return second_pass
+    # VB6 SampleCommands.Preprocess appends to the collection while visiting
+    # its original entries. Flip and repeat measurements therefore follow the
+    # entire original pass; inserting them beside InitUp flips before any read.
+    return list(commands) + appended

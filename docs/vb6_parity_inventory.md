@@ -341,3 +341,24 @@ hooks borrow the exclusive worker claim. `test_queue_safety.py` covers 28 journa
 regressions. See `docs/queue-safety-journal.md`. This is the durable coordinator
 primitive; native queue vacuum/motion/acquisition wiring and coordinated original-
 panel recovery, portable rebuilding and physical/scientific acceptance remain open.
+
+### Queue vacuum transport and transfer audit — 3 October 2026
+
+The actual main vacuum adapter can borrow a claimed queue session with exact original
+journal/port/baud/pressure-mode binding, before-output staging, native command/reply
+evidence and independent release preconditions. Failed enable/release/publication
+and failed transport closure retain the original owner; restart or a lost connection
+can recover OFF without replaying ON. `test_queue_vacuum.py` exercises 18 native
+transport regressions with an injected serial interface.
+
+The active `VB6/modChanger.bas`, `VB6/SampleCommand.cls` and
+`VB6/SampleCommands.cls` expose open transfer-parity requirements: distinct pump and
+gripper-valve phases, gentle pickup/sample-height/reference/empty-hole transfer,
+return to the original slot before valve release, blank-holder measurements at an
+actual empty location, marker-only InitUp and operator tray flipping with per-file
+orientation. Current generic native Goto/Meas/Holder/Flip paths do not prove these
+requirements. Keep automatic live startup gated until the coordinator implements
+them. Python preprocessing now appends second-pass commands after the original
+first pass and retains empty-hole holder markers; six complete-trace regressions
+cover those changes. See `docs/queue-vacuum-binding.md` and
+`docs/queue-transfer-audit.md`. No physical instruments were actuated.

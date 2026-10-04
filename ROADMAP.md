@@ -1113,3 +1113,39 @@ vacuum start/release, ordinary motion/acquisition stage records and original-pan
 coordinated recovery still need operator workflow wiring. Preserve the original
 sample-transfer sequence. Auxiliary tool completion, portable rebuilding and
 physical/scientific station acceptance remain open; the full-system goal is active.
+
+### 3 October 2026 — Native queue vacuum borrowing and pass-order correction
+
+The main vacuum adapter now borrows a claimed QueueWorkflowSession without a second
+OS lease. It validates the original fixed journal, helper identity, port, baud and
+pressure-mode binding before connection/output I/O. Positive thresholds require
+pressure telemetry; zero is explicit command-only mode. Both exact native command
+replies are retained, output stages persist before I/O, and cached connection OFF
+flags never prove release. Motor-stop, specimen-support and field-output-off checks
+must be strict True before release. Partial enable, failed release/publication and
+failed handle closure retain original ownership. Restart and a lost/reopened live
+connection permit OFF recovery without replaying ON; failed close retains the
+original handle for retry.
+
+The active VB6 transfer audit exposed scientific/physical parity gaps beyond the
+vacuum lease conflict. Specimen processing performs gentle pickup, valve grip,
+settling, lift/reference and empty-hole transfer before read, and returns to the
+original slot before valve release/lift clearance. Holder readings use a blank at
+an actual empty location. InitUp is a marker; Flip requests operator tray inversion
+and changes file-specific orientation, rather than rotating the rod 180 degrees.
+Keep automatic live startup gated until these phases and coordinated recovery are
+implemented. See docs/queue-transfer-audit.md and docs/queue-vacuum-binding.md.
+
+Python preprocessing now preserves the entire original first pass and appends
+Flip/Holder/repeat Meas commands in VB6 collection order. Second-pass periodic
+holder checks are retained, XY/non-XY flip markers are correct, repeat commands are
+independent copies, and periodic holder markers request the station-resolved empty
+hole instead of the last measured specimen slot.
+
+Verification: all 907 isolated tests pass in 124.857 seconds. All 119 queue tests
+pass, including 18 actual-native-controller/injected-serial vacuum regressions and
+six complete command-trace regressions. Six-panel/six-helper source smoke passes.
+No physical instruments were actuated. Operator workflow wiring, separate pump/
+valve transfer phases, durable motion/acquisition stages, original-panel recovery,
+auxiliary tools, portable rebuilding and physical/scientific acceptance remain
+required full-system work; the goal remains active.

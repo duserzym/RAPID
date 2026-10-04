@@ -1977,6 +1977,7 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
         from rapidpy_common.hardware_safety import HardwareSafetyStore, default_safety_path
         self._safety_store = HardwareSafetyStore(default_safety_path())
         self._hold_session = None
+        self._queue_binding = None
         self._state_lock = threading.RLock()
         self._operation_active = False
         self.output_state_known = False
@@ -1991,7 +1992,8 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
 
     @property
     def outputs_held(self):
-        return bool(self._hold_session and self._hold_session.active)
+        return bool((self._hold_session and self._hold_session.active)
+                    or (self._queue_binding is not None and self._queue_binding.held))
 
     @property
     def can_recover_pending(self):
@@ -2055,6 +2057,8 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
 
     def disconnect(self):
         with self._state_lock:
+            if self._queue_binding is not None:
+                raise HardwareError('The original queue owns this vacuum transport until its verified release.')
             if self.outputs_held:
                 raise HardwareError('Release and verify vacuum off before disconnecting.')
             if self._pump_only_controller is not None:
@@ -2075,6 +2079,10 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
         return bool(self._pump_only_controller and self._pump_only_controller.is_connected)
 
     def status(self) -> str:
+        if self._queue_binding is not None:
+            return self._queue_binding.error or ('Queue vacuum output state is unverified; original queue ownership is retained.'
+                if not self.output_state_known else 'Queue vacuum is commanded held; original queue ownership is retained.'
+                if self.outputs_held else 'Queue vacuum release is acknowledged; the queue still owns the transport.')
         if self.outputs_held:
             return 'Vacuum release is unverified; recover the original hold.' if self._hold_session.faulted else 'Vacuum commanded on; station ownership is retained until verified release.'
         if self.can_recover_pending:
@@ -2114,6 +2122,49 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
 
     def recover_release(self):
         self.set_pump(False)
+
+    def queue_station_binding(self):
+        from .queue_vacuum import queue_vacuum_binding
+        return queue_vacuum_binding(self)
+
+    def queue_connect(self, session):
+        from .queue_vacuum import QueueVacuumBinding
+        with self._state_lock:
+            self._operation_active = True
+            try:
+                if self._queue_binding is None:
+                    self._queue_binding = QueueVacuumBinding(self, session)
+                elif self._queue_binding.session is not session:
+                    prior = self._queue_binding.session
+                    if prior._lease is not None or prior.token != session.token or not session.is_recovery:
+                        raise HardwareError('Another queue lifetime already owns this vacuum transport.')
+                    self._queue_binding = QueueVacuumBinding(self, session)
+                self._queue_binding.connect(lambda: VacuumController(trace=self._trace))
+            finally:
+                self._operation_active = False
+
+    def queue_set_pump(self, session, enabled, **release_checks):
+        with self._state_lock:
+            self._operation_active = True
+            try:
+                if self._queue_binding is None or self._queue_binding.session is not session:
+                    raise HardwareError('Connect vacuum under its original queue lifetime first.')
+                return self._queue_binding.set_enabled(enabled, **release_checks)
+            finally:
+                self._operation_active = False
+
+    def queue_disconnect(self, session):
+        with self._state_lock:
+            self._operation_active = True
+            try:
+                if self._queue_binding is None or self._queue_binding.session is not session:
+                    raise HardwareError('This vacuum transport is not owned by the requested queue.')
+                self._queue_binding.detach()
+                self._queue_binding = None
+                self._hold_session = None
+                self._status = 'Queue vacuum release was acknowledged before transport disconnect.'
+            finally:
+                self._operation_active = False
 
     def is_pump_on(self) -> bool:
         if not self.output_state_known:
