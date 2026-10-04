@@ -1226,3 +1226,38 @@ pickup/grip/home/empty-hole/read/return/drop/release coordinator with dynamic sa
 height, live XY reference establishment, original-slot persistence, stop/support/
 field recovery and operator tray inversion/per-file orientation. Other full-system
 requirements and portable/physical/scientific acceptance remain open. Goal active.
+
+### Claimed specimen lift and durable transfer identity (2026-10-03)
+
+Added QueueLiftTransfer using the actual routed native motor client and original
+queue-owned vacuum transport. It implements gentle pickup, loaded top reference,
+raise-for-return above a verified empty location, supported original-slot dropoff
+and post-release lift clearance. Every phase persists specimen/file identity,
+original slot and intent before I/O, independently verifies stationary axes and
+required switch/position/XY readbacks, and publishes linked motion evidence.
+
+Measured specimen height is pickup position minus SampleBottom minus the live top
+reference offset. Dropoff uses that measured height without changing accepted motor
+calibration. Grip is required before loaded homing/return/dropoff; acknowledged valve
+OFF and accepted settling delay are required before post-release clearance. Imported
+DropoffVacuumDelay is finite/nonnegative or explicitly unaccepted. Timing is bound
+into the original motion profile and waits cooperatively without negative sleeps.
+
+Queue history now retrieves typed original specimen context across later acquisition
+and field events. Any pending stage makes the transfer phase unverified while keeping
+original identity/geometry. Cancellation, slop, failed commands/stop replies and failed
+publication retain ownership; lift failure paths never change vacuum outputs. Restart
+can inspect original context but cannot replay transfer.
+
+Verification: all 969 isolated tests pass in 137.997 seconds. Twenty-one new native
+routed motor/vacuum tests with injected serial responses cover the composed pickup,
+grip, home, empty-hole acquisition pose, original-slot return, supported dropoff,
+valve release and clearance path, including cancellation and recovery evidence.
+Six-panel/six-helper source smoke passes. No physical instruments actuated.
+
+Still wire these phases into the automatic queue coordinator and measurement worker,
+propagate measured height through bracketed SQUID, AF/ARM/IRM/RRM and susceptibility
+plans, establish the live XY reference, restore operator tray inversion/per-file
+orientation, and implement original-panel stop/field/support recovery and terminal
+vacuum release. Auxiliary tools, portable rebuilding and physical/scientific station
+acceptance remain required. The full-system goal remains active.

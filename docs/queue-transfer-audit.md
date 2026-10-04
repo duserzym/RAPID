@@ -68,6 +68,22 @@ coordinator. That coordinator must establish a fresh XY home reference, verify f
 outputs off and persist specimen transfer state; aligned coordinates alone do not
 prove specimen support or safe grip release.
 
+`rapid_main.queue_lift_transfer.QueueLiftTransfer` now implements claimed pickup,
+loaded top-reference, raise-for-return, supported original-slot dropoff and
+post-release clearance phases using the actual routed motor client. Typed specimen
+identity, original slot, raw pickup position and measured height are persisted before
+motion and in linked phase evidence. The height calculation subtracts the live home
+offset from pickup position minus SampleBottom; dropoff uses that measured height
+without mutating the accepted motor calibration. A pending later stage makes the
+recovered context unverified while retaining original identity and geometry.
+
+Grip must be acknowledged before loaded homing/return/dropoff; original-slot and
+stopped-motor readbacks must verify support before valve release is authorized by the
+coordinator. Post-release lift clearance requires acknowledged valve OFF and the
+accepted DropoffVacuumDelay. Native failure, cancellation and failed publication
+preserve the original journal/outputs. Recovery never replays transfer. See
+`queue-lift-transfer.md` for phase requirements and remaining integration work.
+
 Wire the separate pump/valve phases under the durable parent queue and record each
 remaining native motion/acquisition/transfer stage. Wire accepted empty-hole resolution and
 fresh readback verification into those stages, persist the specimen's original slot

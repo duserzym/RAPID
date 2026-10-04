@@ -162,6 +162,17 @@ HoleSlotNum=bad
         self.assertIn("MagnetometerCalibration.XCal", "\n".join(report.warnings))
         self.assertIn("AFWait", "\n".join(report.warnings))
 
+    def test_dropoff_delay_import_is_finite_nonnegative_or_unaccepted(self):
+        for raw, expected in (('1.2', 1.2), ('0', 0), ('-1', -1), ('nan', -1), ('bad', -1)):
+            with self.subTest(raw=raw), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'station.ini'
+                path.write_text('[Vacuum]\nDropoffVacuumDelay=' + raw)
+                config = AppConfig()
+                report = import_vb6_ini(config, path)
+                self.assertEqual(config.vacuum.dropoff_delay_s, expected)
+                if expected == -1:
+                    self.assertTrue(any('DropoffVacuumDelay' in warning for warning in report.warnings))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

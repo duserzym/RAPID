@@ -203,6 +203,7 @@ class VacuumConfig:
     warn_threshold:  float = 20.0   # mTorr
     auto_pump:       bool  = False
     poll_interval:   float = 2.0    # s
+    dropoff_delay_s:  float = 1.0    # VB6 DropoffVacuumDelay
 
 
 @dataclass

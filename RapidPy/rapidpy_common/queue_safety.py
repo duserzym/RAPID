@@ -282,6 +282,38 @@ class QueueSafetyStore(HardwareSafetyStore):
             raise HardwareSafetyError('Queue evidence history is incomplete.')
         return len(seen)
 
+    def latest_transfer_context(self, token):
+        """Read transfer identity from the original pending plan or linked evidence.
+
+        This never treats a pending motion intent as a completed physical phase.
+        Consumers must validate the typed context and obtain fresh support checks.
+        """
+        state = self._queue(token)
+        self.verify_history(state)
+        stage = state['stage']
+        if stage and stage['status'] == 'pending' and 'transfer_context' in stage['plan']:
+            context = _snapshot(stage['plan']['transfer_context'])
+            if not isinstance(context, dict):
+                raise HardwareSafetyError('Queue transfer context is malformed.')
+            context['phase'] = 'unverified'
+            return context
+        head = state['history_head']
+        while head:
+            payload = self._event_path(token, head['id']).read_bytes()
+            if hashlib.sha256(payload).hexdigest() != head['sha256']:
+                raise HardwareSafetyError('Queue transfer evidence changed during read.')
+            event = json.loads(payload)
+            context = event['stage']['record'].get('transfer_context')
+            if context is not None:
+                context = _snapshot(context)
+                if not isinstance(context, dict):
+                    raise HardwareSafetyError('Queue transfer context is malformed.')
+                if stage and stage['status'] == 'pending':
+                    context['phase'] = 'unverified'
+                return context
+            head = event['previous']
+        return None
+
     def finish_stage(self, token, stage_token, profile, record):
         snapshot = _record_snapshot(record)
         with self._locked():

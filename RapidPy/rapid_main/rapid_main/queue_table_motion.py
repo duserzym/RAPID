@@ -24,6 +24,7 @@ class QueueTableMoveRecord:
     record_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     timestamp_iso: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     schema: str = 'rapidpy.queue_xy_motion.v1'
+    transfer_context: dict | None = None
 
     def to_dict(self):
         return asdict(self)
@@ -32,7 +33,8 @@ class QueueTableMoveRecord:
 class QueueXYTableMotion:
     """No homing/replay: the caller must establish the live station reference."""
 
-    def __init__(self, motor, axes, geometry, *, sleep=time.sleep, should_cancel=lambda: False):
+    def __init__(self, motor, axes, geometry, *, sleep=time.sleep, should_cancel=lambda: False,
+                 transfer_settings=None):
         if not isinstance(motor, RoutedMotorSerialClient) or geometry.use_xy_table is not True:
             raise HardwareSafetyError('Queue XY transfers require the native routed station and XY geometry.')
         if set(axes) != {'changer_x', 'changer_y', 'updown', 'turning'}:
@@ -43,13 +45,14 @@ class QueueXYTableMotion:
             raise HardwareSafetyError('XY geometry and lift clearance must match the accepted motor calibration.')
         self.motor, self.axes, self.geometry = motor, copy.deepcopy(axes), geometry
         self.sleep, self.should_cancel = sleep, should_cancel
+        self.transfer_settings = copy.deepcopy(transfer_settings or {})
         self.profile = self._profile()
         self.last_record = None
 
     def _profile(self):
         return json.loads(json.dumps(dict(helper='rapid_main_queue_xy', geometry=asdict(self.geometry),
                     axes={key: asdict(axis) for key, axis in self.axes.items()},
-                    controller=asdict(self.motor.config))))
+                    controller=asdict(self.motor.config), transfer_settings=self.transfer_settings)))
 
     def _validate(self, session):
         session.child_store._owned()

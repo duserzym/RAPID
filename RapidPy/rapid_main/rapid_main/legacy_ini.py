@@ -616,6 +616,15 @@ def import_vb6_ini(config: AppConfig, path: str | Path) -> LegacyIniImportReport
 
     # Vacuum
     vac_section = "Vacuum"
+    raw = _value(parser, vac_section, 'DropoffVacuumDelay')
+    delay = 1.0 if raw is None else _parse_float(raw, default=-1.0,
+        section_key=vac_section, field='DropoffVacuumDelay', warnings=warnings)
+    if not math.isfinite(delay) or delay < 0:
+        warnings.append('Vacuum.DropoffVacuumDelay: finite nonnegative delay required; transfer delay remains unaccepted')
+        delay = -1.0
+    config.vacuum.dropoff_delay_s = delay
+    if raw is not None:
+        mark_mapped(vac_section, 'DropoffVacuumDelay', 'vacuum.dropoff_delay_s')
     raw = _value(parser, vac_section, "DoVacuumReset")
     if raw is not None:
         config.vacuum.auto_pump = _parse_bool(
