@@ -74,6 +74,7 @@ class SusceptibilitySerialClient:
         self._serial_factory = serial_factory
         self._clock = clock
         self._serial: object | None = None
+        self._connection_failed = False
         self._lock = threading.RLock()
         self._logger = logger or CommunicationLogger(
             "SUSCEPTIBILITY", port=str(config.port), max_payload_chars=2048
@@ -82,7 +83,8 @@ class SusceptibilitySerialClient:
     @property
     def is_connected(self) -> bool:
         transport = self._serial
-        return bool(transport is not None and getattr(transport, "is_open", False))
+        return (not self._connection_failed and transport is not None
+                and getattr(transport, "is_open", None) is True)
 
     def communication_events(self) -> tuple[CommunicationEvent, ...]:
         return tuple(self._logger.transcript.events)
@@ -103,22 +105,23 @@ class SusceptibilitySerialClient:
                     timeout=float(self.config.read_timeout_s),
                     write_timeout=float(self.config.read_timeout_s),
                 )
+                self._serial = transport
+                if getattr(transport, 'is_open', None) is not True:
+                    raise SusceptibilityTransportError('Serial transport did not report an open connection.')
             except Exception as exc:
+                self._connection_failed = True
                 self._logger.error(f"connect failed: {exc}")
+                if self._serial is not None:
+                    try:
+                        self.close()
+                    except Exception as close_error:
+                        raise SusceptibilityTransportError(
+                            f'Bridge connection failed: {exc}; cleanup failed, original handle retained: {close_error}'
+                        ) from exc
                 raise SusceptibilityTransportError(
                     f"Unable to open susceptibility bridge {self.config.port}:{self.config.baud}: {exc}"
                 ) from exc
-            if not bool(getattr(transport, "is_open", False)):
-                try:
-                    close = getattr(transport, "close", None)
-                    if callable(close):
-                        close()
-                finally:
-                    self._logger.error("connect failed: serial transport did not report open")
-                raise SusceptibilityTransportError(
-                    "Susceptibility bridge serial transport did not report an open connection."
-                )
-            self._serial = transport
+            self._connection_failed = False
             self._logger.info(
                 f"connected {self.config.port}:{self.config.baud} "
                 f"{self.config.parity},{self.config.bytesize},{self.config.stopbits:g}"
@@ -137,6 +140,7 @@ class SusceptibilitySerialClient:
                 self._logger.error(f'close failed; original handle retained: {exc}')
                 raise
             self._serial = None
+            self._connection_failed = False
             self._logger.info("disconnected")
 
     def zero(self) -> str:

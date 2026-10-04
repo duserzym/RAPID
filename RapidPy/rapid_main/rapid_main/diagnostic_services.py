@@ -1268,6 +1268,7 @@ class SquidBackendAdapter(_BaseBackend, SquidBackend):
             raise DiagnosticContractError(self._status) from exc
 
     def test_connection(self) -> bool:
+        self._baseline_raw = None
         self.connect_for_acquisition()
         reader = self._reader
 

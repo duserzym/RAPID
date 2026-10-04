@@ -731,6 +731,15 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                 or getattr(self, '_queue_specimen_geometry', None) is not None
                 or (getattr(self, '_queue_coordinator', None) is not None and self._queue_coordinator is not coordinator)):
             raise HardwareError('Restore the original idle queue backend before borrowing transfer ownership.')
+        if getattr(self, '_queue_coordinator', None) is coordinator:
+            terminal = getattr(self, '_queue_terminal_cleanup', None)
+            operator = getattr(self, '_queue_operator_stages', None)
+            if (terminal is None or terminal.coordinator is not coordinator
+                    or terminal.instruments is not self._queue_instruments
+                    or operator is None or operator.coordinator is not coordinator):
+                raise HardwareError('Restore the original queue terminal and tray services before rebinding.')
+            self._queue_instruments.validate(allow_verified=terminal.last_root_record is not None)
+            return  # Never replace original close tokens, handles or tray evidence.
         self._validate_queue_bindings(coordinator)
         if getattr(self, '_queue_coordinator', None) is None:
             previous_cancel = coordinator.table.should_cancel
@@ -781,6 +790,25 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._bracketed = None
         self._bracketed_geometry_signature = None
         return record
+
+    def retry_queue_terminal_settlement(self):
+        """Retry only the original journaled closes/publication, never return motion."""
+        terminal = getattr(self, '_queue_terminal_cleanup', None)
+        coordinator = getattr(self, '_queue_coordinator', None)
+        if (terminal is None or coordinator is None or terminal.coordinator is not coordinator
+                or terminal._close_token is None or self._safety_store is not coordinator.session.child_store):
+            raise HardwareError('Original unfinished-stage recovery is required; terminal close cannot be replayed.')
+        coordinator.session.child_store._owned()
+        state = coordinator.session.store.read()
+        coordinator.session.store.verify_history(state)
+        stage = state['stage']
+        if (state['family'] != 'queue' or state['token'] != coordinator.session.token
+                or stage is None or stage['token'] != terminal._close_token
+                or stage['plan'] != terminal._close_plan or stage['status'] not in {'pending', 'verified'}
+                or (state['status'] == 'verified' and (terminal.last_root_record is None
+                    or state['record'] != terminal.last_root_record.to_dict()))):
+            raise HardwareError('Only the original journaled terminal close/publication may be retried.')
+        return self.finish_queue_lifetime()
 
     def _validate_queue_bindings(self, coordinator):
         from .queue_station import QueueStationGeometry

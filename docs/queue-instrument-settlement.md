@@ -41,7 +41,24 @@ Connection-only fixture stages do not claim scientific specimen acceptance. Exis
 MainWindow tests substitute the scientific panel/holder run as documented in
 native-main-queue.md; these checks do not prove a complete physical station run.
 
-Original-panel live/restart recovery, failed-open transport cleanup, complete
+MainWindow's Diagnostics menu provides **Retry Queue Shutdown** after a failed
+terminal close. It requires the original queue, all six retained device leases,
+the exact immutable close-stage token/plan and full verified journal history.
+It starts a claimed worker only for unsettled original closes or publication.
+An active queue, live worker, or unfinished field/motion/acquisition stage is
+rejected. Rebinding the original backend preserves its terminal/tray services
+and close token, including after some original transports have already closed.
+Successful retry releases ownership only after actual worker exit and the same
+verified root and instrument settlement checks. This is live terminal recovery;
+restart recovery and recovery before a close stage remain unfinished.
+
+Failed returned-handle opens and SQUID buffer initialization failures attempt
+cleanup immediately. Failed cleanup retains the original handle and blocks reads
+and replacement until its close succeeds. Failed diagnostic baseline acquisition
+invalidates an earlier baseline. A serial constructor that raises without returning
+a handle remains responsible for its own internal resource cleanup.
+
+Original-panel recovery before terminal close and restart recovery, complete
 per-file scientific step/eligibility/artifact acceptance, optional physically absent
 field participation, chain transfer, remaining VB6 auxiliary capabilities, portable
 rebuilding, performance gates and physical/scientific qualification remain required.

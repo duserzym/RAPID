@@ -57,8 +57,14 @@ The MainWindow orchestration fixture substitutes the measurement panel's scienti
 run and holder command; separate acquisition/holder/worker tests cover those services.
 It does not prove a complete physical scientific station run.
 
-Remaining full-system work includes original-panel live/restart queue recovery,
-failed-open scientific transport cleanup, complete
+Diagnostics now offers Retry Queue Shutdown for the original pending terminal
+close/publication. It keeps all six leases while the claimed worker settles
+original transports, then applies the existing verified-root/worker-exit release
+checks. Active queues and unfinished earlier stages cannot use this action.
+Injected Qt regressions cover successful retry without additional field, motion
+or vacuum output commands, and rejected active/field-failure retries.
+
+Remaining full-system work includes earlier-stage live and restart queue recovery, complete
 per-file step/eligibility and scientific artifact acceptance, optional physically
 absent field circuitry, chain-station transfers, remaining VB6 auxiliary tools,
 portable rebuilding, performance and physical/scientific station qualification.

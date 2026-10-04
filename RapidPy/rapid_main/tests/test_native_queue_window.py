@@ -163,6 +163,40 @@ class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestC
         question.assert_not_called()
         self.assertEqual((self.store.read(), len(self.commands)), before)
 
+    def test_ui_shutdown_retry_settles_original_close_without_replaying_outputs(self):
+        self.assertTrue(self.start(), self.window._sb_status.text())
+        session = self.window._queue_native_session
+        with patch.object(self.vacuum_serial, 'close', side_effect=OSError('close failed')):
+            self.window.cancel_queue_run('test stop')
+            self.wait_for(lambda: self.window._queue_command_thread is None)
+        self.assertIsNotNone(self.backend._queue_terminal_cleanup._close_token)
+        self.assertTrue(self.window._retry_queue_close_action.isEnabled())
+        before = len(self.commands), len(self.vacuum_serial.writes)
+        self.assertTrue(self.window.retry_queue_shutdown())
+        self.assertTrue(all(self.window._ownership.is_owned(item) for item in RESOURCES))
+        self.wait_for(lambda: self.window._queue_native_session is None)
+        self.assertEqual((len(self.commands), len(self.vacuum_serial.writes)), before)
+        self.assertIsNone(session._lease)
+        self.assertEqual(session.store.read()['status'], 'verified')
+        self.assertTrue(all(not self.window._ownership.is_owned(item) for item in RESOURCES))
+        self.assertFalse(self.window._retry_queue_close_action.isEnabled())
+
+    def test_ui_shutdown_retry_rejects_unfinished_field_stage(self):
+        self.assertTrue(self.start(), self.window._sb_status.text())
+        self.cap_voltage = .5
+        self.window.cancel_queue_run('test stop')
+        self.wait_for(lambda: self.window._queue_command_thread is None)
+        before = len(self.commands), len(self.vacuum_serial.writes)
+        self.assertFalse(self.window.retry_queue_shutdown())
+        self.assertEqual((len(self.commands), len(self.vacuum_serial.writes)), before)
+        self.assertTrue(all(self.window._ownership.is_owned(item) for item in RESOURCES))
+
+    def test_ui_shutdown_retry_rejects_active_run_without_io(self):
+        self.assertTrue(self.start(), self.window._sb_status.text())
+        before = len(self.commands), len(self.vacuum_serial.writes)
+        self.assertFalse(self.window.retry_queue_shutdown())
+        self.assertEqual((len(self.commands), len(self.vacuum_serial.writes)), before)
+
     def test_pause_after_loaded_pose_defers_measurement_and_resume_does_not_reload(self):
         original = self.backend.load_queue_specimen
         entered, release = threading.Event(), threading.Event()

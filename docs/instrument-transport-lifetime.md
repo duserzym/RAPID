@@ -24,6 +24,15 @@ retains its pending owner; the test does not fabricate a qualified specimen bloc
 Original native queue adapter/client/serial identity and port configuration now
 bind to QueueInstrumentLifetime; terminal independent close evidence precedes root
 publication and MainWindow release. See queue-instrument-settlement.md. Live/restart
-recovery controls, failed-open cleanup, and physical/scientific acceptance remain.
+recovery before terminal close, restart recovery and physical/scientific acceptance remain.
 The separate VRM logger serial client is not changed by this checkpoint.
 No physical instrument was actuated by the injected tests.
+
+Returned handles are retained before checking open state or initializing SQUID
+buffers. Failed open/initialization attempts close immediately; failed cleanup
+retains that exact handle and marks the connection unusable even if its port is
+still open. Reads and replacement are blocked until original close succeeds.
+The diagnostic connection test clears its old baseline before taking a new one.
+Constructor exceptions with no returned handle depend on the serial library's
+internal cleanup. Injected regressions cover both buffers, closed returned handles,
+failed cleanup, later close retries and diagnostic baseline invalidation.

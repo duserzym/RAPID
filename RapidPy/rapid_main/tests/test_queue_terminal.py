@@ -7,6 +7,34 @@ from tests import test_queue_backend_coordinator as backend_fixture
 
 
 class QueueTerminalTests(backend_fixture.QueueBackendCoordinatorFixture, unittest.TestCase):
+    def test_rebinding_preserves_original_services_and_pending_close_token(self):
+        terminal, operator = self.backend._queue_terminal_cleanup, self.backend._queue_operator_stages
+        serials = [client._serial for client in self.motor._connections.values()]
+        # Keep every original port unsettled; rebinding must still retain the
+        # existing terminal instance instead of replacing its retry authority.
+        with patch.object(self.vacuum_serial, 'close', side_effect=OSError('vacuum close failed')):
+            with patch.object(self.motor, 'disconnect', side_effect=OSError('motor close failed')):
+                self.assertFalse(self.finish().ok)
+        token = terminal._close_token
+        with self.backend.queue_worker_claim():
+            self.backend.bind_queue_coordinator(self.coordinator)
+        self.assertIs(self.backend._queue_terminal_cleanup, terminal)
+        self.assertIs(self.backend._queue_operator_stages, operator)
+        self.assertEqual(terminal._close_token, token)
+        self.assertTrue(all(serial.is_open for serial in serials))
+        before = len(self.commands), len(self.vacuum_serial.writes)
+        worker = self.command(self.backend.retry_queue_terminal_settlement)
+        self.assertTrue(worker.ok, worker.error)
+        self.assertEqual((len(self.commands), len(self.vacuum_serial.writes)), before)
+
+    def test_restricted_terminal_retry_cannot_start_return_or_cutoff(self):
+        self.load_backend()
+        before = len(self.commands), len(self.vacuum_serial.writes)
+        worker = self.command(self.backend.retry_queue_terminal_settlement)
+        self.assertFalse(worker.ok)
+        self.assertEqual((len(self.commands), len(self.vacuum_serial.writes)), before)
+        self.assertTrue(self.vacuum.is_valve_connected())
+
     def finish(self):
         return self.command(self.backend.finish_queue_lifetime)
 

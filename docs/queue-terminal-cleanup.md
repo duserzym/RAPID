@@ -44,6 +44,13 @@ qualification remains required. MainWindow now attaches startup and full device
 leases to this terminal path; see `native-main-queue.md`. Original-panel restart
 recovery still requires work. Original SQUID/susceptibility transport identity and
 independent terminal settlement now participate in this path; see
-`queue-instrument-settlement.md`. Failed-open cleanup and physical qualification
-remain required.
+`queue-instrument-settlement.md`. Physical qualification remains required.
+
+The Diagnostics menu's Retry Queue Shutdown action retries only an existing
+original terminal close/publication stage after workers exit. It verifies the
+original token/plan/history and retained six-device ownership before starting a
+claimed worker. It cannot return a specimen, cut off fields, reconnect, or replay
+an unfinished earlier stage. Original rebinding preserves terminal/tray services
+and close evidence after partial closure. Root verification and actual worker
+exit still precede release; live earlier-stage and restart recovery remain required.
 This terminal API is not a restart-recovery substitute.

@@ -1210,6 +1210,43 @@ class MainWindow(QtWidgets.QMainWindow):
             self._sample_queue.set_queue_sample_failed(self._queue_current_sample)
         self._finalize_queue_run("idle", reason=reason, return_to_safe=True)
 
+    @QtCore.Slot()
+    def retry_queue_shutdown(self) -> bool:
+        """Retry original journaled terminal closes after the actual worker exits."""
+        session, backend = self._queue_native_session, self._measurement_backend
+        terminal = getattr(backend, '_queue_terminal_cleanup', None)
+        coordinator = getattr(backend, '_queue_coordinator', None)
+        if (session is None or not self._uses_native_queue() or self._queue_active
+                or self._queue_command_thread is not None or self._measurement.is_active()
+                or session._owner is not None or session._lease is None
+                or coordinator is None or coordinator.session is not session
+                or terminal is None or terminal.coordinator is not coordinator or terminal._close_token is None):
+            self.set_status('Queue shutdown retry is unavailable; wait for workers or recover the original unfinished stage.')
+            return False
+        resources = ('measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptibility')
+        if any(self._ownership.owner_of(resource) != 'queue_workflow' for resource in resources):
+            self.set_status('Original queue device ownership changed; shutdown retry remains blocked.')
+            return False
+        try:
+            state = session.store.read()
+            session.store.verify_history(state)
+            stage = state['stage']
+            if (state['family'] != 'queue' or state['token'] != session.token or stage is None
+                    or stage['token'] != terminal._close_token or stage['plan'] != terminal._close_plan
+                    or stage['status'] not in {'pending', 'verified'}
+                    or (state['status'] == 'verified' and (terminal.last_root_record is None
+                        or state['record'] != terminal.last_root_record.to_dict()))):
+                raise RuntimeError('The original journaled shutdown does not match this queue.')
+        except Exception as exc:
+            self.set_status('Original queue shutdown cannot be retried: ' + str(exc))
+            return False
+        self._queue_pending_finalize = dict(state='idle', reason='Original queue shutdown completed.',
+            return_to_safe=False, clear_plan=True, clear_current=True, clear_command=True)
+        self._start_queue_command_worker(None, backend.retry_queue_terminal_settlement, [], recover_on_error=False)
+        self.set_flow_state('returning')
+        self.set_status('Retrying original connection closure; queue ownership remains held until verification.')
+        return True
+
     def _run_next_queue_command(self) -> None:
         if self._queue_command_thread is not None:
             return
@@ -1819,6 +1856,9 @@ class MainWindow(QtWidgets.QMainWindow):
         dm.addAction("DC &Motors",    self._launch_dc_motors)
         dm.addAction("&SQUID Comm",   self._launch_squid)
         dm.addAction("&Vacuum",       self._launch_vacuum)
+        self._retry_queue_close_action = dm.addAction('Retry Queue &Shutdown', self.retry_queue_shutdown)
+        self._retry_queue_close_action.setEnabled(False)
+        self._retry_queue_close_action.setToolTip('Finish closing the original connections after a queue shutdown failure.')
         dm.addSeparator()
         af_sub = dm.addMenu("AF &Demagnetizer")
         af_sub.addAction("Set Up AF Sequence", self._launch_af)
@@ -3005,6 +3045,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def set_flow_state(self, state: str) -> None:
         """Update the top-of-screen workflow label from a phase name."""
         self._workflow_state = state
+        retry_action = getattr(self, '_retry_queue_close_action', None)
+        if retry_action is not None:
+            retry_action.setEnabled(self._queue_native_session is not None and not self._queue_active
+                and self._queue_command_thread is None and not self._measurement.is_active())
         icons = {
             "running": "◉  Running",
             "paused": "⏸  Paused",

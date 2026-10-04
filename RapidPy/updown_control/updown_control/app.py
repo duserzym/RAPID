@@ -907,10 +907,11 @@ class SquidAxisSample:
 class RawSquidClient:
     def __init__(self) -> None:
         self._serial: serial.Serial | None = None
+        self._connection_failed = False
 
     @property
     def is_connected(self) -> bool:
-        return self._serial is not None and self._serial.is_open
+        return not self._connection_failed and self._serial is not None and self._serial.is_open is True
 
     def connect(
         self,
@@ -922,17 +923,25 @@ class RawSquidClient:
         timeout: float = 1.0,
     ) -> None:
         self.disconnect()
-        self._serial = serial.Serial(
-            port=port,
-            baudrate=baudrate,
-            bytesize=bytesize,
-            parity=parity,
-            stopbits=stopbits,
-            timeout=timeout,
-            write_timeout=timeout,
-        )
-        self._serial.reset_input_buffer()
-        self._serial.reset_output_buffer()
+        try:
+            self._serial = serial.Serial(
+                port=port, baudrate=baudrate, bytesize=bytesize, parity=parity,
+                stopbits=stopbits, timeout=timeout, write_timeout=timeout,
+            )
+            if self._serial.is_open is not True:
+                raise SquidCommunicationError('Serial transport did not report an open connection.')
+            self._serial.reset_input_buffer()
+            self._serial.reset_output_buffer()
+        except Exception as exc:
+            self._connection_failed = True
+            try:
+                self.disconnect()
+            except Exception as close_error:
+                raise SquidCommunicationError(
+                    f'SQUID connection failed: {exc}; cleanup failed, original handle retained: {close_error}'
+                ) from exc
+            raise SquidCommunicationError(f'SQUID connection failed: {exc}') from exc
+        self._connection_failed = False
 
     def disconnect(self) -> None:
         if self._serial is not None:
@@ -941,9 +950,10 @@ class RawSquidClient:
             if transport.is_open:
                 raise SquidCommunicationError('Original SQUID serial handle remains open after close.')
             self._serial = None
+        self._connection_failed = False
 
     def _require_serial(self) -> serial.Serial:
-        if self._serial is None or not self._serial.is_open:
+        if not self.is_connected:
             raise SquidCommunicationError("SQUID serial port is not connected.")
         return self._serial
 

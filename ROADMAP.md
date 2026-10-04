@@ -1650,3 +1650,33 @@ placeholder and original reentry cases. Compile and diff checks pass. Instrument
 connection-only fixtures and injected DLL/serial interfaces do not constitute
 physical or scientific station acceptance; portable outputs are not rebuilt here.
 Source release smoke also passes all six panels and six helper imports with a clean process exit.
+
+### Original terminal shutdown retry and failed-open instrument cleanup
+
+Diagnostics now exposes Retry Queue Shutdown for the original immutable terminal
+close stage or its publication. It requires retained six-device ownership, no live
+worker/measurement/active queue, exact close token/plan and verified linked history.
+Its claimed worker closes only unsettled original transports and publishes original
+evidence. It cannot replay startup, fields, specimen return or acquisition. Successful
+settlement still requires verified root/instrument closure and actual worker exit
+before OS/logical lease release. Rebinding preserves original terminal/tray services
+and evidence even after partial transport closure.
+
+SQUID and susceptibility clients retain returned handles before open/initialization
+checks. Failed cleanup retains the exact handle and blocks reads/replacement until
+original close succeeds. SQUID diagnostic connection clears an old baseline before
+new acquisition. Constructor exceptions without a returned handle rely on the serial
+library's internal cleanup. See docs/queue-instrument-settlement.md.
+
+Earlier-stage live/restart recovery, full per-file scientific eligibility/artifact
+acceptance, absent-field participation, chain transfer, remaining active VB6 auxiliary
+capabilities, portable rebuilding, performance and physical/scientific qualification
+remain required. The full-system goal remains active. No physical instruments were
+actuated by these injected tests.
+
+Verification: isolated full suite passes 1,176 tests in 488.352 seconds with code 0
+after Qt/interpreter teardown. It includes nine instrument-lifetime, sixteen
+terminal and twelve native-window cases. Source release smoke passes all six panels
+and six helper imports with code 0; compilation and diff checks pass. Tests use
+injected DLL/serial interfaces and scientific-panel/holder orchestration stubs;
+these results do not establish physical station or final scientific acceptance.
