@@ -1412,3 +1412,32 @@ Still wire the complete automatic queue coordinator and MeasurementWorker claims
 operator initial loading/tray inversion/per-file orientation, original-panel recovery
 and terminal vacuum release. Auxiliary tools, portable rebuilding and physical/
 scientific station acceptance remain required. The full-system goal remains active.
+
+### Composed native specimen load and supported return (2026-10-04)
+
+QueueTransferCoordinator now composes original claimed field cutoff, live XY reference,
+table motion, gentle pickup, recorded pickup pose, grip connection, loaded height
+reference and empty-hole parking. Return composes field cutoff, empty-hole lift
+clearance, original-slot restoration, measured-height supported lowering, fresh
+support pose, valve release with pump retained, accepted release delay and rod clearance.
+
+QueueLiftTransfer records all-four-axis Stop/stable telemetry and pickup/support/top
+switch guards before returning typed QueueVacuumPoseProof. Vacuum derives grip
+permission from that original native evidence and records it in its before-I/O plan.
+Modified records, intervening stages or changed native motor connection invalidate it.
+Failures retain original specimen identity and pending ownership; failed valve release
+never performs post-release rod motion. These APIs never automatically replay recovery.
+
+Automatic MainWindow/MeasurementWorker attachment, startup pump/empty-rod reference,
+blank-holder composition and measured backend binding, operator interventions, terminal
+ownership/recovery and chain transfers remain open full-system integration requirements.
+Position/support telemetry still requires physical pressure/contact/dropoff station
+qualification. Auxiliary tools, portable rebuilding and scientific acceptance remain
+required. See docs/queue-transfer-coordinator.md. The full-system goal stays active.
+
+Verification: all 1073 isolated tests pass in 227.199 seconds with clean process exit.
+Fifteen composed native DLL/serial regressions cover exact load/return order, measured
+height and empty-hole handoff, recorded support before valve release, retained grip/
+identity after home or valve failure, publication/cutoff failure, calibration changes,
+stale/modified/reconnected pose proofs and repeated specimens. Source six-panel/six-
+helper smoke, compile and diff checks pass. No physical instruments actuated.

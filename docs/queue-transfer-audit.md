@@ -130,3 +130,9 @@ and publishes a live typed proof consumed by table/reference, blank-holder, lift
 and vacuum phases. Subsequent field treatments invalidate older cutoff evidence.
 See `queue-field-outputs.md` for control-feedback limits and remaining coordinator
 and original-panel recovery integration.
+
+`QueueTransferCoordinator` now composes the native XY specimen load/return paths,
+including fresh recorded pickup/support pose proofs consumed by vacuum transitions,
+measured-height handoff at the empty hole, original-slot dropoff and accepted release
+delay. See `queue-transfer-coordinator.md`. This composition still needs MainWindow/
+MeasurementWorker wiring, startup/blank/operator stages and terminal recovery.

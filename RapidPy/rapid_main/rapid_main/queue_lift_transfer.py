@@ -2,6 +2,7 @@
 import copy
 from dataclasses import asdict, dataclass, replace
 import math
+import json
 import time
 
 from rapidpy_common.hardware_safety import HardwareSafetyError
@@ -108,6 +109,8 @@ class QueueLiftTransfer:
 
     def _execute(self, session, state, action, command, before, after, *, field_proof=None):
         operation = dict(action=action, transfer_context=state.to_dict(), field_outputs_proof=field_proof)
+        if action == 'verify_specimen_vacuum_pose':
+            operation['connection_id'] = self.table.motor._connection_id
         child = session.child_store
         token = child.begin('motion', operation, self.table.profile, sample_id=state.sample_id,
             run_id=session.store._queue(session.token)['run_id'])
@@ -120,10 +123,11 @@ class QueueLiftTransfer:
                 raise HardwareSafetyError(stop_error)
             before(initial)
             self.table._check_cancel()
-            result = command()
-            if result.success is not True:
-                raise HardwareSafetyError('Native lift command did not verify completion.')
-            observations.append({'phase': 'native_result', 'result': asdict(result)})
+            if command is not None:
+                result = command()
+                if result.success is not True:
+                    raise HardwareSafetyError('Native lift command did not verify completion.')
+                observations.append({'phase': 'native_result', 'result': asdict(result)})
             self.table._check_cancel()
         except Exception as exc:
             error = str(exc) or type(exc).__name__
@@ -131,6 +135,9 @@ class QueueLiftTransfer:
             cleanup, cleanup_error = self.table._stopped()
         if not error and not cleanup_error:
             try:
+                if (action == 'verify_specimen_vacuum_pose'
+                        and self.table.motor._connection_id != operation['connection_id']):
+                    raise HardwareSafetyError('Original motor connection changed during grip pose verification.')
                 final_state = after(result, cleanup)
                 self.table._check_cancel()
             except Exception as exc:
@@ -146,6 +153,54 @@ class QueueLiftTransfer:
         if not record.safe_state_confirmed:
             raise HardwareSafetyError('Specimen lift remains unverified; original queue ownership is retained: ' + '; '.join(filter(None, (error, cleanup_error))))
         return record
+
+    def verify_vacuum_pose(self, session, *, field_outputs_off_verified=False):
+        """Record fresh stopped pickup/support/clearance before changing grip."""
+        field_proof = self._validate(session, field_outputs_off_verified)
+        state = self.context(session)
+        if state is None or state.phase not in {'picked', 'supported', 'clear'}:
+            raise HardwareSafetyError('An original pickup, supported dropoff or cleared specimen pose is required.')
+        expected_valve = state.phase == 'supported'
+        if self.vacuum.is_valve_connected() is not expected_valve:
+            raise HardwareSafetyError('Original vacuum state differs from the specimen grip boundary.')
+        def pose(samples):
+            self._at_slot(samples, state.original_slot)
+            actual = samples['updown'][-1]['position_raw']
+            if state.phase == 'clear':
+                self.table._clearance(samples)
+                if abs(actual) > 150:
+                    raise HardwareSafetyError('Released specimen rod clearance is unverified.')
+            else:
+                target = (state.pickup_position_raw if state.phase == 'picked'
+                          else int(self.table.motor.config.sample_bottom + .9 * state.sample_height))
+                tolerance = 0 if state.phase == 'picked' else 150
+                if (abs(actual - target) > tolerance
+                        or self.table.motor.check_internal_status(self.table.axes['updown'], 4) != 0):
+                    raise HardwareSafetyError('The original specimen pickup/support pose changed before grip transition.')
+        def after(result, samples):
+            pose(samples)
+            if self.vacuum.is_valve_connected() is not expected_valve:
+                raise HardwareSafetyError('Original grip state changed during pose verification.')
+            return state
+        record = self._execute(session, state, 'verify_specimen_vacuum_pose', None, pose, after,
+                               field_proof=field_proof)
+        return QueueVacuumPoseProof(self, record)
+
+    def require_vacuum_pose(self, session, proof):
+        self.table._validate(session)
+        stage = session.store._queue(session.token)['stage']
+        if (not isinstance(proof, QueueVacuumPoseProof) or proof.owner is not self
+                or not stage or stage['status'] != 'verified' or stage['family'] != 'motion'
+                or stage['profile'] != self.table.profile
+                or stage['record'] != json.loads(json.dumps(proof.record.to_dict(), allow_nan=False))
+                or stage['record']['operation']['action'] != 'verify_specimen_vacuum_pose'
+                or not self.table.motor._connection_id
+                or stage['record']['operation'].get('connection_id') != self.table.motor._connection_id):
+            raise HardwareSafetyError('The latest original native pose evidence is required before changing grip.')
+        state = self.context(session)
+        if state is None or state.to_dict() != proof.record.transfer_context:
+            raise HardwareSafetyError('Original specimen pose evidence no longer matches the live queue.')
+        return state
 
     def pickup(self, session, original_slot, sample_id, *, file_id='', field_outputs_off_verified=False):
         field_proof = self._validate(session, field_outputs_off_verified)
@@ -250,3 +305,15 @@ class QueueLiftTransfer:
                 raise HardwareSafetyError('Post-release lift clearance did not reach zero.')
             return replace(state, phase='clear')
         return self._execute(session, state, 'specimen_clear_after_release', command, before, after, field_proof=field_proof)
+
+
+@dataclass(frozen=True)
+class QueueVacuumPoseProof:
+    owner: QueueLiftTransfer
+    record: QueueTableMoveRecord
+
+    def require(self, session, valve_connected):
+        state = self.owner.require_vacuum_pose(session, self)
+        if state.phase not in ({'picked'} if valve_connected else {'supported', 'clear'}):
+            raise HardwareSafetyError('Native pose evidence does not authorize the requested grip transition.')
+        return state.to_dict()

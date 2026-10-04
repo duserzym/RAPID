@@ -111,11 +111,19 @@ class QueueVacuumBinding:
 
     def set_outputs(self, *, pump_enabled, valve_connected, motors_stopped_verified=False,
                     specimen_secured=False, specimen_at_pickup_verified=False,
-                    field_outputs_off_verified=False):
+                    field_outputs_off_verified=False, transfer_pose=None):
         if type(pump_enabled) is not bool or type(valve_connected) is not bool:
             raise HardwareSafetyError('Queue pump and valve states must be explicit booleans.')
         if valve_connected and not pump_enabled:
             raise HardwareSafetyError('Queue grip requires the vacuum pump powered.')
+        if transfer_pose is not None:
+            from .queue_lift_transfer import QueueVacuumPoseProof
+            if not isinstance(transfer_pose, QueueVacuumPoseProof):
+                raise HardwareSafetyError('Native original specimen pose proof is required.')
+            transfer_pose.require(self.session, valve_connected)
+            motors_stopped_verified = True
+            specimen_at_pickup_verified = valve_connected
+            specimen_secured = not valve_connected
         if valve_connected:
             from .queue_field_outputs import field_outputs_proof
             field_outputs_proof(self.session, field_outputs_off_verified)
@@ -124,7 +132,7 @@ class QueueVacuumBinding:
             raise HardwareSafetyError('Verify motor stop, specimen pickup position and field outputs off before connecting grip.')
         return self._set_enabled(valve_connected, pump_ready=pump_enabled and not valve_connected,
             motors_stopped_verified=motors_stopped_verified, specimen_secured=specimen_secured,
-            field_outputs_off_verified=field_outputs_off_verified)
+            field_outputs_off_verified=field_outputs_off_verified, transfer_pose=transfer_pose)
 
     def set_enabled(self, enabled, *, motors_stopped_verified=False, specimen_secured=False,
                     field_outputs_off_verified=False):
@@ -132,7 +140,7 @@ class QueueVacuumBinding:
             specimen_secured=specimen_secured, field_outputs_off_verified=field_outputs_off_verified)
 
     def _set_enabled(self, enabled, *, pump_ready=False, motors_stopped_verified=False,
-                     specimen_secured=False, field_outputs_off_verified=False):
+                     specimen_secured=False, field_outputs_off_verified=False, transfer_pose=None):
         self._validate_owner()
         controller = self.adapter._require_controller()
         self._validate_controller(controller)
@@ -154,7 +162,8 @@ class QueueVacuumBinding:
             token = pending['token']  # An explicit OFF request recovers; never replay ON.
         else:
             token = child.begin('vacuum', {'action': 'pump_ready' if pump_ready else 'enable' if enabled else 'release',
-                                         'field_outputs_proof': field_proof}, self.profile)
+                                         'field_outputs_proof': field_proof,
+                                         'transfer_pose': transfer_pose.record.to_dict() if transfer_pose else None}, self.profile)
         self.held = True
         self.adapter.output_state_known = False
         reset = getattr(controller, 'reset_acknowledgements', None)
