@@ -1919,3 +1919,59 @@ trusted per-step source context, durable Up artifacts/eligibility, AvgSteps and
 Up/Down assimilation/full statistics/final publication still require integration.
 No full-suite or physical-format acceptance claim is made for this checkpoint.
 The full-system goal remains active.
+
+Block-collection statistics checkpoint: `block_statistics.py` reduces all complete
+bracketed acquisitions before combining them using VB6 `MeasurementBlocks.cls`
+position weighting, sample component SD, Fischer CSD, mean block drift/holder
+magnitudes, mean induced vector, Up/Down subset ratio and horizontal angle error.
+Changed calibration or acquisition context, invalid constituent blocks and mixed
+structured/unstructured worker cycles fail before scientific publication.
+
+The worker retains every accepted raw block in the current cycle and publishes
+collection statistics in provenance and StepResult. Saved bracketed measurements
+now carry collection CSD rather than a hardcoded zero; tuple-only readings retain
+their prior behavior and clear earlier block quality. The panel renders collection
+CSD/drift/holder/induced values instead of the last block or a spread of block means.
+Historical exact-alignment Fischer behavior remains explicit and needs scientific
+acceptance rather than an undocumented numerical change.
+
+Focused tests passed with normal exits: 11 hand-calculation/collection/worker
+cases in 1.071 seconds, 22 existing worker cases in 7.681 seconds and 18 panel
+cases in 1.798 seconds. Compilation and diff checks passed; the full suite is
+underway. These tests use injected acquisition data and do not actuate instruments.
+Queue AvgSteps, trusted durable per-step .UP ownership/progress/eligibility,
+Up/Down queue assimilation/final publication, scientific orientation/format
+acceptance and all remaining full-system gates remain open. The goal is active.
+
+The first block-statistics full run passed all 1,248 assertions in 574.127 seconds,
+but it did not exit cleanly: explicit faulthandler watchdog cancellation waited
+on a watchdog thread that had entered Windows hard-error handling. Read-only
+wait-chain evidence identified the watchdog waiting through ApiPort; a brief
+suspend/resume native stack snapshot showed NtRaiseHardError/UnhandledExceptionFilter
+with Py_DumpTracebackThreads on its stack. This supports a fault during asynchronous
+native frame traversal, rather than treating passing assertions as a clean exit.
+Only the exact owned child process was stopped after correcting the harness.
+
+The suite watchdog now uses Python-managed sys._current_frames/traceback snapshots,
+clears captured frames after each snapshot, and owns its stop event/thread join.
+Three diagnostic tests passed with normal exit: snapshot an independently waiting
+thread, stop before the diagnostic interval and propagate diagnostic-write failure.
+Snapshots remain enabled through Qt cleanup and stop before interpreter shutdown.
+A Python watchdog cannot run while an extension indefinitely retains the GIL;
+external native wait/stack diagnostics remain necessary for that case. Reference:
+https://docs.python.org/3.12/library/sys.html#sys._current_frames
+A fresh complete suite with this corrected harness is underway. The first run
+remains a non-clean exit; completion is not inferred from its passing assertions.
+
+Final verification: the replacement full suite passed all 1,251 tests in 587.742
+seconds and the owned process exited normally with code 0. Periodic Python stack
+snapshots completed during the native/queue lifecycle cases; deferred Qt deletion,
+application shutdown and explicit watchdog-stopped markers all completed. This
+clean full run covers the raw .UP codec, collection statistics, worker/panel
+publication and watchdog ownership together with the existing regression suite.
+Six-panel source smoke, compilation and diff checks passed. These are software
+checks with injected instruments; physical/scientific qualification, queue
+AvgSteps/.UP integration/progress/eligibility, original-stage restart recovery,
+standalone provenance/orientation/format acceptance, chain/auxiliary functions,
+portable distribution and performance gates remain required. The full-system
+goal remains active.

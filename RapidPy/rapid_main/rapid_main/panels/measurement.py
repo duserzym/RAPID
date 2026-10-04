@@ -748,6 +748,7 @@ class MeasurementPanel(QtWidgets.QWidget):
             result.cycle_stats,
             block_result=getattr(result, "block_result", None),
             holder_status=getattr(result, "holder_status", None),
+            collection_stats=getattr(result, "collection_stats", None),
         )
         self._plot_step_complete(result, moment_Am2=moment_Am2)
 
@@ -757,6 +758,7 @@ class MeasurementPanel(QtWidgets.QWidget):
         cycle_stats: ReadingCycleStatistics | None,
         block_result: object | None = None,
         holder_status: object | None = None,
+        collection_stats: object | None = None,
     ) -> None:
         """Render VB6-style cycle quality values from the current SQUID reads."""
 
@@ -784,8 +786,16 @@ class MeasurementPanel(QtWidgets.QWidget):
         else:
             self._sig_drift.setText(f"{stats.signal_to_drift:.2f}")
 
-        self._update_holder_stats(block_result, holder_status)
-        self._avg_csd.setToolTip(f"RMS directional spread across {stats.count} SQUID sample(s).")
+        self._update_holder_stats(collection_stats or block_result, holder_status)
+        if collection_stats is not None:
+            self._avg_csd.setText(f"{collection_stats.fischer_sd_deg:.2f} deg")
+            self._avg_csd.setToolTip(f"Fischer circular SD across {collection_stats.position_count} positions "
+                                   f"in {collection_stats.block_count} accepted blocks.")
+            self._sig_drift.setText(f"{collection_stats.sig_drift:.2f}")
+            self._sig_holder.setToolTip("Collection mean moment / mean block holder magnitude.")
+            self._sig_induced.setToolTip("Collection mean moment / mean rotational asymmetry magnitude.")
+        else:
+            self._avg_csd.setToolTip(f"RMS directional spread across {stats.count} SQUID sample(s).")
 
         worst_ratio = max(ratios, default=0.0)
         self.set_warning("red" if worst_ratio > 5.0 else "orange" if worst_ratio > 1.0 else "")

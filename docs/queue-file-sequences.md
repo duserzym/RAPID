@@ -157,3 +157,14 @@ audit separately. VB6 places this file at the current-step path, not one filenam
 for all treatments. Queue wiring, durable per-step identity/eligibility, AvgSteps,
 Up/Down assimilation/statistics and final scientific publication remain required;
 the interchange checkpoint alone does not fix paired-run overwriting.
+
+Repeated bracketed readings now produce collection statistics over all four
+positions in every block. Saved error angle and the panel CSD/drift/holder/induced
+values use this collection instead of a zero/last-block result. Component sample
+SD, mean raw/calibrated vectors, signal ratios and directional subsets are retained
+in provenance. Blocks with changed calibration/acquisition context and cycles that
+mix structured blocks with unstructured tuples are rejected before publication.
+Tuple-only steps clear earlier block quality and preserve their existing behavior.
+The explicit historical exact-alignment Fischer convention still requires
+scientific acceptance. This supports current repeated cycles; durable per-step
+Up artifacts, queue AvgSteps and cross-run Up/Down assimilation remain unfinished.

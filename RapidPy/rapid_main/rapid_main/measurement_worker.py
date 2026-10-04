@@ -47,6 +47,7 @@ from typing import Any, Mapping, Optional, Callable, Sequence, TypeVar
 from PySide6 import QtCore
 
 from rapid_main.analysis import ReadingCycleStatistics, reading_cycle_statistics
+from rapid_main.block_statistics import BlockCollectionStatistics, block_collection_statistics
 from rapid_main.communication_log import CommunicationEvent, CommunicationLogger
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.specimen_metadata import validate_specimen_provenance
@@ -91,6 +92,7 @@ class StepResult:
         cycle_stats: ReadingCycleStatistics | None = None,
         block_result: "BracketedMeasurementResult | None" = None,
         holder_status: object | None = None,
+        collection_stats: BlockCollectionStatistics | None = None,
     ) -> None:
         self.step = step
         self.susceptibility = susceptibility
@@ -101,6 +103,7 @@ class StepResult:
         # is the only case where VB6-equivalent holder/induced ratios exist.
         self.block_result = block_result
         self.holder_status = holder_status
+        self.collection_stats = collection_stats
 
 
 T = TypeVar("T")
@@ -189,6 +192,9 @@ class MeasurementWorker(QtCore.QThread):
             allow_simulated_production_output=self._allow_simulated_production_output)
         self._last_block_audit: BlockAudit | None = None
         self._last_block_result: BracketedMeasurementResult | None = None
+        self._cycle_blocks: list[BracketedMeasurementBlock] = []
+        self._last_collection_stats: BlockCollectionStatistics | None = None
+        self._collection_statistics: list[dict[str, object]] = []
         self._holder_record_id = ""
         self._holder_recorded_iso = ""
         self._skipped_labels: list[str] = []
@@ -470,6 +476,8 @@ class MeasurementWorker(QtCore.QThread):
                 sdz=sdz,
                 operator=self._operator,
                 timestamp=datetime.now(),
+                error_angle=(self._last_collection_stats.fischer_sd_deg
+                             if self._last_collection_stats is not None else 0.0),
             )
 
             try:
@@ -491,6 +499,9 @@ class MeasurementWorker(QtCore.QThread):
                             **susceptibility_evidence,
                         }
                     )
+                if self._last_collection_stats is not None:
+                    self._collection_statistics.append({"step_index": idx, "label": label,
+                                                       **self._last_collection_stats.payload()})
             except Exception as exc:
                 self._emit_error(f"File write error at step {label}: {exc}", phase=WorkflowPhase.SAVING)
                 self._emit_phase(WorkflowPhase.ERROR)
@@ -505,6 +516,7 @@ class MeasurementWorker(QtCore.QThread):
                 cycle_stats=cycle_stats,
                 block_result=self._last_block_result,
                 holder_status=self._backend_holder_status(),
+                collection_stats=self._last_collection_stats,
             )
             self.step_complete.emit(result)
             self._completed_labels.append(label)
@@ -697,6 +709,7 @@ class MeasurementWorker(QtCore.QThread):
         if isinstance(reading, BracketedMeasurementBlock):
             result = reduce_bracketed_measurement(reading)
             self._record_block_evidence(reading, result)
+            self._cycle_blocks.append(reading)
             sdx, sdy, sdz = result.moment_emu
         elif isinstance(reading, MagnetometerReading):
             sdx, sdy, sdz = reading.moment_emu
@@ -717,10 +730,17 @@ class MeasurementWorker(QtCore.QThread):
         """Read and summarize the configured number of SQUID samples."""
 
         readings: list[tuple[float, float, float]] = []
+        self._cycle_blocks = []
+        self._last_collection_stats = None
+        self._last_block_result = None
         for _ in range(self._samples_per_position):
             vector = self._read_validated_squid_sample(label)
             readings.append(vector)
             self._comm_received(vector, detail="read_squid")
+        if self._cycle_blocks:
+            if len(self._cycle_blocks) != len(readings):
+                raise ObservationIntegrityError("SQUID cycle mixed raw blocks and unstructured readings")
+            self._last_collection_stats = block_collection_statistics(self._cycle_blocks)
         return reading_cycle_statistics(readings)
 
     def _read_validated_squid_sample(self, label: str) -> tuple[float, float, float]:
@@ -962,6 +982,7 @@ class MeasurementWorker(QtCore.QThread):
             "flux_recoveries": self._recovery_count,
             "transport_recoveries": len(transport_recoveries),
             "transport_recovery_records": transport_recoveries,
+            "block_collection_statistics": deepcopy(self._collection_statistics),
             "skipped_duplicate_labels": list(self._skipped_labels),
             "simulated": self._simulated,
         }
@@ -1427,6 +1448,7 @@ def _build_step(
     sdz: float,
     operator: str,
     timestamp: datetime,
+    error_angle: float = 0.0,
 ) -> MeasurementStep:
     """Convert raw SQUID Cartesian readings to a ``MeasurementStep``."""
     moment = (sdx**2 + sdy**2 + sdz**2) ** 0.5
@@ -1446,7 +1468,7 @@ def _build_step(
         sdec=sdec,
         sinc=sinc,
         moment=moment,
-        error_angle=0.0,
+        error_angle=error_angle,
         crdec=gdec,
         crinc=ginc,
         sdx=sdx,

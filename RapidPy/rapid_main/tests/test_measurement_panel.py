@@ -379,6 +379,26 @@ class TestMeasurementPanelHolderStats(unittest.TestCase):
     def _panel(self) -> MeasurementPanel:
         return MeasurementPanel()
 
+    def test_collection_quality_overrides_last_block_and_resets_for_tuple_steps(self):
+        from rapid_main.block_statistics import block_collection_statistics
+        from rapid_main.magnetometer import BracketedMeasurementBlock
+        from rapid_main.measurement_worker import _build_step
+        block = BracketedMeasurementBlock((0., 0., 0.), ((2., 0., 1.),) * 4, (0., 0., 0.))
+        collection = block_collection_statistics((block, block))
+        step = _build_step('NRM', 0., 0., 1e-5, '', datetime.now(), collection.fischer_sd_deg)
+        panel = self._panel()
+        self.addCleanup(panel.deleteLater)
+        panel._on_step_complete(StepResult(step, 0., 0, 1, collection_stats=collection))
+        self.assertEqual(panel._avg_csd.text(), f'{collection.fischer_sd_deg:.2f} deg')
+        self.assertIn('8 positions', panel._avg_csd.toolTip())
+        self.assertEqual(panel._sig_holder.text(), f'{collection.sig_holder:.2f}')
+        self.assertEqual(panel._sig_induced.text(), f'{collection.sig_induced:.2f}')
+        self.assertEqual(panel._sig_drift.text(), f'{collection.sig_drift:.2f}')
+        panel._on_step_complete(StepResult(step, 0., 0, 1))
+        self.assertEqual(panel._sig_holder.text(), 'N/A')
+        self.assertEqual(panel._sig_induced.text(), 'N/A')
+        self.assertIn('RMS directional spread', panel._avg_csd.toolTip())
+
     def test_absent_holder_is_shown_as_none_with_the_reason(self) -> None:
         from rapid_main.holder_state import HolderStateStore
 

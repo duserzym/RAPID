@@ -1,11 +1,11 @@
 """Run the main-app suite without changing operator settings or registry state."""
 from pathlib import Path
 import argparse
-import faulthandler
 import os
 import sys
 import tempfile
 import unittest
+from traceback_watchdog import StackWatchdog
 
 ROOT = Path(__file__).resolve().parents[1]
 for module in ("rapid_main", "updown_control", "vrm_logger", "af_tuner", "af_clip_test", "adwin_comms"):
@@ -19,14 +19,15 @@ def main() -> int:
     parser.add_argument('--verbose', action='store_true', help='Print each test name for diagnosing stalled runs')
     parser.add_argument('--stall-trace', action='store_true', help='Dump thread stacks after a minute without suite completion')
     args = parser.parse_args()
-    if args.stall_trace:
-        faulthandler.dump_traceback_later(60, repeat=True)
+    watchdog = StackWatchdog() if args.stall_trace else None
+    if watchdog is not None:
+        watchdog.start()
     try:
         return run_suite(args)
     finally:
         if args.stall_trace:
             print('Test teardown: cancelling traceback watchdog', flush=True)
-            faulthandler.cancel_dump_traceback_later()
+            watchdog.stop()
             print('Test teardown: traceback watchdog stopped', flush=True)
 
 
