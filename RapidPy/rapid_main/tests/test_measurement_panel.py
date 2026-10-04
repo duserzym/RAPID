@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from PySide6 import QtWidgets
 
@@ -12,6 +13,8 @@ from rapid_main.data_model import MeasurementStep
 from rapid_main.dialogs.plots import PlotsDialog
 from rapid_main.hardware_contracts import NoCommBackend
 from rapid_main.measurement_worker import StepResult
+from rapid_main.measurement_worker import MeasurementWorker
+from rapid_main.config import AppConfig
 from rapid_main.panels.measurement import _resolve_measurement_backend
 from rapid_main.panels.measurement import MeasurementPanel
 
@@ -49,6 +52,40 @@ class TestMeasurementPanelHelpers(unittest.TestCase):
         resolved = _resolve_measurement_backend(window, NoCommBackend())
 
         self.assertIs(resolved, backend)
+
+    def test_queue_worker_receives_file_steps_instead_of_global_sequence(self):
+        window = QtWidgets.QMainWindow()
+        panel = MeasurementPanel(window)
+        window._sequence_labels = ['IRM100']
+        window.queue_measurement_labels = lambda sample: ['NRM', 'SUSC']
+        window.measurement_backend = lambda: NoCommBackend()
+        with tempfile.TemporaryDirectory() as directory:
+            window.config = AppConfig()
+            window.config.general.data_dir = directory
+            window.config.general.sample_dir = directory
+            with patch.object(MeasurementWorker, 'start', lambda worker: None):
+                self.assertTrue(panel.start_measurement_for_sample('A', queue_run=True))
+            self.assertEqual(panel._worker._labels, ['NRM', 'SUSC'])
+            panel._on_step_started(1, 'SUSC')
+            self.assertEqual(panel._meas_step.text(), '2 / 2')
+            self.assertEqual(window._sequence_labels, ['IRM100'])
+        window.deleteLater()
+
+    def test_invalid_queue_handoff_creates_no_worker_or_device_lease(self):
+        window = QtWidgets.QMainWindow()
+        panel = MeasurementPanel(window)
+        window._sequence_labels = ['NRM']
+        statuses, leases = [], []
+        window.set_status = statuses.append
+        window.acquire_measurement_device = lambda owner: leases.append(owner)
+        def reject(sample):
+            raise ValueError('original file sequence changed')
+        window.queue_measurement_labels = reject
+        self.assertFalse(panel.start_measurement_for_sample('A', queue_run=True))
+        self.assertIsNone(panel._worker)
+        self.assertEqual(leases, [])
+        self.assertIn('original file sequence changed', statuses[-1])
+        window.deleteLater()
 
     def test_measurement_backend_falls_back_when_provider_absent(self) -> None:
         fallback = NoCommBackend()

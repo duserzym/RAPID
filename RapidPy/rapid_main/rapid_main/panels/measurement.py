@@ -524,6 +524,12 @@ class MeasurementPanel(QtWidgets.QWidget):
             mw.cancel_queue_run("Manual run started.")
 
         labels = getattr(mw, "_sequence_labels", [])
+        if queue_run and hasattr(mw, 'queue_measurement_labels'):
+            try:
+                labels = mw.queue_measurement_labels(sample)
+            except Exception as exc:
+                mw.set_status('Queue sequence cannot start: ' + str(exc))
+                return False
         if not labels:
             QtWidgets.QMessageBox.warning(
                 self, "No Sequence",
@@ -699,7 +705,7 @@ class MeasurementPanel(QtWidgets.QWidget):
     @QtCore.Slot(int, str)
     def _on_step_started(self, idx: int, label: str) -> None:
         mw = self.window()
-        total = len(getattr(mw, "_sequence_labels", []))
+        total = len(self._worker._labels) if self._worker is not None else len(getattr(mw, "_sequence_labels", []))
         self._meas_step.setText(f"{idx + 1} / {total}")
         self._meas_treat.setText(label)
         if hasattr(mw, "set_step"):

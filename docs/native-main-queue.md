@@ -69,3 +69,11 @@ per-file step/eligibility and scientific artifact acceptance, optional physicall
 absent field circuitry, chain-station transfers, remaining VB6 auxiliary tools,
 portable rebuilding, performance and physical/scientific station qualification.
 No physical instruments were actuated by these checks.
+
+Queue file treatment text now drives its compiled Meas sequence rather than the
+global label list. Resolved labels/counts are captured before startup, linked into
+the durable plan and verified again at loaded-specimen handoff. The panel passes
+these labels to MeasurementWorker before acquiring its worker leases. Same-file
+step/orientation conflicts and reviewed routine mismatches block startup. Runtime
+step totals preserve the separately loaded sequence; see queue-file-sequences.md
+for coverage and the remaining registry/orientation/scientific acceptance work.

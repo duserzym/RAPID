@@ -12,6 +12,7 @@ class QueueSample:
     do_up: bool = True
     do_both: bool = False
     measurement_step_count: int = 1
+    measurement_labels: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -20,6 +21,7 @@ class QueueCommand:
     hole: int = 0
     file_id: str = ""
     sample_name: str = ""
+    measurement_labels: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -60,18 +62,35 @@ def validate_queue_samples(samples: Iterable[QueueSample]) -> QueueValidationRes
     warnings: list[str] = []
 
     seen_holes: dict[int, int] = {}
+    file_settings: dict[str, tuple] = {}
     for idx, item in enumerate(samples):
         if not item.sample_name:
             errors.append(f"row {idx + 1}: sample_name is required")
 
-        if item.hole < 1:
+        if type(item.hole) is not int or item.hole < 1:
             errors.append(f"row {idx + 1}: hole must be >= 1")
 
-        if item.measurement_step_count < 1:
+        if type(item.measurement_step_count) is not int or item.measurement_step_count < 1:
             errors.append(
                 f"row {idx + 1}: measurement_step_count must be >= 1"
             )
+        if not isinstance(item.file_id, str) or not item.file_id.strip():
+            errors.append(f"row {idx + 1}: file_id is required")
+        if type(item.do_up) is not bool or type(item.do_both) is not bool:
+            errors.append(f"row {idx + 1}: orientation settings must be explicit booleans")
+        labels = item.measurement_labels
+        if (type(labels) is not tuple or any(not isinstance(label, str) or not label.strip() for label in labels)):
+            errors.append(f"row {idx + 1}: measurement labels must be a tuple of nonempty strings")
+        elif labels and len(labels) != item.measurement_step_count:
+            errors.append(f"row {idx + 1}: measurement step count does not match its labels")
+        settings = (item.do_up, item.do_both, item.measurement_step_count, labels)
+        if isinstance(item.file_id, str) and item.file_id in file_settings and file_settings[item.file_id] != settings:
+            errors.append(f"row {idx + 1}: rows from one file must agree on measurement steps and orientation settings")
+        elif isinstance(item.file_id, str):
+            file_settings[item.file_id] = settings
 
+        if type(item.hole) is not int:
+            continue
         if item.hole in seen_holes:
             warnings.append(
                 f"duplicate hole {item.hole}: rows {seen_holes[item.hole] + 1} and {idx + 1}"
@@ -85,11 +104,23 @@ def validate_queue_samples(samples: Iterable[QueueSample]) -> QueueValidationRes
     return QueueValidationResult(tuple(errors), tuple(warnings))
 
 
+def resolve_queue_samples(samples: Iterable[QueueSample], default_labels: Iterable[str]) -> list[QueueSample]:
+    """Snapshot each file's executable labels before queue compilation/startup."""
+    defaults = tuple(default_labels)
+    samples = list(samples)
+    needs_defaults = any(type(item.measurement_labels) is tuple and not item.measurement_labels for item in samples)
+    if (needs_defaults and not defaults) or any(not isinstance(label, str) or not label.strip() for label in defaults):
+        raise ValueError('Default measurement sequence must contain nonempty labels.')
+    return [replace(item, measurement_labels=defaults, measurement_step_count=len(defaults))
+            if type(item.measurement_labels) is tuple and not item.measurement_labels else replace(item) for item in samples]
+
+
 def compile_queue(
     samples: list[QueueSample],
     options: QueueOptions,
     *,
     strict: bool = False,
+    default_labels: Iterable[str] | None = None,
 ) -> list[QueueCommand]:
     """Compile VB6-style queue commands from sample metadata.
 
@@ -102,6 +133,8 @@ def compile_queue(
     6) preprocess for doBoth/doUp semantics
     7) optional final return Goto
     """
+    if default_labels is not None:
+        samples = resolve_queue_samples(samples, default_labels)
     validation = validate_queue_samples(samples)
     if strict and validation.errors:
         raise ValueError(f"Invalid queue specification: {'; '.join(validation.errors)}")
@@ -126,7 +159,7 @@ def compile_queue(
     ordered = sorted(samples, key=lambda s: s.hole, reverse=not options.ascending)
     measured_count = 0
     for item in ordered:
-        cmds.append(QueueCommand("Meas", item.hole, item.file_id, item.sample_name))
+        cmds.append(QueueCommand("Meas", item.hole, item.file_id, item.sample_name, item.measurement_labels))
         measured_count += 1
         if (
             options.repeat_holder

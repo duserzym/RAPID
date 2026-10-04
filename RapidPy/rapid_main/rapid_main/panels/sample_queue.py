@@ -776,11 +776,7 @@ def _parse_hole(position_text: str) -> tuple[int | None, str | None]:
 def _parse_step_count(treatment_text: str) -> int:
     if not treatment_text:
         return 1
-    if "→" in treatment_text:
-        return max(1, treatment_text.count("→") + 1)
-    if "->" in treatment_text:
-        return max(1, treatment_text.count("->") + 1)
-    return 1
+    return len(re.split(r'→|->', treatment_text))
 
 
 def _normalize_status(status: str) -> str:
@@ -844,6 +840,10 @@ def _read_queue_rows(table: QtWidgets.QTableWidget) -> tuple[list[QueueSample], 
             # defer to queue validator for consistent formatting
             sample_name = ""
 
+        labels = tuple(part.strip() for part in re.split(r'→|->', treatment or 'NRM'))
+        if any(not label for label in labels):
+            errors.append(f'row {row_no}: treatment sequence contains an empty step')
+            continue
         samples.append(
             QueueSample(
                 sample_name=sample_name,
@@ -852,6 +852,7 @@ def _read_queue_rows(table: QtWidgets.QTableWidget) -> tuple[list[QueueSample], 
                 do_up=True,
                 do_both=False,
                 measurement_step_count=_parse_step_count(treatment),
+                measurement_labels=labels,
             )
         )
 

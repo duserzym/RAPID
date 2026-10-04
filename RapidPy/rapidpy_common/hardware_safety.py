@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import threading
 import uuid
 
 
@@ -27,6 +28,32 @@ def default_safety_path():
     # operator setting. Changing RAPID_CONFIG or data_dir cannot reset a latch.
     override = os.environ.get("RAPID_SAFETY_STATE")
     return Path(override) if override else Path.home() / ".rapid" / "hardware_safety.json"
+
+
+_snapshot_locks = {}
+_snapshot_locks_guard = threading.Lock()
+
+
+def _snapshot_lock(path):
+    """Serialize only local snapshot handles/replacement, across store instances."""
+    key = os.path.normcase(str(Path(path).resolve()))
+    with _snapshot_locks_guard:
+        return _snapshot_locks.setdefault(key, threading.RLock())
+
+
+def _replace_snapshot(source, destination):
+    """Retry the same durable bytes briefly for Windows reader/sharing contention."""
+    waits = (.01, .02, .04, .08, .16)
+    for attempt in range(len(waits) + 1):
+        try:
+            os.replace(source, destination)
+            return
+        except OSError as exc:
+            if (os.name != 'nt' or getattr(exc, 'winerror', None) not in {5, 32, 33}
+                    or attempt == len(waits)):
+                raise
+            # Bounded file publication only; never repeat a hardware operation.
+            threading.Event().wait(waits[attempt])
 
 
 class HardwareSafetyStore:
@@ -79,8 +106,11 @@ class HardwareSafetyStore:
 
     def read(self):
         try:
-            with self.path.open("r", encoding="utf-8") as handle:
-                envelope = json.load(handle, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
+            with _snapshot_lock(self.path):
+                with self.path.open('rb') as handle:
+                    payload = handle.read()
+            # Parse after closing the snapshot; all schema/hash/history checks remain.
+            envelope = json.loads(payload.decode('utf-8'), parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
             state = envelope["state"]
             if envelope["sha256"] != hashlib.sha256(_canonical(state)).hexdigest():
                 raise ValueError("checksum mismatch")
@@ -115,7 +145,8 @@ class HardwareSafetyStore:
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, self.path)
+            with _snapshot_lock(self.path):
+                _replace_snapshot(temporary, self.path)
             if os.name != "nt":
                 descriptor = os.open(self.path.parent, os.O_RDONLY)
                 try:

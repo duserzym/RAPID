@@ -50,8 +50,8 @@ class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestC
                 self.backend._sample_height(), self.backend._direction_up, kwargs['owner']))
         return True
 
-    def wait_for(self, predicate):
-        deadline = time.monotonic() + 15
+    def wait_for(self, predicate, *, timeout=15):
+        deadline = time.monotonic() + timeout
         while not predicate() and time.monotonic() < deadline:
             self.app.processEvents()
             # Native fixture replaces hardware's shared time.sleep; use a real
@@ -98,6 +98,19 @@ class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestC
         self.assertFalse(self.start(answer=QtWidgets.QMessageBox.StandardButton.No))
         self.assertEqual((self.store.read(), len(self.commands), len(self.vacuum_serial.writes)), before)
         self.assertTrue(all(self.window._ownership.owner_of(item) is None for item in RESOURCES))
+
+    def test_file_sequence_handoff_requires_original_journaled_command(self):
+        self.assertTrue(self.start(), self.window._sb_status.text())
+        self.window._sequence_labels = ['IRM100']
+        self.assertEqual(self.window.queue_measurement_labels('S1'), ['NRM'])
+        command = self.window._queue_current_command
+        before = len(self.commands), len(self.vacuum_serial.writes)
+        command.measurement_labels = ('AF20',)
+        with self.assertRaisesRegex(ValueError, 'journaled queue sequence'):
+            self.window.queue_measurement_labels('S1')
+        self.assertEqual((len(self.commands), len(self.vacuum_serial.writes)), before)
+        self.assertTrue(all(self.window._ownership.is_owned(item) for item in RESOURCES))
+
 
     def test_one_busy_resource_blocks_the_whole_start_without_partial_reservations(self):
         lease = self.window.acquire_device('susceptibility', 'diagnostic')
@@ -219,7 +232,9 @@ class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestC
         try:
             with self.arm_xy_edges(), patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.StandardButton.Yes):
                 self.assertTrue(self.window.start_queue_run([QueueSample('S1', 'F1', 1)], QueueOptions()))
-                self.wait_for(lambda: entered.is_set() and self.window._queue_command_thread is None)
+                # This wait spans startup, holder, load and actual QThread exit.
+                # Allow two phase budgets; preserve every pause/no-reload assertion.
+                self.wait_for(lambda: entered.is_set() and self.window._queue_command_thread is None, timeout=30)
             self.assertEqual(self.started, [])
             self.assertTrue(self.window._queue_meas_pending_start)
             self.window.toggle_queue_pause()

@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -36,6 +37,82 @@ class SafetyStoreTests(unittest.TestCase):
         self.assertEqual(pending["plan"], {"field": 10})
         with self.assertRaises(HardwareSafetyError):
             HardwareSafetyStore(self.path).begin("rrm", {}, self.profile)
+
+    def test_observer_snapshot_and_concurrent_finish_preserve_both_records(self):
+        token = self.begin()
+        opened, release, writing, finished = (threading.Event() for _ in range(4))
+        states, errors = [], []
+        original_open = Path.open
+        class PausedRead:
+            def __init__(self, handle): self.handle = handle
+            def __enter__(self): return self
+            def __exit__(self, *args): self.handle.close()
+            def read(self):
+                opened.set()
+                if not release.wait(5): raise RuntimeError('observer release timeout')
+                return self.handle.read()
+        def open_snapshot(path, mode='r', *args, **kwargs):
+            handle = original_open(path, mode, *args, **kwargs)
+            return PausedRead(handle) if mode == 'rb' and threading.current_thread().name == 'observer' else handle
+        def observe():
+            try: states.append(HardwareSafetyStore(self.path).read())
+            except Exception as exc: errors.append(exc)
+        def finish():
+            writing.set()
+            try: HardwareSafetyStore(self.path).finish(token, self.profile, record())
+            except Exception as exc: errors.append(exc)
+            finally: finished.set()
+        observer, writer = threading.Thread(target=observe, name='observer'), threading.Thread(target=finish)
+        with patch.object(Path, 'open', open_snapshot):
+            try:
+                observer.start()
+                self.assertTrue(opened.wait(5))
+                writer.start()
+                self.assertTrue(writing.wait(5))
+                self.assertFalse(finished.wait(.05))
+            finally:
+                release.set()
+                observer.join(5)
+                if writer.ident is not None: writer.join(5)
+        self.assertFalse(observer.is_alive())
+        self.assertFalse(writer.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(states[0]['status'], 'pending')
+        self.assertEqual(states[0]['token'], token)
+        self.assertEqual(self.store.read()['status'], 'verified')
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows sharing-error publication path')
+    def test_transient_windows_sharing_error_retries_same_fsynced_snapshot(self):
+        token = self.begin()
+        replace = os.replace
+        for code in (5, 32, 33):
+            calls = []
+            def temporarily_busy(source, destination):
+                calls.append((source, destination))
+                if len(calls) == 1:
+                    exc = PermissionError('reader busy')
+                    exc.winerror = code
+                    raise exc
+                return replace(source, destination)
+            with patch('rapid_main.hardware_safety.os.replace', temporarily_busy):
+                self.store.finish(token, self.profile, record(False))
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[0], calls[1])
+            self.assertEqual(self.store.pending()['token'], token)
+        self.store.finish(token, self.profile, record())
+        self.assertIsNone(self.store.pending())
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows sharing-error publication path')
+    def test_persistent_windows_denial_retains_pending_and_exhausts_bounded_retry(self):
+        token = self.begin()
+        exc = PermissionError('permanent denial')
+        exc.winerror = 5
+        with patch('rapid_main.hardware_safety.os.replace', side_effect=exc) as replace:
+            with self.assertRaises(HardwareSafetyError):
+                self.store.finish(token, self.profile, record())
+        self.assertEqual(replace.call_count, 6)
+        self.assertEqual(self.store.pending()['token'], token)
+        self.assertEqual(list(self.path.parent.glob('*.tmp-*')), [])
 
     def test_only_physical_verified_record_clears_then_new_operation_can_begin(self):
         token = self.begin()

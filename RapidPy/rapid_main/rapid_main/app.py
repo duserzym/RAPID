@@ -65,7 +65,7 @@ from .panels import (
     SequencePanel,
     SettingsPanel,
 )
-from .queue_compiler import QueueCommand, QueueOptions, QueueSample, compile_queue
+from .queue_compiler import QueueCommand, QueueOptions, QueueSample, compile_queue, resolve_queue_samples
 from .queue_command_worker import QueueCommandWorker
 from .package_launch import ToolUnavailableError, resolve_tool_launch
 from .runtime_estimator import RuntimeEstimator
@@ -880,7 +880,8 @@ class MainWindow(QtWidgets.QMainWindow):
         start_time:
             Wall-clock time the run started (for ETA calculation).
         """
-        labels = self._sequence_labels
+        labels = getattr(self, '_run_sequence_labels', None) if running else self._sequence_labels
+        labels = labels if labels is not None else self._sequence_labels
         if not labels:
             self._sb_runtime.setText("No sequence loaded")
             return
@@ -968,12 +969,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self.set_status("Queue is empty.")
             return False
 
-        if not self._sequence_labels:
+        if not self._sequence_labels and any(not sample.measurement_labels for sample in samples):
             self.set_status("Load a measurement sequence first.")
             return False
 
         try:
+            samples = resolve_queue_samples(samples, self._sequence_labels)
             self._queue_plan = compile_queue(samples, options, strict=True)
+            for plan in (self._rockmag_routine_plan, self._thermal_routine_plan):
+                if plan is not None and any(command.command_type == 'Meas'
+                        and list(command.measurement_labels) != list(plan.to_queue_labels()) for command in self._queue_plan):
+                    raise ValueError('The reviewed routine identity must match every file measurement sequence.')
         except Exception as exc:
             self.set_status(f"Queue failed validation: {exc}")
             QtWidgets.QMessageBox.critical(
@@ -1297,6 +1303,28 @@ class MainWindow(QtWidgets.QMainWindow):
             self._run_measure_command()
         else:
             self._run_automation_command(self._queue_current_command)
+
+    def queue_measurement_labels(self, sample_name: str) -> list[str]:
+        """Resolve the original compiled per-file sequence for this handoff."""
+        command = self._queue_current_command
+        if (not self._queue_active or command is None or command.command_type != 'Meas'
+                or command.sample_name != sample_name or not command.measurement_labels
+                or not any(item is command for item in self._queue_plan)):
+            raise ValueError('The original active queue measurement command is required.')
+        session = self._queue_native_session
+        if session is not None:
+            state = session.store.read()
+            session.store.verify_history(state)
+            expected = json.loads(json.dumps([asdict(item) for item in self._queue_plan]))
+            if (state['family'] != 'queue' or state['token'] != session.token or state['status'] != 'pending'
+                    or state['plan']['commands']['commands'] != expected
+                    or self._queue_loaded_command is not command):
+                raise ValueError('Restore the original journaled queue sequence and loaded specimen before measurement.')
+        labels = list(command.measurement_labels)
+        for plan in (self._rockmag_routine_plan, self._thermal_routine_plan):
+            if plan is not None and list(plan.to_queue_labels()) != labels:
+                raise ValueError('The reviewed routine identity does not match this file measurement sequence.')
+        return labels
 
     def _run_measure_command(self) -> None:
         if self._queue_current_command is None:
@@ -1768,8 +1796,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def start_run(self, labels: list[str] | None = None) -> None:
         """Begin a measurement run — start the live countdown timer."""
-        if labels is not None:
-            self._sequence_labels = list(labels)
+        self._run_sequence_labels = list(labels if labels is not None else self._sequence_labels)
         self._run_current_idx = 0
         self._run_start_time = datetime.now()
         self._run_timer.start()
@@ -1779,6 +1806,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def stop_run(self) -> None:
         """End the measurement run — stop the countdown timer."""
         self._run_timer.stop()
+        self._run_sequence_labels = None
         self._run_start_time = None
         self._run_current_idx = 0
         self._update_runtime_display(running=False)

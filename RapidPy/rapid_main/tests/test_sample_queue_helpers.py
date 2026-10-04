@@ -59,6 +59,21 @@ class TestSampleQueueHelpers(unittest.TestCase):
         self.assertEqual(_parse_step_count("NRM -> 25mT AF -> 50mT AF"), 3)
         self.assertEqual(_parse_step_count("SAMP1 -> SAMP2 -> SAMP3"), 3)
 
+    def test_row_treatment_labels_are_executable_steps_and_empty_steps_fail(self):
+        panel = SampleQueuePanel()
+        try:
+            panel.add_sample(position='A1', name='A', sample_set='F1', treatment='NRM -> AF20 → SUSC')
+            samples, errors = _read_queue_rows(panel._table)
+            self.assertEqual(errors, [])
+            self.assertEqual(samples[0].measurement_labels, ('NRM', 'AF20', 'SUSC'))
+            self.assertEqual(samples[0].measurement_step_count, 3)
+            panel._table.item(0, 4).setText('NRM -> -> AF20')
+            samples, errors = _read_queue_rows(panel._table)
+            self.assertEqual(samples, [])
+            self.assertIn('empty step', errors[0])
+        finally:
+            panel.deleteLater()
+
     def test_normalize_status(self) -> None:
         self.assertEqual(_normalize_status("done"), "Done")
         self.assertEqual(_normalize_status("pending"), "Pending")

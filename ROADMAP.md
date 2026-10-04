@@ -1680,3 +1680,53 @@ terminal and twelve native-window cases. Source release smoke passes all six pan
 and six helper imports with code 0; compilation and diff checks pass. Tests use
 injected DLL/serial interfaces and scientific-panel/holder orchestration stubs;
 these results do not establish physical station or final scientific acceptance.
+
+### Per-file executable queue sequences
+
+Sample Queue treatment text now supplies actual ordered file measurement labels,
+including mixed Unicode/ASCII arrows. Empty steps fail validation. QueueSample and
+compiled Meas commands retain tuples; programmatic samples without explicit labels
+snapshot the loaded sequence and derive the actual count before startup. Same-file
+step/count/orientation/doBoth conflicts and malformed strict metadata are rejected.
+VB6's multi-step suppression of dual-side repeats now uses the executable count;
+one-step second-pass commands preserve their original labels.
+
+Native startup journals resolved samples/commands. Measurement handoff requires the
+original current/loaded Meas command, matching sample and exact durable command plan,
+root token/status and full linked history before worker lease acquisition. Global
+sequence edits cannot change compiled steps; command changes block native handoff.
+Reviewed routine identities must match all file labels before startup and at handoff.
+MeasurementWorker and step/runtime counters use the file sequence without replacing
+the independently loaded sequence. See docs/queue-file-sequences.md.
+
+File-registry progress/eligibility counters, operator orientation/doBoth editing and
+imports, final scientific bundle acceptance, earlier-stage/restart recovery, chain
+support, remaining VB6 auxiliary tools, portable rebuilding, performance and physical
+qualification remain required. Full-system goal remains active.
+
+Full-suite verification also exposed Windows journal replacement denial during
+native startup. HardwareSafetyStore now closes byte snapshots before parsing and
+serializes local open/read/close against replacement through a shared canonical-path
+lock across store instances. Windows 5/32/33 errors retry only identical fsynced
+snapshot publication (six attempts, 0.31 seconds total backoff); persistent denial
+and other errors retain the existing durable state and fail closed. OS transaction
+and lifetime ownership, schema/checksum/history validation and hardware execution
+remain unchanged. Concurrent observer/publication and transient/persistent Windows
+error regressions pass. The native pause fixture allows a bounded combined phase
+observation budget; production deadlines and its pause/no-reload assertions remain.
+
+Registry source-file identity remains incomplete: Sample Set currently supplies
+queue file_id, and selector addition derives that display value from formation or
+location rather than the original .sam source. This checkpoint does not claim legacy
+file registry or final scientific acceptance.
+
+Verification: final isolated full suite passes 1,191 tests in 512.621 seconds and
+exits with code 0 after Qt/interpreter teardown. Focused checks pass 31 hardware
+safety cases (including concurrent snapshot/publication and Windows retry bounds),
+28 queue-safety cases and 13 native-window cases with clean exits. Measurement-panel
+and row-parser checks pass; the full run includes eight new file-sequence cases.
+Source release smoke passes all six panels and six helper imports with code 0;
+compilation and diff checks pass. Earlier full runs exposed the combined observer
+wait budget and Windows publication race described above; the final run verifies
+the fixes together. No physical instruments were actuated, and portable artifacts
+and physical/final scientific acceptance are not established by these checks.
