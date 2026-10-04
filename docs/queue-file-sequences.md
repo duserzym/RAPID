@@ -140,3 +140,20 @@ are created within the admitted root, and resume copies preserve those paths.
 These are admission/use checks, not an atomic defense against arbitrary concurrent
 filesystem mutation. Complete scientific acceptance, registry/.UP/eligibility,
 standalone provenance, recovery, portable/performance and physical gates remain.
+
+Legacy `.UP` interchange now has a strict reader/writer in `io/legacy_up.py`,
+derived from `VB6/Sample.cls` (`WriteUpMeasurements`/`ReadUpMeasurements`). A run
+contains ten rows per block: two Z baselines, four S sample vectors, four H holder
+vectors, plus specimen, direction, run block count, block/reading number and optional
+row timestamp. Repeated specimens remain separate runs; exact specimen lookup
+selects the latest complete Up run. Truncated or corrupt trailing runs fail closed
+rather than falling back to older data. Seven-column records retain missing times.
+The writer emits CRLF, ordered rows and seven-decimal scientific notation.
+
+The file has no treatment, calibration or acquisition audit fields. Converting its
+raw readings requires explicit external range/axis calibration and creates no
+live observations or hardware audit. A full acquisition export must retain its
+audit separately. VB6 places this file at the current-step path, not one filename
+for all treatments. Queue wiring, durable per-step identity/eligibility, AvgSteps,
+Up/Down assimilation/statistics and final scientific publication remain required;
+the interchange checkpoint alone does not fix paired-run overwriting.

@@ -1901,3 +1901,21 @@ cleanup. Six-panel source smoke, compilation and diff checks passed. Tests use
 injected instrument interfaces; real NTFS filesystem cases establish the stated
 path checks, not physical/scientific station qualification. Full-system completion
 remains unproven and the goal remains active.
+
+Legacy raw `.UP` interchange checkpoint: `io/legacy_up.py` implements the ten-row
+block format from VB6 `Sample.WriteUpMeasurements`/`ReadUpMeasurements`. It
+preserves two baseline, four specimen and four holder vectors, direction and row
+timestamps; repeated runs select the latest exact-specimen Up record. Complete
+strict parsing rejects identity/count/order corruption, nonfinite vectors, invalid
+dates and partial trailing runs. Seven-column legacy records retain absent times.
+Export uses CRLF and seven-decimal scientific notation; conversion requires
+explicit external calibration and fabricates neither live observations nor audit.
+
+All 13 fixture/interchange tests passed in 0.068 seconds and the owned process
+exited normally with code 0 after watchdog cancellation. The eight existing
+magnetometer tests also passed with a normal exit; compilation and diff checks
+passed. This new module is an isolated migration foundation: queue invocation,
+trusted per-step source context, durable Up artifacts/eligibility, AvgSteps and
+Up/Down assimilation/full statistics/final publication still require integration.
+No full-suite or physical-format acceptance claim is made for this checkpoint.
+The full-system goal remains active.
