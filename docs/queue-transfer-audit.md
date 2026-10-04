@@ -42,9 +42,20 @@ multiple files, periodic blanks, an existing Flip and final return placement.
 
 ## Remaining integration work
 
+`rapid_main.queue_station.QueueStationGeometry` now resolves blank-holder markers
+from the full accepted motor calibration and imported `HoleSlotNum`. XY stations
+have one explicit empty slot; chain stations use multiples of `HoleSlotNum`, circular
+distance and the legacy upper-on-tie rule. Unsupported chain origins fail validation.
+The resolver rejects specimen/blank confusion and checks signed controller position
+readbacks for slot alignment and the exact requested empty location. It performs no
+I/O and is not yet wired into the automatic transfer coordinator. Workers must obtain
+fresh readbacks and persist ownership before motion; an aligned position alone does
+not prove stopped motors or safe vertical clearance.
+
 Implement separate pump/valve phases under the durable parent queue and record each
-native motion/acquisition/transfer stage. Resolve actual empty holes from the accepted
-station geometry, persist the specimen's original slot and transfer state, and verify
+native motion/acquisition/transfer stage. Wire accepted empty-hole resolution and
+fresh readback verification into those stages, persist the specimen's original slot
+and transfer state, and verify
 clearance/stop/support before changing vacuum. Add the original-panel recovery path
 which preserves grip when specimen support or field/motion safety is unknown. Wrap
 acquisition and treatment workers in the queue claim without moving hardware waits

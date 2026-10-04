@@ -1149,3 +1149,22 @@ No physical instruments were actuated. Operator workflow wiring, separate pump/
 valve transfer phases, durable motion/acquisition stages, original-panel recovery,
 auxiliary tools, portable rebuilding and physical/scientific acceptance remain
 required full-system work; the goal remains active.
+
+### Accepted empty-hole geometry checkpoint (2026-10-03)
+
+Added QueueStationGeometry for queue transfer planning. It requires full imported
+motor calibration, explicit table mode and HoleSlotNum. XY blank reads resolve to
+the one calibrated empty slot; chain blanks use the imported interval, circular
+wrap and VB6 upper-on-tie behavior. Specimen slots and holder locations cannot be
+interchanged. Position checks reject malformed/out-of-range controller counts,
+misalignment and a readback at a different empty hole. Unsupported chain origins
+fail closed; geometry calculations issue no hardware commands.
+
+All 919 isolated tests pass in 131.998 seconds, including 12 new station regressions
+and exhaustive comparisons with legacy directional searches on representative
+chains. Six-panel/six-helper source smoke passes. This resolver still needs to be
+claimed, persisted and invoked by the transfer worker with fresh hardware readbacks.
+Separate pump/valve phases, actual specimen pickup/return, operator tray inversion,
+per-file orientation, durable acquisition ownership, original-panel recovery,
+portable rebuilding and physical/scientific acceptance remain open. The full-system
+goal remains active. No physical instruments were actuated.
