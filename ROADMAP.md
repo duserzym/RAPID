@@ -1838,3 +1838,31 @@ The owned process has reached Qt shutdown/interpreter return but has not yet exi
 normally; its original handle is retained for continued diagnosis. This is passing
 assertion evidence, not a clean full-suite process-exit result. The recorded
 full-suite teardown issue remains a completion gate.
+
+Full-suite shutdown diagnostic: the retained 1,210-assertion run was revalidated
+live. Read-only Windows wait-chain inspection reported the owned main thread
+blocked but did not identify its owner. A native register/stack snapshot (with
+immediate thread resumption) located the wait in Python finalization/thread-lock
+routines; it did not establish a Qt destructor failure. The repeating traceback
+watchdog was left active until interpreter finalization. The harness now owns that
+watchdog explicitly and cancels it in finally after normal/exceptional suite and
+Qt cleanup, while Python is still running. No forced exit or application worker
+termination is added. CPython's watchdog cleanup also waits for its thread:
+https://github.com/python/cpython/blob/v3.12.10/Modules/faulthandler.c
+
+The targeted panel run passed 16 tests (2.493 seconds), printed watchdog-stopped
+confirmation and exited normally. A fresh full run is underway to test this
+hypothesis after repeated watchdog firings. The diagnosed stale owned process
+was stopped only after validating its exact PID/parent/command identity.
+
+Verification: all 1,210 tests passed in 591.476 seconds and the full owned process
+exited normally with code 0 after Qt cleanup and explicit watchdog-stopped
+confirmation. The watchdog remained active through deferred QObject disposal and
+Qt application shutdown; cancellation then completed while Python was alive.
+This is a clean current full-suite exit, covering the earlier queue source-index,
+header-snapshot and scientific source-artifact changes as well as native lifecycle
+regressions. The earlier stalled runs remain accurately recorded as non-clean exits.
+Compilation and diff checks passed. Explicit watchdog ownership corrects the test
+harness teardown; physical station, scientific-format/.UP/progress/eligibility,
+standalone provenance/containment, restart recovery, chain/auxiliary, portable and
+performance completion gates remain required. The full-system goal remains active.

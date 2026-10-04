@@ -21,6 +21,16 @@ def main() -> int:
     args = parser.parse_args()
     if args.stall_trace:
         faulthandler.dump_traceback_later(60, repeat=True)
+    try:
+        return run_suite(args)
+    finally:
+        if args.stall_trace:
+            print('Test teardown: cancelling traceback watchdog', flush=True)
+            faulthandler.cancel_dump_traceback_later()
+            print('Test teardown: traceback watchdog stopped', flush=True)
+
+
+def run_suite(args) -> int:
     from PySide6 import QtCore
     with tempfile.TemporaryDirectory(prefix="rapidpy-tests-") as directory:
         os.environ["RAPID_CONFIG"] = str(Path(directory) / "config.json")
