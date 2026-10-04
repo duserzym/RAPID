@@ -1509,3 +1509,33 @@ checks pass. Two earlier full attempts stalled at shutdown; --stall-trace now
 reports teardown boundaries and keeps its traceback timer available through
 interpreter exit. The diagnostic rerun completed normally. No physical instruments
 actuated; portable and physical/scientific qualification remain open.
+
+### Original native empty-rod queue startup (2026-10-04)
+
+The production backend now prepares a durable queue lifetime without I/O, capturing
+all native motion/vacuum/field/scientific profiles and a named, timestamped operator
+empty-rod attestation. It rejects retained handles, borrowed owners, diagnostic
+holds, unavailable components and changed accepted motor/vacuum/ARM/pulse bindings.
+
+Under the original queue worker claim, startup verifies participating fields off,
+journals motor connection/broadcast before I/O, independently verifies all four
+stops, and uses a typed empty-rod stop proof for acknowledged valve OFF/pump ON.
+A separate empty-lift stage issues at most one switch-guarded upward sweep before
+verified stop/top and zero; cancellation or absent switch evidence withholds zero
+and XY motion. The native two-edge XY reference then binds the original transfer
+coordinator and terminal cleanup. Failed/interrupted startup retains ownership and
+cannot replay, including from a recovery session.
+
+See docs/queue-native-startup.md. MainWindow still requires operator confirmation/
+loading stages, whole-run leases and dispatch through this API; blank-holder,
+per-command specimen slot/file/orientation, chain transfers and original-panel
+restart recovery remain open. Physically absent circuits must be distinguished
+from disabled treatments; participating AF/pulse/ARM circuits remain mandatory.
+Portable rebuilding and physical/scientific acceptance are still required. The
+full-system goal remains active.
+
+Verification: all 1,116 isolated main-app tests pass in 300.540 seconds with Qt
+teardown and normal process exit code zero. The 14 focused startup regressions
+pass in 24.733 seconds. Six-panel/six-helper source smoke, compilation and diff
+checks pass. All native DLL/serial startup tests use injected interfaces; no
+physical instruments actuated and no station qualification is implied.

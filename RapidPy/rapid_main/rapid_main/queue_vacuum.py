@@ -119,7 +119,8 @@ class QueueVacuumBinding:
         if transfer_pose is not None:
             from .queue_lift_transfer import QueueVacuumPoseProof
             from .queue_terminal import QueueTerminalPoseProof
-            if not isinstance(transfer_pose, (QueueVacuumPoseProof, QueueTerminalPoseProof)):
+            from .queue_startup import QueueEmptyRodStopProof
+            if not isinstance(transfer_pose, (QueueVacuumPoseProof, QueueTerminalPoseProof, QueueEmptyRodStopProof)):
                 raise HardwareSafetyError('Native original specimen pose proof is required.')
             transfer_pose.require(self.session, valve_connected)
             motors_stopped_verified = True

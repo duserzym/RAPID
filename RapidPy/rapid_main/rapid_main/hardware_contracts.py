@@ -409,6 +409,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._sample_loaded = False
         self._queue_specimen_geometry = None
         self._queue_coordinator = None
+        self._queue_startup = None
         self._retired_transport_recovery_records = []
         self._geometry_stage_token = None
         self._bracketed_geometry_signature = None
@@ -703,6 +704,18 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         with claim:
             yield
 
+    def prepare_queue_lifetime(self, vacuum, plan, *, run_id, operator, empty_rod_confirmed=False):
+        """Create the original durable owner without opening ports or changing outputs."""
+        from .queue_startup import QueueNativeStartup
+        return QueueNativeStartup.prepare(self, vacuum, plan, run_id=run_id, operator=operator,
+            empty_rod_confirmed=empty_rod_confirmed)
+
+    def start_queue_lifetime(self):
+        startup = getattr(self, '_queue_startup', None)
+        if startup is None:
+            raise HardwareError('Prepare the original empty-rod queue owner before native startup.')
+        return startup.run()
+
     def bind_queue_coordinator(self, coordinator):
         """Attach original transfer services and borrow their durable stage store."""
         from .queue_transfer_coordinator import QueueTransferCoordinator
@@ -745,6 +758,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._safety_store = coordinator.session.store
         self._queue_coordinator = None
         self._queue_terminal_cleanup = None
+        self._queue_startup = None
         self._connected = False
         self._retain_transport_recoveries()
         self._bracketed = None

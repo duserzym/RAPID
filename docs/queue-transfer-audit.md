@@ -150,3 +150,9 @@ Close/root-publication failures retain the original owner; live close-only retri
 and exact verified-record settlement never replay outputs or motion. See
 `queue-terminal-cleanup.md`. MainWindow attachment and original-panel restart
 recovery remain open alongside startup, blank/operator and chain integration.
+
+Native empty-rod startup now has a production backend API: see
+`queue-native-startup.md`. It persists the root owner before I/O, verifies fields
+and all four stops, establishes acknowledged valve OFF/pump ON, references the
+empty lift and both XY edges, then binds the same transfer/terminal coordinator.
+MainWindow dispatch and whole-run device leases still require integration.
