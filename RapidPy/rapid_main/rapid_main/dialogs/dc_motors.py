@@ -15,12 +15,47 @@ from rapid_main.diagnostic_services import (
 )
 from rapid_main.glass_theme import set_semantic_status
 from rapidpy_common.hardware import MotorTelemetry
-from rapidpy_common.ui import clamp_window_geometry
 
 try:
     import pyqtgraph as pg
 except ImportError:  # pragma: no cover - optional dependency path
     pg = None
+
+
+class MotorCommandWorker(QtCore.QObject):
+    succeeded = QtCore.Signal(str, object)
+    failed = QtCore.Signal(str, str)
+    settled = QtCore.Signal()
+
+    def __init__(self, backend, label, action):
+        super().__init__()
+        self.backend, self.label, self.action = backend, label, action
+        self._stop_event = threading.Event()
+
+    def stop(self):
+        self._stop_event.set()
+        stop = getattr(self.backend, 'request_stop', None)
+        if callable(stop):
+            stop()
+
+    @QtCore.Slot()
+    def run(self):
+        check = getattr(self.backend, 'set_cancel_check', None)
+        try:
+            if self._stop_event.is_set():
+                raise InterruptedError('Command cancelled before initialization.')
+            if callable(check):
+                check(self._stop_event.is_set)
+            result = self.action()
+            if self._stop_event.is_set():
+                raise InterruptedError('Command stopped; cleanup has settled.')
+            self.succeeded.emit(self.label, result)
+        except Exception as exc:
+            self.failed.emit(self.label, str(exc))
+        finally:
+            if callable(check):
+                check(None)
+            self.settled.emit()
 
 
 class TelemetryThread(QtCore.QThread):
@@ -212,6 +247,16 @@ class DCMotorDialog(QtWidgets.QDialog):
         }
 
         self._plot_timer = QtCore.QTimer(self)
+        self._command_thread = None
+        self._command_worker = None
+        self._close_after_cleanup = False
+        self._last_command_error = ''
+        self._close_timer = QtCore.QTimer(self)
+        self._close_timer.setSingleShot(True)
+        self._close_timer.timeout.connect(self._resume_close)
+        self._command_settle_timer = QtCore.QTimer(self)
+        self._command_settle_timer.setSingleShot(True)
+        self._command_settle_timer.timeout.connect(self._command_settled)
         self._plot_timer.setInterval(100)
         self._plot_timer.timeout.connect(self._refresh_plots)
         self._values_per_row = self._VALUE_GRID_COLUMNS
@@ -221,6 +266,7 @@ class DCMotorDialog(QtWidgets.QDialog):
         self._telemetry_thread = TelemetryThread(self._backend, self)
         self._telemetry_thread.sample_ready.connect(self._on_telemetry)
         self._telemetry_thread.poll_failed.connect(self._on_poll_error)
+        self._telemetry_thread.finished.connect(self._resume_close)
         self._telemetry_thread.start()
         self._plot_timer.start()
 
@@ -248,7 +294,7 @@ class DCMotorDialog(QtWidgets.QDialog):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(10)
 
-        header = QtWidgets.QHBoxLayout()
+        header = QtWidgets.QVBoxLayout()
         heading = QtWidgets.QVBoxLayout()
         title = QtWidgets.QLabel("Quicksilver Motor Control")
         title.setObjectName("dialogTitle")
@@ -261,27 +307,44 @@ class DCMotorDialog(QtWidgets.QDialog):
         heading.addWidget(title)
         heading.addWidget(subtitle)
         header.addLayout(heading)
-        header.addStretch(1)
-
+        summary = QtWidgets.QHBoxLayout()
         self._status = QtWidgets.QLabel()
         self._status.setWordWrap(True)
+        self._status.setMaximumHeight(64)
         self._axis_summary = QtWidgets.QLabel("Monitoring axis: --")
+        self._axis_summary.setWordWrap(True)
         self._axis_summary.setObjectName("valuePill")
         self._axis_summary.setAccessibleName("Monitored motor axis")
-        header.addWidget(self._status)
-        header.addWidget(self._axis_summary)
+        summary.addWidget(self._status, 1)
+        summary.addWidget(self._axis_summary, 1)
+        header.addLayout(summary)
         root.addLayout(header)
+        safety = QtWidgets.QHBoxLayout()
+        self.stop_motion_btn = QtWidgets.QPushButton('Stop Active Motion')
+        self.stop_motion_btn.setEnabled(False)
+        self.stop_motion_btn.clicked.connect(self._stop_command)
+        self.recover_stop_btn = QtWidgets.QPushButton('Recover: Verify Stopped')
+        self.recover_stop_btn.clicked.connect(self._recover_stop)
+        safety.addWidget(self.stop_motion_btn)
+        safety.addWidget(self.recover_stop_btn)
+        root.addLayout(safety)
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(6)
-        splitter.addWidget(self._build_control_panel())
-        splitter.addWidget(self._build_telemetry_panel())
+        self._control_panel = self._build_control_panel()
+        self._telemetry_panel = self._build_telemetry_panel()
+        splitter.addWidget(self._control_panel)
+        splitter.addWidget(self._telemetry_panel)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([self._SPLIT_LEFT_WIDTH_MAX, max(1, self._MIN_WINDOW_SIZE[0] - self._SPLIT_LEFT_WIDTH_MAX)])
         self._splitter = splitter
-        root.addWidget(splitter, 1)
+        self._workspace_stack = QtWidgets.QStackedWidget()
+        self._compact_tabs = QtWidgets.QTabWidget()
+        self._workspace_stack.addWidget(splitter)
+        self._workspace_stack.addWidget(self._compact_tabs)
+        root.addWidget(self._workspace_stack, 1)
 
         self.connect_btn.clicked.connect(self._connect)
         self.disconnect_btn.clicked.connect(self._disconnect)
@@ -300,6 +363,8 @@ class DCMotorDialog(QtWidgets.QDialog):
 
     def _configure_accessibility(self) -> None:
         controls = (
+            (self.stop_motion_btn, 'Stop active motor motion', 'Requests cancellation and waits for acknowledged stop and zero velocity readback.'),
+            (self.recover_stop_btn, 'Recover motor stopped state', 'Verifies the original axes stopped in place; never homes or replays motion.'),
             (self.port_edit, "Motor controller serial port", "Serial port used only when Connect is pressed."),
             (self.baud_combo, "Motor controller baud rate", "Baud rate used only when Connect is pressed."),
             (self.connect_btn, "Connect motor controller", "Opens the configured motor-controller connection; it does not move an axis."),
@@ -351,6 +416,15 @@ class DCMotorDialog(QtWidgets.QDialog):
             handle.screenChanged.connect(self._fit_to_screen)
             self._screen_signal_connected = True
 
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, '_workspace_stack') and not getattr(self, '_fitting_geometry', False):
+            self._fitting_geometry = True
+            try:
+                self._fit_to_screen()
+            finally:
+                self._fitting_geometry = False
+
     @QtCore.Slot(object)
     def _fit_to_screen(self, screen: QtGui.QScreen | None = None) -> None:
         active_screen = screen or self.screen() or QtWidgets.QApplication.primaryScreen()
@@ -358,13 +432,14 @@ class DCMotorDialog(QtWidgets.QDialog):
             return
 
         available = active_screen.availableGeometry()
-        max_w, max_h = clamp_window_geometry(available, (self.width(), self.height()))
+        max_w = min(self.width(), max(1, available.width() - 32))
+        max_h = min(self.height(), max(1, available.height() - 32))
         min_size = self.minimumSize()
         if min_size.isValid() and not min_size.isNull():
             self.setMinimumSize(min(min_size.width(), max_w), min(min_size.height(), max_h))
         compact = (
-            available.width() < self._COMPACT_SPLIT_WIDTH
-            or available.height() < self._COMPACT_SPLIT_HEIGHT
+            max_w < self._COMPACT_SPLIT_WIDTH
+            or max_h < self._COMPACT_SPLIT_HEIGHT
         )
         if available.width() < self._NARROW_SPLIT_WIDTH:
             wanted_columns = self._VALUE_GRID_NARROW_COLUMNS
@@ -378,6 +453,17 @@ class DCMotorDialog(QtWidgets.QDialog):
         )
         if self._splitter.orientation() != wanted_orientation:
             self._splitter.setOrientation(wanted_orientation)
+
+        if compact and self._workspace_stack.currentWidget() != self._compact_tabs:
+            self._compact_tabs.addTab(self._control_panel, 'Controls')
+            self._compact_tabs.addTab(self._telemetry_panel, 'Feedback and Plots')
+            self._workspace_stack.setCurrentWidget(self._compact_tabs)
+        elif not compact and self._workspace_stack.currentWidget() != self._splitter:
+            while self._compact_tabs.count():
+                self._compact_tabs.removeTab(0)
+            self._splitter.addWidget(self._control_panel)
+            self._splitter.addWidget(self._telemetry_panel)
+            self._workspace_stack.setCurrentWidget(self._splitter)
 
         if self._splitter.orientation() == QtCore.Qt.Orientation.Horizontal:
             left = max(
@@ -526,7 +612,7 @@ class DCMotorDialog(QtWidgets.QDialog):
         scroll.setWidget(left)
         return scroll
 
-    def _build_telemetry_panel(self) -> QtWidgets.QFrame:
+    def _build_telemetry_panel(self) -> QtWidgets.QScrollArea:
         panel = QtWidgets.QFrame()
         panel.setObjectName("card")
         panel.setSizePolicy(
@@ -587,7 +673,11 @@ class DCMotorDialog(QtWidgets.QDialog):
         r.addWidget(self._console)
 
         self._refresh_connection_state()
-        return panel
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        scroll.setWidget(panel)
+        return scroll
 
     def _apply_value_grid_columns(self, columns: int) -> None:
         if not hasattr(self, "_values_grid") or not hasattr(self, "_value_grid_tiles"):
@@ -646,7 +736,7 @@ class DCMotorDialog(QtWidgets.QDialog):
 
         graph = pg.GraphicsLayoutWidget()
         graph.setBackground("#fffdf8")
-        graph.setMinimumHeight(220)
+        graph.setMinimumHeight(650)
 
         position_plot = graph.addPlot(row=0, col=0, title="Input command vs output feedback")
         error_plot = graph.addPlot(row=1, col=0, title="Position error")
@@ -839,39 +929,86 @@ class DCMotorDialog(QtWidgets.QDialog):
         self._log(f"Telemetry axis: {self._selected_axis()}")
         self._refresh_axis_summary()
 
-    def _connect(self) -> None:
-        previous_axis = self._selected_axis()
-        try:
-            self._backend.connect(
-                self.port_edit.text().strip(),
-                int(self.baud_combo.currentText()),
-            )
-            self._connected = True
-            self._axes = self._discover_axes()
-            self._refresh_axis_combo(preserve_axis=previous_axis)
-            self._clear_traces()
-            self._refresh_axis_summary()
-            self._log(f"Connected to motor serial on {self.port_edit.text().strip()}; telemetry active")
-        except Exception as exc:
-            self._connected = False
-            QtWidgets.QMessageBox.critical(self, "Connection Error", str(exc))
-            self._refresh_connection_state()
-            self._set_status(f"Connection failed: {exc}", "error")
-            self._refresh_axis_summary()
+    def _start_command(self, label, action, *, requires_connected=True):
+        if self._close_after_cleanup or self._command_thread is not None:
+            self._log('Wait for the active motor command to settle.')
             return
+        if requires_connected and not self._connected_required():
+            return
+        worker = MotorCommandWorker(self._backend, label, action)
+        thread = QtCore.QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.succeeded.connect(self._command_succeeded)
+        worker.failed.connect(self._command_failed)
+        worker.settled.connect(worker.deleteLater)
+        worker.settled.connect(thread.quit)
+        thread.finished.connect(self._command_settled)
+        self._command_worker, self._command_thread = worker, thread
+        self._log(label + ' running; Stop remains available.')
         self._refresh_connection_state()
+        thread.start()
+
+    def _stop_command(self):
+        if self._command_worker is not None:
+            self._command_worker.stop()
+        elif getattr(self._backend, 'operation_active', False) is True:
+            self._backend.request_stop()
+
+    def _recover_stop(self):
+        action = getattr(self._backend, 'recover_stop', None)
+        if not callable(action):
+            self._log('No-comm diagnostics have no physical stop recovery.')
+            return
+        self._start_command('Verify stopped recovery', action)
+
+    def _command_succeeded(self, label, result):
+        self._last_command_error = ''
+        self._connected = bool(self._backend.is_connected())
+        if label == 'Connect':
+            self._axes = self._discover_axes()
+            self._refresh_axis_combo(preserve_axis=self._selected_axis())
+        self._log(label + ' finished after cleanup' + (': ' + str(result) if result is not None else '.'))
+
+    def _command_failed(self, label, message):
+        self._last_command_error = message
+        self._connected = bool(self._backend.is_connected())
+        self._log(label + ' failed or stopped: ' + message)
+        self._set_status(message, 'error')
+
+    @QtCore.Slot()
+    def _command_settled(self):
+        if self._command_thread is not None and self._command_thread.isRunning():
+            self._command_settle_timer.start(10)
+            return
+        self._command_settle_timer.stop()
+        if self._command_thread is not None:
+            self._command_thread.deleteLater()
+        self._command_thread = None
+        self._command_worker = None
+        self._refresh_connection_state()
+        self._resume_close()
+
+    @QtCore.Slot()
+    def _resume_close(self):
+        if self._close_after_cleanup:
+            if ((self._command_thread is not None and self._command_thread.isRunning())
+                    or self._telemetry_thread.isRunning() or getattr(self._backend, 'operation_active', False) is True):
+                self._close_timer.start(100)
+            else:
+                self.close()
+
+    def _connect(self) -> None:
+        port, baud = self.port_edit.text().strip(), int(self.baud_combo.currentText())
+        self._start_command('Connect', lambda: self._backend.connect(port, baud), requires_connected=False)
 
     def _disconnect(self) -> None:
-        try:
+        if self._close_after_cleanup:
             if self._backend.is_connected():
                 self._backend.disconnect()
-        finally:
             self._connected = False
-            self._telemetry_thread.set_axis("")
-            self._clear_traces()
-            self._log("Disconnected")
-            self._refresh_connection_state()
-            self._refresh_axis_summary()
+            return
+        self._start_command('Disconnect', self._backend.disconnect, requires_connected=False)
 
     def _log(self, text: str) -> None:
         self._console.appendPlainText(text)
@@ -907,6 +1044,25 @@ class DCMotorDialog(QtWidgets.QDialog):
             self._set_status(self._backend.status())
         else:
             self._set_status("Disconnected")
+        active = getattr(self._backend, 'operation_active', False) is True
+        recovery_required = getattr(self._backend, 'can_recover_pending', False) is True
+        busy = self._command_thread is not None or self._close_after_cleanup or active
+        if busy:
+            for widget in (self.connect_btn, self.disconnect_btn, self.port_edit, self.baud_combo,
+                           self.axis_combo, self.move_btn, self.spin_btn, self.goto_hole_btn,
+                           self.read_hole_btn, self.home_top_btn, self.home_xy_btn, self.corner_btn,
+                           self.pickup_btn, self.dropoff_btn):
+                widget.setEnabled(False)
+        if recovery_required:
+            for widget in (self.move_btn, self.spin_btn, self.goto_hole_btn, self.home_top_btn,
+                           self.home_xy_btn, self.corner_btn, self.pickup_btn, self.dropoff_btn):
+                widget.setEnabled(False)
+        self.stop_motion_btn.setEnabled(self._command_thread is not None or active)
+        self.recover_stop_btn.setEnabled(self._connected and not busy)
+        if self._last_command_error:
+            self._set_status(self._last_command_error, 'error')
+        elif recovery_required:
+            self._set_status(self._backend.status(), 'error')
         self._refresh_axis_summary()
 
     def _refresh_axis_summary(self) -> None:
@@ -920,97 +1076,38 @@ class DCMotorDialog(QtWidgets.QDialog):
         self._axis_summary.setText("Monitoring axis: --")
 
     def _move_axis(self) -> None:
-        if not self._connected_required():
-            return
-        axis = self._selected_axis()
-        self._telemetry_thread.set_axis(axis)
-        target = self.pos_spin.value()
-        speed = self.speed_spin.value()
-        try:
-            result = self._backend.move_motor(axis, target=target, speed=speed, wait_for_stop=True)
-            self._log(f"{axis}: target={result[0]}, final={result[1]}, success={result[2]}")
-        except Exception as exc:
-            self._log(f"Move error: {exc}")
+        axis, target, speed = self._selected_axis(), self.pos_spin.value(), self.speed_spin.value()
+        self._start_command('Move ' + axis, lambda: self._backend.move_motor(axis, target=target, speed=speed, wait_for_stop=True))
 
     def _spin_turning(self) -> None:
-        if not self._connected_required():
-            return
-        self.axis_combo.setCurrentText("Turning")
+        self.axis_combo.setCurrentText('Turning')
         rps = self.spin_rps.value()
-        try:
-            result = self._backend.spin_turning(speed_rps=rps, duration_s=60.0)
-            self._log(f"Turning spin: target={result[0]}, final={result[1]}, success={result[2]}")
-        except Exception as exc:
-            self._log(f"Spin error: {exc}")
+        self._start_command('Turning spin', lambda: self._backend.spin_turning(speed_rps=rps, duration_s=60.))
 
     def _goto_hole(self) -> None:
-        if not self._connected_required():
-            return
         hole = self.hole_spin.value()
-        self.axis_combo.setCurrentText("Changer (X)")
-        try:
-            final_hole = self._backend.goto_hole(hole=hole)
-            self._log(f"Changer hole {hole:.2f} -> {final_hole:.2f}")
-        except Exception as exc:
-            self._log(f"Hole move error: {exc}")
+        self.axis_combo.setCurrentText('Changer (X)')
+        self._start_command('Go to changer hole', lambda: self._backend.goto_hole(hole=hole))
 
     def _read_hole(self) -> None:
-        if not self._connected_required():
-            return
-        self.axis_combo.setCurrentText("Changer (X)")
-        try:
-            hole = self._backend.read_hole("Changer (X)")
-            self._log(f"Current axis position: hole {hole:.1f}")
-        except Exception as exc:
-            self._log(f"Hole read error: {exc}")
+        self.axis_combo.setCurrentText('Changer (X)')
+        self._start_command('Read changer hole', lambda: self._backend.read_hole('Changer (X)'))
 
     def _home_to_top(self) -> None:
-        if not self._connected_required():
-            return
-        self.axis_combo.setCurrentText("Up/Down")
-        try:
-            self._backend.home_to_top()
-            self._log("Home to top complete")
-        except Exception as exc:
-            self._log(f"HomeToTop error: {exc}")
+        self.axis_combo.setCurrentText('Up/Down')
+        self._start_command('Home to top', self._backend.home_to_top)
 
     def _home_xy_to_center(self) -> None:
-        if not self._connected_required():
-            return
-        try:
-            x_res, y_res = self._backend.home_xy_to_center()
-            self._log(f"Home XY center complete: x={x_res} y={y_res}")
-        except Exception as exc:
-            self._log(f"Home XY error: {exc}")
+        self._start_command('Home XY to center', self._backend.home_xy_to_center)
 
     def _move_xy_to_corner(self) -> None:
-        if not self._connected_required():
-            return
-        try:
-            x_res, y_res = self._backend.move_xy_to_corner()
-            self._log(f"MoveXY corner: x={x_res} y={y_res}")
-        except Exception as exc:
-            self._log(f"MoveXY error: {exc}")
+        self._start_command('Move XY to corner', self._backend.move_xy_to_corner)
 
     def _sample_pickup(self) -> None:
-        if not self._connected_required():
-            return
-        self.axis_combo.setCurrentText("Up/Down")
-        try:
-            result = self._backend.sample_pickup()
-            self._log(f"Sample pickup: target={result[0]}, final={result[1]}, success={result[2]}")
-        except Exception as exc:
-            self._log(f"Sample pickup error: {exc}")
+        self._start_command('Sample pickup', self._backend.sample_pickup)
 
     def _sample_dropoff(self) -> None:
-        if not self._connected_required():
-            return
-        self.axis_combo.setCurrentText("Up/Down")
-        try:
-            result = self._backend.sample_dropoff(use_xy_table=True)
-            self._log(f"Sample dropoff: target={result[0]}, final={result[1]}, success={result[2]}")
-        except Exception as exc:
-            self._log(f"Sample dropoff error: {exc}")
+        self._start_command('Sample dropoff', lambda: self._backend.sample_dropoff(use_xy_table=True))
 
     @QtCore.Slot(object)
     def _on_telemetry(self, sample: object) -> None:
@@ -1142,8 +1239,15 @@ class DCMotorDialog(QtWidgets.QDialog):
         self.torque_value.setText("Torque -- (N/A)")
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        self._close_after_cleanup = True
         self._plot_timer.stop()
+        self._stop_command()
         self._telemetry_thread.stop_monitoring()
-        self._telemetry_thread.wait(1000)
+        if ((self._command_thread is not None and self._command_thread.isRunning())
+                or self._telemetry_thread.isRunning() or getattr(self._backend, 'operation_active', False) is True):
+            event.ignore()
+            self._close_timer.start(100)
+            return
+        self._close_timer.stop()
         self._disconnect()
-        return super().closeEvent(event)
+        super().closeEvent(event)

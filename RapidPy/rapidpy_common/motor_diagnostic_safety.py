@@ -1,7 +1,7 @@
 """Durable ownership and stop-in-place recovery for native motor diagnostics."""
 from contextlib import contextmanager
 import copy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import time
 import uuid
@@ -22,6 +22,7 @@ class MotorDiagnosticRecord:
     safe_state_confirmed: bool
     simulated: bool = False
     schema: str = "rapidpy.motion.diagnostic.v1"
+    station_profile: dict = field(default_factory=dict)
 
     def to_dict(self):
         return asdict(self)
@@ -63,7 +64,7 @@ def _finish(motor, axis, store, token, profile, operation, observations, error, 
     record = MotorDiagnosticRecord("motion-" + uuid.uuid4().hex, operation,
         datetime.now(timezone.utc).isoformat(), tuple(observations), tuple(cleanup),
         error, cleanup_error, not cleanup_error,
-        schema="rapidpy.motion.diagnostic_recovery.v1" if recovery else "rapidpy.motion.diagnostic.v1")
+        schema="rapidpy.motion.diagnostic_recovery.v1" if recovery else "rapidpy.motion.diagnostic.v1", station_profile=profile)
     publish_diagnostic_record(store, record, family="motion")
     if token is not None:
         store.finish(token, profile, record)
@@ -105,3 +106,38 @@ def recover_motor_diagnostic(motor, axis, profile, *, store=None):
         return _finish(motor, copy.deepcopy(axis), store, pending['token'],
                        profile, pending['plan'],
                        [], '', recovery=True)
+
+
+def finish_motor_axes(motor, axes, store, token, profile, operation, observations, error='', *, recovery=False):
+    cleanup, errors = [], []
+    for axis in axes:
+        samples, failure = verify_stopped_in_place(motor, axis)
+        cleanup.append({'axis': asdict(axis), 'readbacks': samples, 'error': failure})
+        if failure:
+            errors.append(f'{axis.name}: {failure}')
+    cleanup_error = '; '.join(errors)
+    record = MotorDiagnosticRecord('motion-' + uuid.uuid4().hex, operation,
+        datetime.now(timezone.utc).isoformat(), tuple(observations), tuple(cleanup), error,
+        cleanup_error, not cleanup_error, station_profile=profile,
+        schema='rapidpy.motion.diagnostic_recovery.v1' if recovery else 'rapidpy.motion.diagnostic.v1')
+    publish_diagnostic_record(store, record, family='motion')
+    store.finish(token, profile, record)
+    if cleanup_error:
+        raise HardwareSafetyError(f'{error + "; " if error else ""}Motor diagnostic cleanup remains unverified: {cleanup_error}')
+    return record
+
+
+@contextmanager
+def motor_axes_diagnostic_operation(motor, axes, operation, profile, *, store):
+    axes = copy.deepcopy(axes)
+    with store.operation_lease():
+        token = store.begin('motion_diagnostic', operation, profile)
+        pending = store.pending(profile)
+        observations, error = [], ''
+        try:
+            yield observations
+        except BaseException as exc:
+            error = str(exc)
+            raise
+        finally:
+            finish_motor_axes(motor, axes, store, token, pending['profile'], pending['plan'], observations, error)

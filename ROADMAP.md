@@ -976,3 +976,38 @@ held-vacuum regressions. Source smoke passes six panels and six helper imports.
 The compact Connections & Status view was inspected at 736x720 with the held
 vacuum/lift recovery control visible. Tests use injected native interfaces;
 physical instruments were not actuated. The portable pilot requires rebuilding.
+
+### Integrated DC Motors ownership, cancellation and shutdown — 3 October 2026
+
+Diagnostics > DC Motors now executes connections and motor commands in a worker
+with visible Stop and original-profile recovery. Production use requires accepted
+four-axis station wiring. Every motion persists its exact COM bindings, native
+configuration and participating axis plan before I/O. Composite XY commands attempt
+independent stop/readback verification for all affected axes even after failure.
+Turning spin waits for actual completion; nonblocking moves retain station ownership
+until settling and checked cleanup. Short targets, nonzero velocity, failed stop
+acknowledgements and failed evidence publication cannot report verified completion.
+
+Native motion/homing/pickup loops check cooperative cancellation, including checks
+before motor output and coordinate reset. Restart recovery never homes, relabels or
+replays movement. Only the original DC Motors panel may reopen its pending recovery;
+other device controls remain gated. Closing a panel retains its worker and ports
+until actual completion. Main-window shutdown now waits for owned dialogs and active
+automation, preventing application exit from discarding a live motor worker. New
+device operations are refused during that wait, and duplicate modeless panels cannot
+overwrite the first ownership lease.
+
+Compact layouts use Controls and Feedback and Plots tabs with safety actions above
+both. The plots scroll at readable sizes. Controls and feedback were visually
+inspected at 736x650. See docs/motor-diagnostic-safety.md.
+
+The full-system goal remains active. Integrated vacuum output lifetime, other motor
+helpers, durable main-app non-treatment motion/acquisition recovery, calibration/
+probe tooling, portable rebuilding and physical/scientific acceptance remain open.
+Development checks use injected instruments; no physical instruments were actuated.
+
+Verification: 830 isolated main-app tests pass in 113.567 seconds, including 16
+integrated motor lifecycle regressions. Six-panel/six-helper source smoke passes.
+Native motor transport/routing tests pass (16 tests). Compact controls and feedback
+were visually inspected. All hardware tests use injected interfaces; physical
+instruments were not actuated. The portable pilot still requires rebuilding.

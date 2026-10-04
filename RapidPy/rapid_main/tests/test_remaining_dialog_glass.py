@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from PySide6 import QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from rapid_main.diagnostic_services import DCMotorNoCommBackend, UnavailableBackend
 from rapid_main.dialogs.dc_motors import DCMotorDialog
@@ -93,6 +93,13 @@ class RemainingDialogGlassTests(unittest.TestCase):
             self.assertTrue(dialog.target_value.accessibleName())
 
             dialog._disconnect()
+            from PySide6.QtTest import QTest
+            elapsed = QtCore.QElapsedTimer()
+            elapsed.start()
+            while dialog._command_thread is not None and elapsed.elapsed() < 3000:
+                self._app.processEvents()
+                QTest.qWait(10)
+            self.assertIsNone(dialog._command_thread)
             self.assertTrue(dialog.connect_btn.isEnabled())
             self.assertFalse(dialog.move_btn.isEnabled())
             self.assertEqual(dialog._status.property("status"), "simulated")

@@ -1515,6 +1515,8 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         if pending["family"] == "af_diagnostic":
             raise HardwareError("An unfinished ADwin helper diagnostic requires recovery in its original helper using its original board settings.")
         if pending["family"] == "motion_diagnostic":
+            if pending['profile'].get('helper') == 'rapid_main_dc_motors':
+                raise HardwareError('Open Diagnostics > DC Motors and use Recover Verify Stopped with the original station wiring.')
             raise HardwareError("An unfinished motor helper diagnostic requires verified stop recovery in its original helper using its original port and axis settings.")
         if pending["family"] == "station_diagnostic":
             raise HardwareError("A held vacuum/lift diagnostic requires recovery in Up/Down Control with its original participating ports before main-app motion or treatment.")

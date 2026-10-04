@@ -1,4 +1,4 @@
-# Lift diagnostic ownership and restart recovery
+# Motor diagnostic ownership and restart recovery
 
 Up/Down Control uses the shared `HardwareSafetyStore` journal and OS lifetime
 lease for native lift movement and measurement Z scans. The `motion_diagnostic`
@@ -43,9 +43,41 @@ discard it after a timed wait or open a failure dialog while closing. Compact
 screens provide Connections & Status, Settings & Console, Axis Profile and Motion
 & Scan tabs; the recovery button remains visible at 736x720.
 
+## Integrated DC Motors
+
+Diagnostics > DC Motors now runs connections and commands in a worker. Stop requests
+cooperative native cancellation without waiting for a serial lock on the UI thread.
+Homing loops, ordinary moves and pickup coordinate changes check cancellation;
+commands have a six-minute safety deadline. The integrated production backend
+requires accepted station wiring and routes the four original axis connections.
+Explicit bench construction without a production configuration retains manual
+single-port address selection.
+
+Each motion claims the lifetime lease and persists its exact native configuration,
+COM bindings and participating axes before output. Composite XY commands stop and
+verify all three participating axes independently even if one fails. Turning spin
+waits for actual completion; acknowledged success alone cannot excuse a short target.
+An explicitly nonblocking move retains ownership in a settling worker until stop,
+velocity and immutable evidence checks finish. Disconnect and further motion are
+blocked during that interval.
+
+An unfinished integrated operation can reopen its original DC Motors panel while
+other hardware controls remain blocked. Restore its original connections and use
+**Recover: Verify Stopped**. Recovery never replays, homes or relabels a motor. Failed
+stop acknowledgements or evidence publication retain the restart latch. Closing
+requests cancellation and keeps the worker, window and ports until actual terminal
+cleanup. Compact windows use Controls and Feedback and Plots tabs with safety actions
+above both; five plots scroll instead of overlapping in a short viewport. Routed
+composite serial operations may delay telemetry until their shared lock is released.
+Main-window shutdown also requests child cleanup and waits for owned dialogs and
+active automation to finish before allowing the application to exit. It refuses
+new device operations during that interval. Reopening the same modeless diagnostic
+cannot acquire a second lease and overwrite the first panel's ownership.
+
 Development validation uses injected motor/SQUID interfaces, including restart,
 cross-owner exclusion, cancellation, readback drift, failed stop and failed evidence
-publication. Physical instruments were not actuated. Vacuum/gripper lifetime
-ownership, other motor/direct diagnostics, durable main-app non-treatment motion
+publication and DC dialog worker closure. Physical instruments were not actuated.
+The Up/Down helper has vacuum/gripper lifetime ownership; the integrated main vacuum
+panel still needs that same ownership. Other motor/direct diagnostics, durable main-app non-treatment motion
 and acquisition recovery, calibration/probe tooling, the portable rebuild and
 physical/scientific station acceptance remain required full-system work.

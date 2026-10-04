@@ -410,6 +410,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sample_registrations = None
         self._ownership = DeviceOwnershipManager()
         self._owned_dialog_leases: dict[str, object] = {}
+        self._owned_dialogs: dict[str, QtWidgets.QWidget] = {}
+        self._shutdown_cleanup_requested = False
+        self._shutdown_retry_pending = False
+        self._shutdown_timer = QtCore.QTimer(self)
+        self._shutdown_timer.setSingleShot(True)
+        self._shutdown_timer.timeout.connect(self._retry_shutdown)
         self._external_process_leases: dict[int, tuple[object, list[object], QtCore.QTimer]] = {}
         self._rebuild_diagnostic_backends(nocomm=bool(self.config.general.nocomm))
         self._measurement_backend: MeasurementAutomationBackend = build_measurement_backend(
@@ -1361,9 +1367,12 @@ class MainWindow(QtWidgets.QMainWindow):
         allow_reentrant: bool = True,
     ) -> object:
         """Acquire a shared device lease used to prevent concurrent hardware ownership."""
+        if getattr(self, '_shutdown_cleanup_requested', False):
+            raise DeviceOwnershipError('Shutdown cleanup is in progress; wait for active hardware owners to finish.')
         backend = getattr(self,"_measurement_backend",None)
-        if resource in {"measurement","changer","af_demag"} and owner!="irm_panel" and (getattr(backend,"has_unresolved_hardware_fault",False) is True or getattr(backend,"has_unresolved_pulse_fault",False) is True or getattr(backend,"has_unresolved_rotation_fault",False) is True):
-            raise DeviceOwnershipError("Pulse capacitor/relay or RRM rotation safe state is unverified. Open IRM / ARM and run Zero Field recovery before other hardware controls.")
+        dc_recovery = resource == 'changer' and owner == 'dc_motors_panel' and getattr(getattr(self, '_dc_motor_backend', None), 'can_recover_pending', False) is True
+        if resource in {"measurement","changer","af_demag"} and owner!="irm_panel" and not dc_recovery and (getattr(backend,"has_unresolved_hardware_fault",False) is True or getattr(backend,"has_unresolved_pulse_fault",False) is True or getattr(backend,"has_unresolved_rotation_fault",False) is True):
+            raise DeviceOwnershipError("Hardware safe state is unverified. Recover the unfinished operation with its original panel or helper before using other controls.")
         return self._ownership.acquire(resource, owner, allow_reentrant=allow_reentrant)
 
     def release_measurement_device(self, owner: str) -> None:
@@ -1963,7 +1972,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         lease = None
         try:
-            lease = self.acquire_device(resource, owner)
+            lease = self.acquire_device(resource, owner, allow_reentrant=False)
         except DeviceOwnershipError as exc:
             QtWidgets.QMessageBox.warning(self, "Device Busy", str(exc))
             return
@@ -1988,9 +1997,11 @@ class MainWindow(QtWidgets.QMainWindow):
                     True,
                 )
                 self._owned_dialog_leases[resource] = lease
+                self._owned_dialogs[resource] = dlg
 
                 @QtCore.Slot(object)
                 def _release_owner(_obj: object) -> None:
+                    self._owned_dialogs.pop(resource, None)
                     held_lease = self._owned_dialog_leases.pop(resource, None)
                     if held_lease is not None:
                         held_lease.release()
@@ -2013,12 +2024,31 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event) -> None:
         """Confirm safe shutdown and persist layout settings before closing."""
-        if not self._confirm_shutdown(prompt=True, on_close=True):
+        if not self._shutdown_cleanup_requested:
+            if not self._confirm_shutdown(prompt=True, on_close=True):
+                event.ignore()
+                return
+            self._shutdown_cleanup_requested = True
+
+        for dialog in list(self._owned_dialogs.values()):
+            dialog.close()
+        if self._owned_dialog_leases or self._has_active_automation():
             event.ignore()
+            self.set_status('Shutdown is waiting for hardware workers and diagnostic cleanup.')
+            if not self._shutdown_retry_pending:
+                self._shutdown_retry_pending = True
+                self._shutdown_timer.start(100)
             return
 
+        self._shutdown_timer.stop()
         self._save_layout_state()
         super().closeEvent(event)
+
+    @QtCore.Slot()
+    def _retry_shutdown(self):
+        self._shutdown_retry_pending = False
+        if self._shutdown_cleanup_requested:
+            self.close()
 
     def _has_active_automation(self) -> bool:
         """Return true when a live measurement or queue run is active."""

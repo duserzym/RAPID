@@ -406,6 +406,7 @@ class MotorSerialClient:
                 raise HardwareError(f"Motor {name} must be a signed 32-bit integer.")
         if velocity <= 0 or acceleration <= 0:
             raise HardwareError("Motor velocity and acceleration must be positive.")
+        self._check_motion_cancel()
         self.poll_motor(axis)
         self.clear_poll_status(axis)
         opcode = 135 if relative_mode else 134
@@ -420,6 +421,7 @@ class MotorSerialClient:
                 scale = abs(float(velocity)) / float(self.config.turning_motor_1rps)
                 use_accel = int(use_accel * scale * 1.1)
 
+        self._check_motion_cancel()
         self.query_ascii(
             f"{self._address(axis)}{opcode} {target} {use_accel} {velocity} {stop_enable} {stop_condition}"
         )
@@ -428,11 +430,19 @@ class MotorSerialClient:
         final_pos = self.read_position(axis)
         return MoveResult(target=target, final_position=final_pos, success=True)
 
+    def _check_motion_cancel(self, axis=None):
+        check = getattr(self, '_motion_cancel_check', None)
+        if check is not None and check():
+            if axis is not None:
+                self.halt(axis)
+            raise HardwareError('Motor motion cancelled or its operation deadline expired.')
+
     def wait_for_motor_stop(self, axis: MotorAxisConfig, timeout_s: float = 120.0) -> None:
         start = time.monotonic()
         old1 = 2**7
         old0 = -(2**7)
         while True:
+            self._check_motion_cancel(axis)
             time.sleep(0.05)
             pos = self.read_position(axis)
             if old1 == old0 == pos:
@@ -562,16 +572,20 @@ class MotorSerialClient:
 
     def relabel_pos(self, axis: MotorAxisConfig, pos: int, tolerance: int = 10, max_cycles: int = 20) -> None:
         for _ in range(max_cycles):
+            self._check_motion_cancel()
             current = self.read_position(axis)
             if abs(current - pos) < tolerance:
                 return
+            self._check_motion_cancel()
             self.zero_target_pos(axis)
             self.query_ascii(f"{self._address(axis)}11 10 {-int(pos)}")
             self.query_ascii(f"{self._address(axis)}165 1802")
         raise HardwareError(f"Unable to relabel motor {axis.name} to position {pos}.")
 
     def home_to_top(self, updown_axis: MotorAxisConfig) -> MoveResult:
+        self._check_motion_cancel()
         if self.check_internal_status(updown_axis, 4) == 1:
+            self._check_motion_cancel()
             self.zero_target_pos(updown_axis)
             pos = self.read_position(updown_axis)
             return MoveResult(target=0, final_position=pos, success=True)
@@ -603,6 +617,7 @@ class MotorSerialClient:
             raise HardwareError("Homed to top but did not hit switch (internal status bit 4).")
 
         final_pos = self.read_position(updown_axis)
+        self._check_motion_cancel()
         self.zero_target_pos(updown_axis)
         return MoveResult(target=0, final_position=final_pos, success=True)
 
@@ -612,6 +627,7 @@ class MotorSerialClient:
         y_axis: MotorAxisConfig,
         updown_axis: MotorAxisConfig,
     ) -> tuple[MoveResult, MoveResult]:
+        self._check_motion_cancel()
         if self.check_internal_status(updown_axis, 4) == 0:
             raise HardwareError("Cannot home XY to center: up/down axis is not homed to top.")
 
@@ -619,6 +635,7 @@ class MotorSerialClient:
         stop_y = False
 
         while (self.check_internal_status(x_axis, 4) != 0) or (self.check_internal_status(y_axis, 5) != 0):
+            self._check_motion_cancel()
             time.sleep(0.05)
             if self.check_internal_status(x_axis, 4) != 0 and not stop_x:
                 self.move_motor(
@@ -650,6 +667,7 @@ class MotorSerialClient:
         stop_y = False
 
         while (self.check_internal_status(x_axis, 5) != 0) or (self.check_internal_status(y_axis, 6) != 0):
+            self._check_motion_cancel()
             time.sleep(0.05)
             if self.check_internal_status(x_axis, 5) != 0 and not stop_x:
                 self.move_motor(
@@ -677,7 +695,9 @@ class MotorSerialClient:
         if (self.check_internal_status(x_axis, 5) != 0) or (self.check_internal_status(y_axis, 6) != 0):
             raise HardwareError("Homed XY center pass 2 failed: did not hit positive limit switches.")
 
+        self._check_motion_cancel()
         self.zero_target_pos(x_axis)
+        self._check_motion_cancel()
         self.zero_target_pos(y_axis)
         x_pos = self.read_position(x_axis)
         y_pos = self.read_position(y_axis)
@@ -693,6 +713,7 @@ class MotorSerialClient:
         y_axis: MotorAxisConfig,
         updown_axis: MotorAxisConfig,
     ) -> tuple[MoveResult, MoveResult]:
+        self._check_motion_cancel()
         self.home_to_top(updown_axis)
         if self.check_internal_status(updown_axis, 4) == 0:
             raise HardwareError("Cannot move XY to corner: up/down axis is not homed to top.")
@@ -700,6 +721,7 @@ class MotorSerialClient:
         stop_x = False
         stop_y = False
         while (self.check_internal_status(x_axis, 4) != 0) or (self.check_internal_status(y_axis, 5) != 0):
+            self._check_motion_cancel()
             time.sleep(0.05)
             if self.check_internal_status(x_axis, 4) != 0 and not stop_x:
                 self.move_motor(
@@ -733,6 +755,7 @@ class MotorSerialClient:
         )
 
     def sample_dropoff(self, updown_axis: MotorAxisConfig, use_xy_table: bool = True) -> MoveResult:
+        self._check_motion_cancel()
         self.poll_motor(updown_axis)
         self.clear_poll_status(updown_axis)
 
@@ -752,6 +775,7 @@ class MotorSerialClient:
         return result
 
     def sample_pickup(self, updown_axis: MotorAxisConfig) -> MoveResult:
+        self._check_motion_cancel()
         pickup_torque = round(self.config.pickup_torque_throttle * self.config.updown_torque_factor)
         self.set_torques(updown_axis, pickup_torque, pickup_torque, pickup_torque, pickup_torque)
         result = self.move_motor(
@@ -762,7 +786,9 @@ class MotorSerialClient:
         )
         time.sleep(1.0)
         current_pos = self.read_position(updown_axis)
+        self._check_motion_cancel()
         self.zero_target_pos(updown_axis)
+        self._check_motion_cancel()
         self.relabel_pos(updown_axis, current_pos)
         if self.check_internal_status(updown_axis, 4) == 1:
             raise HardwareError("Quartz tube at sample top but homing switch is still set (bit 4).")

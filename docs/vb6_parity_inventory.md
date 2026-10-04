@@ -306,3 +306,14 @@ now-auditable SQUID, vacuum, AF/IRM, DC motor, susceptibility, VRM, rockmag,
 manual-external thermal, and retained auxiliary paths, and to close the
 dependency-clean deployment gate.
 
+
+### Integrated DC Motors lifecycle evidence — 3 October 2026
+
+The `frmDCMotors` replacement now has worker-based motion, cooperative Stop,
+exact-profile durable restart recovery, independent multi-axis stop/velocity
+verification and immutable diagnostic artifacts. `test_dc_motor_operation_safety.py`
+covers before-output ownership, failed acknowledgements, crash recovery without
+replay, premature cancellation, short targets, asynchronous settling, child closure
+and parent-window shutdown. Compact safety actions stay outside Controls and Feedback
+and Plots tabs. See `docs/motor-diagnostic-safety.md`. Physical direction, clearance,
+limits, torque, timing and transfer acceptance remain open.

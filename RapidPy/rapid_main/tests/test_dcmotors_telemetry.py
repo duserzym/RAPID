@@ -250,10 +250,12 @@ class DCMotorDialogTelemetryTest(_TestAppMixin, unittest.TestCase):
             compact = _FakeScreen(QtCore.QRect(0, 0, 1200, 900))
             narrow = _FakeScreen(QtCore.QRect(0, 0, 540, 700))
 
+            dialog.resize(1400, 800)
             dialog._fit_to_screen(wide)
             self.assertEqual(dialog._values_per_row, 3)
             self.assertEqual(dialog._splitter.orientation(), QtCore.Qt.Orientation.Horizontal)
 
+            dialog.resize(900, 700)
             dialog._fit_to_screen(compact)
             self.assertEqual(dialog._values_per_row, 2)
             self.assertEqual(dialog._splitter.orientation(), QtCore.Qt.Orientation.Vertical)

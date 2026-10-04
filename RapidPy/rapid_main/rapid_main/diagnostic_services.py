@@ -13,7 +13,9 @@ import random
 import time
 import math
 import re
-from dataclasses import dataclass
+import threading
+from functools import wraps
+from dataclasses import dataclass, asdict
 from typing import Mapping, Protocol, runtime_checkable
 
 from rapidpy_common.hardware import (
@@ -21,6 +23,7 @@ from rapidpy_common.hardware import (
     MotorAxisConfig,
     MotorSerialClient,
     MotorTelemetry,
+    MotorControllerConfig,
     convert_position_to_hole,
 )
 from rapid_main.config import (
@@ -1572,6 +1575,20 @@ class DCMotorNoCommBackend(_BaseBackend, DCMotorBackend):
         )
 
 
+def _guard_dc_motor_motion(method):
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        names = {'move_motor': (args[0] if args else kwargs.get('axis'),),
+                 'spin_turning': ('Turning',), 'goto_hole': ('Changer (X)',),
+                 'home_to_top': ('Up/Down',), 'sample_pickup': ('Up/Down',), 'sample_dropoff': ('Up/Down',),
+                 'home_xy_to_center': ('Changer (X)', 'Changer (Y)', 'Up/Down'),
+                 'move_xy_to_corner': ('Changer (X)', 'Changer (Y)', 'Up/Down')}
+        return self._run_motion(method.__name__, names[method.__name__],
+            {'args': list(args), 'kwargs': kwargs}, lambda: method(self, *args, **kwargs),
+            asynchronous=method.__name__ == 'move_motor' and kwargs.get('wait_for_stop') is False)
+    return guarded
+
+
 class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
     """Hardware adapter used by the DC Motor diagnostic dialog."""
 
@@ -1587,6 +1604,8 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
             "DC_MOTOR", port=str(port), max_payload_chars=2048
         )
         self._client = MotorSerialClient(trace=self._trace)
+        if config is not None and not config.motor_station.calibration_source:
+            raise HardwareUnavailableError('Import and accept the original motor station wiring before live integrated DC motor diagnostics.')
         self._axes = {
             "Changer (X)": MotorAxisConfig("ChangerX", 1, 1),
             "Turning": MotorAxisConfig("Turning", 2, 2),
@@ -1610,9 +1629,135 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         self._baud = 9600
         self._connected = False
         self._status = "Disconnected (manual)"
+        from rapidpy_common.hardware_safety import HardwareSafetyStore, default_safety_path
+        self._safety_store = HardwareSafetyStore(default_safety_path())
+        self._state_lock = threading.RLock()
+        self._operation_active = False
+        self._stop_event = threading.Event()
+        self._cancel_check = None
+        self._background_thread = None
+        self._last_operation_result = None
         if port:
             self._port = str(port)
             self._baud = int(baud)
+
+    @property
+    def operation_active(self):
+        return self._operation_active
+
+    @property
+    def can_recover_pending(self):
+        pending = self._safety_store.pending()
+        return bool(pending and pending['family'] == 'motion_diagnostic' and
+                    pending['profile'].get('helper') == 'rapid_main_dc_motors')
+
+    def set_cancel_check(self, check):
+        self._cancel_check = check
+
+    def request_stop(self):
+        self._stop_event.set()
+
+    def _safety_profile(self, port=None, baud=None):
+        return {'helper': 'rapid_main_dc_motors', 'port': str(self._port if port is None else port).upper(),
+                'baud': self._baud if baud is None else baud,
+                'axes': {name: asdict(axis) for name, axis in self._axes.items()},
+                'native_config': asdict(getattr(self._client, 'config', MotorControllerConfig()))}
+
+    def _run_motion(self, action, names, parameters, call, *, asynchronous=False):
+        from rapidpy_common.motor_diagnostic_safety import motor_axes_diagnostic_operation
+        self._require_connected()
+        if any(name not in self._axes for name in names):
+            raise ValueError('Unknown DC motor axis.')
+        axes = [self._axes[name] for name in names]
+        with self._state_lock:
+            if self._operation_active:
+                raise HardwareError('Another DC motor operation still owns the station.')
+            self._stop_event.clear()
+            if self._cancel_check is not None and self._cancel_check():
+                raise HardwareError('DC motor command cancelled before initialization.')
+            self._operation_active = True
+            self._background_thread = None
+        deadline = time.monotonic() + 360.
+        self._client._motion_cancel_check = lambda: self._stop_event.is_set() or time.monotonic() >= deadline or (self._cancel_check is not None and self._cancel_check())
+        manager = motor_axes_diagnostic_operation(self._client, axes,
+            {'action': action, 'axes': list(names), 'parameters': parameters}, self._safety_profile(), store=self._safety_store)
+        entered = False
+        transferred = False
+        try:
+            observations = manager.__enter__()
+            entered = True
+            result = call()
+            observations.append({'result': result})
+            if self._client._motion_cancel_check():
+                raise HardwareError('DC motor command stopped or its operation deadline expired.')
+            if asynchronous:
+                def settle():
+                    failure = None
+                    try:
+                        self._client.wait_for_motor_stop(axes[0])
+                        if self._client._motion_cancel_check():
+                            raise HardwareError('Asynchronous motor move stopped or its operation deadline expired.')
+                        position = self._client.read_position(axes[0])
+                        if abs(position - result[0]) > 150:
+                            raise HardwareError('Asynchronous motor move stopped short of its requested target.')
+                        observations.append({'settled_result': (result[0], position, True)})
+                    except BaseException as exc:
+                        failure = exc
+                    try:
+                        manager.__exit__(type(failure) if failure else None, failure, failure.__traceback__ if failure else None)
+                    except BaseException as cleanup:
+                        failure = cleanup
+                    finally:
+                        with self._state_lock:
+                            self._last_operation_result = (result[0], position, True) if failure is None else None
+                            self._status = 'Asynchronous move finished after verified cleanup.' if failure is None else 'Asynchronous move failed: ' + str(failure)
+                            self._client._motion_cancel_check = None
+                            self._operation_active = False
+                    if failure is not None:
+                        self._communication_logger.error(self._status)
+                self._background_thread = threading.Thread(target=settle, name='rapid-dc-motor-settle', daemon=True)
+                self._background_thread.start()
+                transferred = True
+                entered = False  # The settling thread owns terminal cleanup.
+                return result
+            entered = False
+            manager.__exit__(None, None, None)
+            self._last_operation_result = result
+            return result
+        except BaseException as exc:
+            if entered:
+                entered = False
+                manager.__exit__(type(exc), exc, exc.__traceback__)
+            raise
+        finally:
+            if not transferred:
+                with self._state_lock:
+                    self._client._motion_cancel_check = None
+                    self._operation_active = False
+
+    def recover_stop(self):
+        from rapidpy_common.hardware_safety import HardwareSafetyError
+        from rapidpy_common.motor_diagnostic_safety import finish_motor_axes
+        self._require_connected()
+        with self._state_lock:
+            if self._operation_active:
+                raise HardwareSafetyError('Stop and wait for the active DC motor command before recovery.')
+            with self._safety_store.operation_lease():
+                profile = self._safety_profile()
+                pending = self._safety_store.pending()
+                if pending is not None:
+                    if pending['family'] != 'motion_diagnostic':
+                        raise HardwareSafetyError('Recover the unfinished operation with its original owner.')
+                    pending = self._safety_store.pending(profile)
+                    names = pending['plan'].get('axes', [])
+                    if not names or any(name not in self._axes for name in names):
+                        raise HardwareSafetyError('The persisted DC motor axis plan is invalid.')
+                else:
+                    names = list(self._axes)
+                    self._safety_store.begin('motion_diagnostic', {'action': 'verify_dc_motors_stopped', 'axes': names}, profile)
+                    pending = self._safety_store.pending(profile)
+                return finish_motor_axes(self._client, [self._axes[name] for name in names], self._safety_store,
+                    pending['token'], profile, pending['plan'], [], recovery=True)
 
     def _trace(self, direction: str, payload: str, detail: str) -> None:
         if detail.startswith("port="):
@@ -1630,7 +1775,7 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         return tuple(self._communication_logger.transcript.events)
 
     def _require_move_success(self, action: str, result: object) -> None:
-        if bool(getattr(result, "success", False)):
+        if getattr(result, "success", False) is True:
             return
         detail = (
             f"{action} failed: target={getattr(result, 'target', 'unknown')} "
@@ -1639,19 +1784,33 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         self._communication_logger.error(detail)
         raise HardwareError(detail)
 
+    def _require_target(self, result):
+        if abs(result.final_position - result.target) > 150:
+            raise HardwareError(f'Motor stopped short of its target: target={result.target} final={result.final_position}')
+
     def connect(self, port: str, baudrate: int) -> None:
+        if self.operation_active:
+            raise HardwareError('Wait for DC motor cleanup before changing connections.')
         self._port = str(port)
         self._baud = int(baudrate)
         if self._station_baud is not None:
             self._baud = self._station_baud
         self._communication_logger.port = self._port
         try:
-            self._client.connect(self._port, baudrate=self._baud)
+            with self._safety_store.operation_lease():
+                pending = self._safety_store.pending()
+                if pending is not None:
+                    if pending['family'] != 'motion_diagnostic':
+                        raise HardwareError('Recover the original unfinished operation before connecting DC motor diagnostics.')
+                    self._safety_store.pending(self._safety_profile())
+                self._client.connect(self._port, baudrate=self._baud)
         except Exception as exc:  # pragma: no cover - hardware transport behavior
             raise HardwareError(f"Unable to connect motor controller at {self._port}:{self._baud}: {exc}") from exc
         self._connected = True
 
     def disconnect(self) -> None:
+        if self.operation_active:
+            raise HardwareError('Wait for verified DC motor cleanup before disconnecting.')
         try:
             self._client.disconnect()
         finally:
@@ -1667,6 +1826,7 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         if not self.is_connected():
             raise HardwareError("Motor controller is not connected.")
 
+    @_guard_dc_motor_motion
     def move_motor(self, axis: str, *, target: int, speed: int, wait_for_stop: bool = True) -> tuple[int, int, bool]:
         axis_cfg = self._axes.get(axis)
         if axis_cfg is None:
@@ -1674,8 +1834,11 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         self._require_connected()
         result = self._client.move_motor(axis_cfg, target, int(speed), wait_for_stop=bool(wait_for_stop))
         self._require_move_success(f"move {axis}", result)
+        if wait_for_stop:
+            self._require_target(result)
         return (result.target, result.final_position, result.success)
 
+    @_guard_dc_motor_motion
     def spin_turning(self, *, speed_rps: float, duration_s: float = 60.0) -> tuple[int, int, bool]:
         self._require_connected()
         result = self._client.turning_motor_spin(
@@ -1684,12 +1847,18 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
             duration_s=float(duration_s),
         )
         self._require_move_success("spin Turning", result)
-        return (result.target, result.final_position, result.success)
+        self._client.wait_for_motor_stop(self._axes['Turning'], timeout_s=float(duration_s) + 15.)
+        position = self._client.read_position(self._axes['Turning'])
+        if abs(position - result.target) > 150:
+            raise HardwareError('Turning spin stopped short of the requested target.')
+        return (result.target, position, True)
 
+    @_guard_dc_motor_motion
     def goto_hole(self, *, hole: float) -> float:
         self._require_connected()
         result = self._client.changer_motor_to_hole(self._axes["Changer (X)"], float(hole), wait_for_stop=True)
         self._require_move_success(f"move changer to hole {hole}", result)
+        self._require_target(result)
         return float(convert_position_to_hole(
             result.final_position,
             slot_min=self._client.config.slot_min,
@@ -1709,11 +1878,13 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
             one_step=self._client.config.one_step,
         ))
 
+    @_guard_dc_motor_motion
     def home_to_top(self) -> None:
         self._require_connected()
         result = self._client.home_to_top(self._axes["Up/Down"])
         self._require_move_success("home Up/Down to top", result)
 
+    @_guard_dc_motor_motion
     def home_xy_to_center(self) -> tuple[int, int]:
         self._require_connected()
         x_res, y_res = self._client.home_xy_to_center(
@@ -1725,6 +1896,7 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         self._require_move_success("home Changer (Y) to center", y_res)
         return (int(x_res.final_position), int(y_res.final_position))
 
+    @_guard_dc_motor_motion
     def move_xy_to_corner(self) -> tuple[int, int]:
         self._require_connected()
         x_res, y_res = self._client.move_xy_to_corner(
@@ -1736,16 +1908,20 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         self._require_move_success("move Changer (Y) to corner", y_res)
         return (int(x_res.final_position), int(y_res.final_position))
 
+    @_guard_dc_motor_motion
     def sample_pickup(self) -> tuple[int, int, bool]:
         self._require_connected()
         result = self._client.sample_pickup(self._axes["Up/Down"])
         self._require_move_success("sample pickup", result)
+        self._require_target(result)
         return (result.target, result.final_position, result.success)
 
+    @_guard_dc_motor_motion
     def sample_dropoff(self, use_xy_table: bool = True) -> tuple[int, int, bool]:
         self._require_connected()
         result = self._client.sample_dropoff(self._axes["Up/Down"], use_xy_table=bool(use_xy_table))
         self._require_move_success("sample dropoff", result)
+        self._require_target(result)
         return (result.target, result.final_position, result.success)
 
     def read_telemetry(self, axis: str) -> MotorTelemetry:
@@ -1769,6 +1945,12 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         if self._simulated:
             return "No-comm adapter active"
         if self._connected:
+            if self.operation_active:
+                return 'Motor operation active; waiting for verified cleanup.'
+            if self.can_recover_pending:
+                return 'Recovery required: verify the original motor axes stopped.'
+            if self._status.startswith('Asynchronous move'):
+                return self._status
             return f"Connected to {self.wiring_summary or self._port}:{self._baud}"
         return "DC motor adapter ready (disconnected)"
 

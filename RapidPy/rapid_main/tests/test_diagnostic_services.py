@@ -830,6 +830,16 @@ class TestDiagnosticServices(unittest.TestCase):
                 del args, kwargs
                 return mock.Mock(target=100, final_position=75, success=False)
 
+            def stop(self, axis) -> None:
+                del axis
+
+            def halt(self, axis) -> None:
+                del axis
+
+            def read_registers(self, axis, registers):
+                del axis, registers
+                return (75, 0)
+
         with mock.patch(
             "rapid_main.diagnostic_services.MotorSerialClient",
             _FailedMotorSerialClient,
