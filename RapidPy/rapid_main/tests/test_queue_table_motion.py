@@ -32,6 +32,12 @@ class PositionSerial(FakeSerial):
             if self.fail_move:
                 raise OSError('axis command failed')
             self.position = int(self.command.split()[1]) + self.slop
+        elif self.command == '145':
+            self.position = 0
+        elif self.command.startswith('11 10 '):
+            self.relabel_target = -int(self.command.split()[-1])
+        elif self.command == '165 1802':
+            self.position = self.relabel_target
 
     def read_until(self, terminator):
         if self.command.startswith('12 '):

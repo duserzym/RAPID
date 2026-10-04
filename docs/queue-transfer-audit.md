@@ -110,3 +110,8 @@ These findings are explicit open full-system requirements. Unit tests and simula
 command traces do not qualify physical clearance, pressure, grip, sample transfer or
 scientific station acceptance. The portable pilot predates these changes and must be
 rebuilt after integration.
+
+The distinct blank-holder APIs now implement zero-height geometry, verified empty-hole
+pose/rod clearance, original vacuum ownership and staged SQUID/bridge measurement with
+atomic correction replacement. See `queue-blank-holder.md`. The automatic coordinator
+must invoke these APIs; the legacy holder command still requires replacement.

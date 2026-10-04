@@ -288,11 +288,18 @@ class QueueSafetyStore(HardwareSafetyStore):
         This never treats a pending motion intent as a completed physical phase.
         Consumers must validate the typed context and obtain fresh support checks.
         """
+        return self._latest_context(token, 'transfer_context')
+
+    def latest_holder_context(self, token):
+        """Read the distinct blank-holder pose without replacing specimen identity."""
+        return self._latest_context(token, 'holder_context')
+
+    def _latest_context(self, token, key):
         state = self._queue(token)
         self.verify_history(state)
         stage = state['stage']
-        if stage and stage['status'] == 'pending' and 'transfer_context' in stage['plan']:
-            context = _snapshot(stage['plan']['transfer_context'])
+        if stage and stage['status'] == 'pending' and key in stage['plan']:
+            context = _snapshot(stage['plan'][key])
             if not isinstance(context, dict):
                 raise HardwareSafetyError('Queue transfer context is malformed.')
             context['phase'] = 'unverified'
@@ -303,7 +310,7 @@ class QueueSafetyStore(HardwareSafetyStore):
             if hashlib.sha256(payload).hexdigest() != head['sha256']:
                 raise HardwareSafetyError('Queue transfer evidence changed during read.')
             event = json.loads(payload)
-            context = event['stage']['record'].get('transfer_context')
+            context = event['stage']['record'].get(key)
             if context is not None:
                 context = _snapshot(context)
                 if not isinstance(context, dict):

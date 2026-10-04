@@ -34,8 +34,10 @@ telemetry or final release. Scientific block reduction/acceptance remains a sepa
 requirement. A failed acquisition requires original-panel recovery before another
 stage; no recovery replay or grip release is added here.
 
-The full queue coordinator and MeasurementWorker must still borrow this original
-claim and invoke geometry binding. Blank-holder geometry, initial station reference,
+The distinct blank-holder path now uses this acquisition settlement with zero-height
+geometry, holder audit flags and fresh empty-hole checks before I/O and handoff; see
+`queue-blank-holder.md`. The full queue coordinator and MeasurementWorker must still
+borrow this original claim and invoke geometry binding. Initial station reference,
 operator tray inversion, per-file orientation and terminal support/field/stop/vacuum
 recovery remain open. No physical instruments were actuated by these tests, and
 portable and scientific station qualification remain required.

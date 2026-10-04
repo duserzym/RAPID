@@ -572,6 +572,8 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         snapshot = dataclasses.asdict(plan)
         geometry = getattr(self, '_queue_specimen_geometry', None)
         if geometry is not None:
+            if getattr(geometry, 'is_holder', False):
+                raise HardwareError('Blank-holder geometry cannot authorize a specimen field treatment.')
             self._sample_height()
             snapshot['specimen_geometry'] = geometry.context.to_dict()
         if family == "arm":
@@ -665,6 +667,8 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
     def bind_specimen_geometry(self, session):
         """Bind the original verified transfer before planning a sample stage."""
         from .queue_specimen_geometry import QueueSpecimenGeometry
+        if getattr(getattr(self, '_queue_specimen_geometry', None), 'is_holder', False):
+            raise HardwareError('Verify and clear the original blank-holder rod before binding a specimen.')
         if self._config.general.nocomm:
             raise HardwareError('Native measured geometry cannot be borrowed by a simulated backend.')
         geometry = QueueSpecimenGeometry(session, self._config, self._client, self._axes, self._safety_store)
@@ -672,6 +676,60 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._queue_specimen_geometry = geometry
         self._bracketed = None
         self._bracketed_geometry_signature = None
+
+    def bind_holder_geometry(self, session, vacuum):
+        """Bind a separately verified empty-hole blank, without loading a sample."""
+        from .queue_holder_geometry import QueueHolderGeometry
+        if getattr(self, '_queue_specimen_geometry', None) is not None:
+            raise HardwareError('Clear the original geometry binding before binding a blank holder.')
+        geometry = QueueHolderGeometry(session, self._config, self._client, self._axes, self._safety_store, vacuum)
+        geometry.height(geometry.context.sample_id)
+        self._holder_previous_sample = self._sample_name
+        self._sample_name = geometry.context.sample_id
+        self._measuring_holder = True
+        self._queue_specimen_geometry = geometry
+        self._bracketed = None
+        self._bracketed_geometry_signature = None
+
+    def clear_holder_geometry(self):
+        """Discard the blank binding only after its verified rod clearance."""
+        from .queue_holder_geometry import QueueHolderState
+        geometry = getattr(self, '_queue_specimen_geometry', None)
+        if geometry is None or not getattr(geometry, 'is_holder', False):
+            raise HardwareError('The original blank-holder binding is required.')
+        geometry._validate_station()
+        state = QueueHolderState.read(geometry.session.store.latest_holder_context(geometry.session.token),
+                                     geometry.session, geometry.station)
+        if state.phase != 'clear' or dataclasses.replace(state, phase='ready') != geometry.context:
+            raise HardwareError('Verify blank-holder rod clearance before clearing its geometry.')
+        self._sample_name = self._holder_previous_sample
+        self._measuring_holder = False
+        self._queue_specimen_geometry = None
+        self._bracketed = None
+        self._bracketed_geometry_signature = None
+
+    def measure_bound_holder(self):
+        """Measure a verified queue blank and atomically replace its correction."""
+        from .holder_measurement import HolderMeasurementService
+        geometry = getattr(self, '_queue_specimen_geometry', None)
+        if geometry is None or not getattr(geometry, 'is_holder', False):
+            raise HardwareError('Verify and bind the original blank-holder geometry before measurement.')
+        geometry.height(self._sample_name)
+        susceptibility = None
+        if self._config.susceptibility.enabled:
+            self.read_susceptibility()
+            susceptibility = self._susceptibility_records[-1]
+            self._persist_holder_susceptibility_evidence(strict=True)
+        service = HolderMeasurementService(self.read_squid, self._holder_store,
+            recover=lambda validation: self.recover_flux_count_discontinuity(validation),
+            averaging_cycles=max(1, int(self._config.squid.samples_per_pos or 1)),
+            clock=getattr(self._acquisition_clock, 'now', None))
+        outcome = service.measure(holder_id=geometry.context.sample_id, hole=geometry.context.hole,
+                                  susceptibility=susceptibility)
+        self._last_holder_outcome = outcome
+        if not outcome.installed:
+            raise QueueAutomationError(outcome.rejection_reason)
+        return outcome
 
     def _sample_height(self):
         geometry = getattr(self, '_queue_specimen_geometry', None)
@@ -743,17 +801,18 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         """
         if self._config.general.nocomm:
             return self._require_measurement().read_susceptibility()
-        blockers = self._susceptibility_blockers(require_holder=True)
+        is_holder = getattr(getattr(self, '_queue_specimen_geometry', None), 'is_holder', False)
+        blockers = self._susceptibility_blockers(require_holder=not is_holder)
         if blockers:
             raise HardwareError("; ".join(blockers))
-        holder = self._holder_store.require_valid(is_up=self._direction_up)
-        holder_value = holder.require_susceptibility()
+        holder = None if is_holder else self._holder_store.require_valid(is_up=self._direction_up)
+        holder_value = None if is_holder else holder.require_susceptibility()
         self._ensure_connected()
         record = self._acquire_susceptibility(
             sample_id=self._sample_name or "sample",
-            is_holder=False,
+            is_holder=is_holder,
             holder_scaled_value=holder_value,
-            holder_evidence_id=holder.susceptibility_evidence_id,
+            holder_evidence_id='' if is_holder else holder.susceptibility_evidence_id,
         )
         if record.susceptibility is None:
             raise HardwareError("Susceptibility acquisition completed without a value.")
@@ -804,6 +863,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                 coil_position=int(cfg.coil_position),
                 sample_height=sample_height,
                 moment_factor_cgs=float(cfg.moment_factor_cgs),
+                blank_holder=getattr(getattr(self, '_queue_specimen_geometry', None), 'is_holder', False),
             ).validate()
         except (TypeError, ValueError) as exc:
             blockers.append(f"Susceptibility geometry/factor invalid: {exc}")
@@ -849,6 +909,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                 coil_position=int(cfg.coil_position),
                 sample_height=sample_height,
                 moment_factor_cgs=float(cfg.moment_factor_cgs),
+                blank_holder=is_holder and getattr(getattr(self, '_queue_specimen_geometry', None), 'is_holder', False),
             ),
             clock=getattr(self._acquisition_clock, "now", None),
             should_cancel=lambda: bool(self._halt_check is not None and self._halt_check()),
@@ -1771,14 +1832,26 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             raise AfTreatmentError(record)
 
     def _ensure_connected(self) -> None:
+        owned_acquisition = False
         if self._durable_fault_family():
-            raise HardwareError("An unfinished hardware operation persists; motor motion is inhibited until verified recovery.")
+            geometry = getattr(self, '_queue_specimen_geometry', None)
+            if geometry is not None and self._safety_store is geometry.session.child_store:
+                root = geometry._validate_station()
+                stage = root['stage']
+                owned_acquisition = bool(stage and stage['family'] == 'acquisition'
+                    and stage['status'] == 'pending' and stage['token'] == self._geometry_stage_token)
+                if owned_acquisition:
+                    self._sample_height()
+            if not owned_acquisition:
+                raise HardwareError("An unfinished hardware operation persists; motor motion is inhibited until verified recovery.")
         if self.has_unresolved_rotation_fault:
             raise HardwareError("RRM stationary rotation/field is unverified; motor motion is inhibited until stop recovery.")
         if self.has_unresolved_pulse_fault:
             raise HardwareError("Pulse capacitor/relay safe state is unverified; motor motion is inhibited until discharge recovery.")
         if self._connected and _to_bool_connected(self._client.is_connected):
             return
+        if owned_acquisition:
+            raise HardwareError('Restore the original acquisition motor transport through queue recovery; reconnecting during a stage is prohibited.')
         preflight = self.preflight()
         if not preflight.ok:
             raise QueueAutomationError("; ".join(preflight.blockers))

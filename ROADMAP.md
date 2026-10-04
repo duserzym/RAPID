@@ -1318,3 +1318,33 @@ coordinator/MeasurementWorker, implement blank-holder geometry and live referenc
 support proof, restore operator tray inversion/per-file orientation, and implement original-
 panel recovery and terminal vacuum release. Auxiliary tools, portable rebuilding and
 physical/scientific station acceptance remain open. The full-system goal stays active.
+
+### Verified native blank-holder geometry and acquisition (2026-10-03)
+
+Added a distinct zero-height blank-holder context matching active VB6 Sample/Measure/
+Susceptibility behavior. QueueBlankHolderMotion persists original claimed pose/return
+stages, independently stops/checks all four axes, verifies both empty-hole coordinates
+and top-switch/clearance, and requires original acknowledged pump ON/valve OFF plus
+live-reference/field-off proof. It never picks up a specimen or changes grip outputs.
+Original specimen transfer identity remains separate and cannot be reinterpreted as blank.
+
+QueueHardwareBackend can bind the verified blank pose and original vacuum owner, acquire
+staged SQUID/bridge measurements at unshifted configured positions, atomically install
+a magnetic/susceptibility holder correction, return the rod to verified clearance and
+clear its binding. Fresh empty-hole stop/readback checks precede instrument I/O and
+result handoff. Zero-height bridge configuration is explicit and holder-only; specimen
+height requirements remain positive. Blank bindings cannot authorize specimen fields
+or be overwritten by specimen geometry. Exact owned acquisition tokens may borrow
+already connected motor transports; foreign stages and reconnect attempts stay blocked.
+
+Verification: all 1019 isolated tests pass in 189.288 seconds, including 21 new holder
+regressions with native routed lift/turning/XY stop telemetry and injected SQUID/bridge
+replies. Six-panel/six-helper source smoke, compile and diff checks pass. No physical
+instruments actuated. See docs/queue-blank-holder.md for API requirements and boundaries.
+
+Still invoke these APIs from the complete automatic coordinator and MeasurementWorker,
+establish verified live station references and field/support proof, restore operator
+tray inversion/per-file orientation, and implement original-panel recovery and terminal
+vacuum release. The legacy holder command still needs replacement by that coordinator.
+Auxiliary tools, portable rebuilding and physical/scientific station acceptance remain
+open requirements. The full-system goal remains active.

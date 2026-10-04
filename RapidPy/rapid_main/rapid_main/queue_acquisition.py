@@ -24,9 +24,16 @@ class QueueAcquisitionRecord:
     record_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     timestamp_iso: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     schema: str = 'rapidpy.queue_acquisition.v1'
+    initial_observations: tuple = ()
 
     def to_dict(self):
         return asdict(self)
+
+
+def _holder_xy(geometry, observations):
+    positions = {item['axis']: item['samples'][-1]['position_raw'] for item in observations}
+    if geometry.station.slot_from_xy_counts(positions['changer_x'], positions['changer_y']) != geometry.context.hole:
+        raise HardwareSafetyError('Blank-holder acquisition requires the original calibrated empty hole.')
 
 
 def _evidence(kind, backend, result, operation):
@@ -44,6 +51,7 @@ def _evidence(kind, backend, result, operation):
         audit = block.audit
         if (audit is None or audit.simulated is not False
                 or audit.sample_name != operation['sample_id'] or audit.run_id != operation['run_id']
+                or audit.is_holder_block is not operation['is_holder']
                 or (audit.zero_position, audit.measurement_position) != tuple(operation['positions'])
                 or not audit.block_id or not acquisition.commands
                 or any(event.ok is not True for event in acquisition.commands)):
@@ -54,7 +62,7 @@ def _evidence(kind, backend, result, operation):
         return payload
     record = backend._susceptibility_records[-1]
     if (not isinstance(record, SusceptibilityAcquisitionRecord) or record.simulated is not False
-            or record.sample_id != operation['sample_id'] or record.is_holder is not False
+            or record.sample_id != operation['sample_id'] or record.is_holder is not operation['is_holder']
             or record.sample_height != operation['specimen_geometry']['sample_height']
             or record.target_position != operation['positions'][0]
             or record.outcome != 'completed' or record.safe_state_confirmed is not True
@@ -81,6 +89,7 @@ def run_queue_acquisition(backend, kind, acquire):
     if any(type(value) is not int or not -(2**31) <= value < 2**31 for value in positions):
         raise HardwareSafetyError('Acquisition targets exceed the accepted motor count range.')
     operation = dict(action=kind, sample_id=backend._sample_name, run_id=backend._run_id,
+                     is_holder=getattr(geometry, 'is_holder', False),
                      specimen_geometry=geometry.context.to_dict(), positions=list(positions))
     profile = backend._acquisition_safety_profile()
     axes = copy.deepcopy(backend._axes)
@@ -89,9 +98,20 @@ def run_queue_acquisition(backend, kind, acquire):
                         sample_id=backend._sample_name, run_id=backend._run_id)
     previous = backend._geometry_stage_token
     backend._geometry_stage_token = token
-    evidence, error, result, cleanup, failures = None, '', None, [], []
+    evidence, error, result, cleanup, failures, initial = None, '', None, [], [], []
     try:
         try:
+            if operation['is_holder']:
+                initial_errors = []
+                for key, axis in axes.items():
+                    samples, failure = verify_stopped_in_place(backend._client, axis)
+                    initial.append(dict(axis=key, samples=samples, error=failure))
+                    if failure:
+                        initial_errors.append(f'{key}: {failure}')
+                if initial_errors:
+                    raise HardwareSafetyError('; '.join(initial_errors))
+                _holder_xy(geometry, initial)
+                geometry.height(backend._sample_name, own_stage_token=token)
             result = acquire()
             if kind == 'susceptibility' and len(backend._susceptibility_records) != previous_susc_count + 1:
                 raise HardwareSafetyError('Susceptibility did not produce a new acquisition record.')
@@ -118,10 +138,13 @@ def run_queue_acquisition(backend, kind, acquire):
         if not error:
             try:
                 geometry.height(backend._sample_name, own_stage_token=token)
+                if operation['is_holder'] and not failures:
+                    _holder_xy(geometry, cleanup)
             except Exception as exc:
                 error = str(exc) or type(exc).__name__
         record = QueueAcquisitionRecord(operation, evidence, tuple(cleanup), error,
-            '; '.join(failures), not error and not failures and evidence is not None)
+            '; '.join(failures), not error and not failures and evidence is not None,
+            initial_observations=tuple(initial))
         backend._last_queue_acquisition = record
         # The store publishes immutable linked evidence before updating the stage.
         child.finish(token, profile, record)

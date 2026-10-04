@@ -63,6 +63,7 @@ class SusceptibilityAcquisitionConfig:
     sample_height: int
     moment_factor_cgs: float
     speed_index: int = 0
+    blank_holder: bool = False
 
     @property
     def target_position(self) -> int:
@@ -76,7 +77,11 @@ class SusceptibilityAcquisitionConfig:
         factor = float(self.moment_factor_cgs)
         if coil == 0:
             raise ValueError("Susceptibility coil position is not configured.")
-        if int(self.sample_height) == 0:
+        if type(self.blank_holder) is not bool or (self.blank_holder and type(self.sample_height) is not int):
+            raise ValueError('Blank-holder geometry must be explicit and use integer counts.')
+        if self.blank_holder and self.sample_height != 0:
+            raise ValueError('A blank holder must use zero sample height.')
+        if int(self.sample_height) == 0 and not self.blank_holder:
             raise ValueError(
                 "Sample height is not configured (SampleTop - SampleBottom is zero)."
             )
@@ -189,6 +194,8 @@ class SusceptibilityAcquisitionService:
 
         try:
             self._config.validate()
+            if self._config.blank_holder and is_holder is not True:
+                raise ValueError('Zero-height blank geometry is only valid for a holder acquisition.')
             if not str(sample_id).strip():
                 raise ValueError("Susceptibility acquisition requires a sample identity.")
             if not bool(self._bridge.is_connected()):
