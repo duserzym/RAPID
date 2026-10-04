@@ -1231,7 +1231,7 @@ class SquidBackendAdapter(_BaseBackend, SquidBackend):
         self._calibration = _ensure_squid_calibration(self._calibration)
 
     def is_connected(self) -> bool:
-        return self._reader is not None
+        return self._reader is not None and _to_bool_connected(self._reader.is_connected)
 
     @property
     def raw_client(self):
@@ -1242,18 +1242,34 @@ class SquidBackendAdapter(_BaseBackend, SquidBackend):
         """
         return getattr(self._reader, "raw_client", None)
 
-    def test_connection(self) -> bool:
+    def prepare_raw_client(self):
+        """Create the original reader without opening a port or reading hardware."""
         if SquidMomentReader is None:
             raise DiagnosticContractError(
                 "SQUID transport is unavailable (updown_control dependencies missing)."
             )
 
-        reader = SquidMomentReader()
+        if self._reader is None:
+            self._reader = SquidMomentReader()
+        return self.raw_client
+
+    def connect_for_acquisition(self) -> None:
+        """Open the prepared client; bracketed acquisition owns resets and readings."""
+        self.prepare_raw_client()
+        reader = self._reader
+        if _to_bool_connected(reader.is_connected):
+            return
         try:
             reader.connect(self._cfg.port, baudrate=int(self._cfg.baud or 1200))
+            if not _to_bool_connected(reader.is_connected):
+                raise DiagnosticContractError('Original SQUID reader did not report an open connection.')
         except Exception as exc:
             self._status = f"SQUID connect failed ({self._cfg.port}:{self._cfg.baud}): {exc}"
             raise DiagnosticContractError(self._status) from exc
+
+    def test_connection(self) -> bool:
+        self.connect_for_acquisition()
+        reader = self._reader
 
         try:
             self._baseline_raw = reader.take_baseline()
@@ -1268,10 +1284,12 @@ class SquidBackendAdapter(_BaseBackend, SquidBackend):
 
     def disconnect(self) -> None:
         reader = self._reader
-        self._reader = None
-        self._baseline_raw = None
         if reader is not None:
             reader.disconnect()
+            if _to_bool_connected(getattr(reader, 'is_connected', False)):
+                raise DiagnosticContractError('Original SQUID reader remains connected after disconnect.')
+        self._reader = None
+        self._baseline_raw = None
         self._status = "SQUID transport disconnected"
 
     def set_demag_step(self, label: str) -> None:

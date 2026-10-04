@@ -91,6 +91,8 @@ class SusceptibilitySerialClient:
         with self._lock:
             if self.is_connected:
                 return
+            if self._serial is not None:
+                self.close()  # Settle a retained original handle before replacement.
             try:
                 transport = self._serial_factory(
                     port=str(self.config.port),
@@ -124,15 +126,18 @@ class SusceptibilitySerialClient:
 
     def close(self) -> None:
         with self._lock:
-            transport, self._serial = self._serial, None
+            transport = self._serial
             if transport is None:
                 return
             try:
-                close = getattr(transport, "close", None)
-                if callable(close):
-                    close()
-            finally:
-                self._logger.info("disconnected")
+                transport.close()
+                if getattr(transport, 'is_open', True) is not False:
+                    raise SusceptibilityTransportError('Original susceptibility serial handle remains open after close.')
+            except Exception as exc:
+                self._logger.error(f'close failed; original handle retained: {exc}')
+                raise
+            self._serial = None
+            self._logger.info("disconnected")
 
     def zero(self) -> str:
         """Zero the bridge and require a complete acknowledgment."""

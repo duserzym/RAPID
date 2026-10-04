@@ -959,6 +959,16 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         A sample block requires a valid holder correction; a holder block
         subtracts nothing, matching VB6 ``blankHolder``.
         """
+        geometry = getattr(self, '_queue_specimen_geometry', None)
+        if geometry is not None:
+            root = geometry._validate_station()
+            stage = root['stage']
+            if (not stage or stage['status'] != 'pending' or stage['family'] != 'acquisition'
+                    or stage['token'] != self._geometry_stage_token):
+                raise HardwareError('Original pending acquisition stage is required before SQUID connection.')
+            connect = getattr(self._measurement, 'connect_for_acquisition', None)
+            if callable(connect):
+                connect()
         self._ensure_bracketed()
         if self._bracketed is None:
             if getattr(self, '_queue_specimen_geometry', None) is not None:
@@ -1602,6 +1612,10 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             )
             return
         raw_client = getattr(self._measurement, "raw_client", None)
+        if raw_client is None and geometry is not None:
+            prepare = getattr(self._measurement, 'prepare_raw_client', None)
+            if callable(prepare):
+                raw_client = prepare()
         if raw_client is None:
             self._acquisition_error = (
                 "the active SQUID backend does not expose a raw 2G client"

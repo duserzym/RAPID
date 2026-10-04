@@ -1577,3 +1577,39 @@ Source release smoke passes six panels and six helper imports; compile and diff
 checks pass. All hardware interfaces are injected, and the MainWindow fixture
 substitutes scientific measurement/holder commands as documented above. No physical
 instruments were actuated; portable output has not been rebuilt for these changes.
+
+### Retained scientific transports and staged SQUID connection (2026-10-04)
+
+The shared raw SQUID and main susceptibility clients retain the exact original
+handle when close raises or leaves the port open. SQUID adapter disconnect retains
+its reader/baseline until successful settlement, and connected state now reflects
+actual transport state. Susceptibility reconnect settles a retained disconnected
+handle before replacement.
+
+SQUID client preparation is now pure. Native queue preflight composes bracketed
+acquisition without opening a port or taking a diagnostic baseline; the same
+prepared reader connects only inside the exact pending acquisition stage/token.
+A real adapter/reader composition regression checks the original journal at the
+connection boundary and retains pending acquisition when holder acceptance fails.
+See docs/instrument-transport-lifetime.md for verification scope and remaining work.
+
+Original instrument identity/configuration binding and terminal independent close
+settlement before queue root publication remain required, along with original-panel
+recovery, scientific acceptance, full VB6 capability coverage, portable rebuilding,
+performance and physical qualification. The full-system goal remains active.
+
+Explicit native-window deferred deletion also exposed an unowned styling callback
+that could run after MainWindow's C++ object had been deleted. The styling timer
+is now parented to MainWindow; native test disposal processes deferred deletion
+only after original worker exit. This preserves actual shutdown verification.
+
+Verification: the isolated full suite passes 1,148 tests in 381.586 seconds and
+exits with code 0. Focused checks pass 4 instrument-handle tests, 11 queue coordinator
+tests, 36 diagnostic tests, 8 susceptibility transport tests and 8 native-window
+tests (65.292 seconds, clean exit with explicit deferred deletion). Source smoke
+passes all six panels and six helper imports; compile and diff checks pass.
+The earlier successful-assertion run remained live during interpreter teardown;
+explicit disposal exposed and drove fixes for styling and initial diagnostics
+callbacks on deleted objects. MainWindow's deferred layout/diagnostics/guide
+callbacks and startup fit callbacks are now owned by the window as well.
+No physical instrument or scientific qualification is implied.

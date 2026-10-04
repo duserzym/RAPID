@@ -470,7 +470,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._build_header()
         self._build_central()
-        QtCore.QTimer.singleShot(0, lambda: install_glass_elevation(self))
+        self._glass_elevation_timer = QtCore.QTimer(self)
+        self._glass_elevation_timer.setSingleShot(True)
+        self._glass_elevation_timer.timeout.connect(lambda: install_glass_elevation(self))
+        self._glass_elevation_timer.start(0)
         self._build_statusbar()
         self._build_menu()
         self._restore_layout_state()
@@ -486,14 +489,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._diagnostic_timer.setInterval(10_000)
         self._diagnostic_timer.timeout.connect(self._refresh_dashboard_diagnostics)
         self._diagnostic_timer.start()
-        QtCore.QTimer.singleShot(0, self._refresh_dashboard_diagnostics)
+        self._defer_window_callback(0, self._refresh_dashboard_diagnostics)
 
         self._clock = QtCore.QTimer(self)
         self._clock.timeout.connect(self._tick_clock)
         self._clock.start(1000)
         self._fit_window_to_current_screen()
-        QtCore.QTimer.singleShot(0, self._fit_window_to_current_screen)
-        QtCore.QTimer.singleShot(0, self._wire_screen_guard)
+        self._defer_window_callback(0, self._fit_window_to_current_screen)
+        self._defer_window_callback(0, self._wire_screen_guard)
 
 
     # ── Header toolbar ────────────────────────────────────────────────────────
@@ -818,7 +821,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         handle = self.windowHandle()
         if handle is None or handle.screen() is None:
-            QtCore.QTimer.singleShot(75, self._wire_screen_guard)
+            self._defer_window_callback(75, self._wire_screen_guard)
             return
         handle.screen().availableGeometryChanged.connect(
             lambda *_sig_args: self._fit_window_to_current_screen(*_sig_args)
@@ -829,7 +832,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
         self._fit_window_to_current_screen()
-        QtCore.QTimer.singleShot(0, self._fit_window_to_current_screen)
+        self._defer_window_callback(0, self._fit_window_to_current_screen)
         self._wire_screen_guard()
         self._schedule_startup_guide()
 
@@ -2378,6 +2381,14 @@ class MainWindow(QtWidgets.QMainWindow):
             if lease is not None and modal:
                 lease.release()
 
+    def _defer_window_callback(self, delay_ms, callback):
+        """Cancel deferred callbacks when their owning window is deleted."""
+        timer = QtCore.QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(callback)
+        timer.timeout.connect(timer.deleteLater)
+        timer.start(delay_ms)
+
     def closeEvent(self, event) -> None:
         """Confirm safe shutdown and persist layout settings before closing."""
         if not self._shutdown_cleanup_requested:
@@ -2746,7 +2757,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._startup_guide_scheduled = True
         if self._show_startup_guide_enabled():
-            QtCore.QTimer.singleShot(350, self._launch_startup_guide_if_enabled)
+            self._defer_window_callback(350, self._launch_startup_guide_if_enabled)
 
     def _launch_startup_guide_if_enabled(self) -> None:
         if self._show_startup_guide_enabled():
@@ -3185,7 +3196,7 @@ def main() -> int:
         window.setMaximumSize(maximum_w, maximum_h)
         window.resize(min(window.width(), compact_w), min(window.height(), compact_h))
         window._fit_window_to_current_screen()
-        QtCore.QTimer.singleShot(75, window._fit_window_to_current_screen)
+        window._defer_window_callback(75, window._fit_window_to_current_screen)
     window.show()
 
     def _enforce_startup_fit() -> None:
@@ -3210,9 +3221,6 @@ def main() -> int:
         window.resize(min(window.width(), compact_w), min(window.height(), compact_h))
         window._fit_window_to_current_screen()
 
-    QtCore.QTimer.singleShot(0, _enforce_startup_fit)
-    QtCore.QTimer.singleShot(150, _enforce_startup_fit)
-    QtCore.QTimer.singleShot(350, _enforce_startup_fit)
-    QtCore.QTimer.singleShot(750, _enforce_startup_fit)
-    QtCore.QTimer.singleShot(1400, _enforce_startup_fit)
+    for delay_ms in (0, 150, 350, 750, 1400):
+        window._defer_window_callback(delay_ms, _enforce_startup_fit)
     return app.exec()

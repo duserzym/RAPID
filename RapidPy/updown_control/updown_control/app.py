@@ -936,10 +936,11 @@ class RawSquidClient:
 
     def disconnect(self) -> None:
         if self._serial is not None:
-            try:
-                self._serial.close()
-            finally:
-                self._serial = None
+            transport = self._serial
+            transport.close()
+            if transport.is_open:
+                raise SquidCommunicationError('Original SQUID serial handle remains open after close.')
+            self._serial = None
 
     def _require_serial(self) -> serial.Serial:
         if self._serial is None or not self._serial.is_open:

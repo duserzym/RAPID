@@ -73,6 +73,7 @@ class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestC
             self.window._queue_lease = None
         self.window._queue_active = False
         self.window.deleteLater()
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
         self.app.processEvents()
 
     def start(self, *, answer=QtWidgets.QMessageBox.StandardButton.Yes, do_up=True):

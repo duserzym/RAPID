@@ -51,6 +51,41 @@ class QueueBackendCoordinatorFixture(QueueLiftFixture):
 
 
 class QueueBackendCoordinatorTests(QueueBackendCoordinatorFixture, unittest.TestCase):
+    def test_real_squid_adapter_composes_without_io_then_connects_inside_pending_acquisition(self):
+        from rapid_main.diagnostic_services import SquidBackendAdapter
+        from updown_control.app import SquidMomentReader
+        self.load_backend()
+        reader = SquidMomentReader()
+        adapter = SquidBackendAdapter(self.backend._config.squid)
+        self.backend._measurement = adapter
+        self.backend._backend_errors = []
+        calls = []
+        def connect(*args, **kwargs):
+            root = self.session.store._queue(self.session.token)
+            self.assertEqual(root['stage']['family'], 'acquisition')
+            self.assertEqual(root['stage']['status'], 'pending')
+            self.assertEqual(root['stage']['token'], self.backend._geometry_stage_token)
+            calls.append((args, kwargs))
+            reader.raw_client._serial = SimpleNamespace(is_open=True)
+        with patch('rapid_main.diagnostic_services.SquidMomentReader', return_value=reader), \
+                patch.object(reader, 'connect', connect), \
+                patch.object(reader, 'take_baseline', side_effect=AssertionError('unexpected diagnostic read')):
+            with self.backend.queue_worker_claim():
+                preflight = self.backend.preflight()
+                self.assertTrue(preflight.ok, preflight.blockers)
+                self.assertIsNotNone(self.backend._bracketed)
+                self.assertEqual(calls, [])
+                with self.assertRaisesRegex(Exception, 'pending acquisition'):
+                    self.backend._read_squid_unowned()
+                self.assertEqual(calls, [])
+                # No valid holder is installed: connect is staged, but scientific
+                # reading must still fail and retain its acquisition owner.
+                with self.assertRaises(Exception):
+                    self.backend.read_squid()
+            self.assertEqual(len(calls), 1)
+            self.assertIs(adapter.raw_client, reader.raw_client)
+            self.assertEqual(self.store.pending()['stage']['family'], 'acquisition')
+
     def test_borrowed_evidence_path_is_the_fixed_parent_journal_and_cannot_be_rebound(self):
         self.assertEqual(self.session.child_store.path, self.session.store.path)
         with self.assertRaises(AttributeError):
