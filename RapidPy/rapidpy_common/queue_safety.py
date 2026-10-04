@@ -294,6 +294,10 @@ class QueueSafetyStore(HardwareSafetyStore):
         """Read the distinct blank-holder pose without replacing specimen identity."""
         return self._latest_context(token, 'holder_context')
 
+    def latest_reference_context(self, token):
+        """Read the original live station reference from verified linked evidence."""
+        return self._latest_context(token, 'reference_context')
+
     def _latest_context(self, token, key):
         state = self._queue(token)
         self.verify_history(state)

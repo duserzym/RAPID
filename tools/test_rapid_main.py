@@ -36,7 +36,17 @@ def main() -> int:
                     super().__init__(*args, **kwargs)
         QtCore.QSettings = IsolatedSettings
         suite = unittest.defaultTestLoader.discover(str(ROOT / "RapidPy" / "rapid_main" / "tests"), pattern=args.pattern)
-        return 0 if unittest.TextTestRunner(verbosity=2 if args.verbose else 1).run(suite).wasSuccessful() else 1
+        result = unittest.TextTestRunner(verbosity=2 if args.verbose else 1).run(suite)
+        # Dispose the offscreen Qt application while Python and diagnostics are
+        # still alive, rather than leaving C++ teardown to interpreter shutdown.
+        application = QtCore.QCoreApplication.instance()
+        if application is not None:
+            QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
+            application.processEvents()
+            application.shutdown()
+        if args.stall_trace:
+            faulthandler.cancel_dump_traceback_later()
+        return 0 if result.wasSuccessful() else 1
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -134,7 +134,9 @@ class MotorSerialClient:
             except Exception as exc:
                 try:
                     self._serial.close()
-                finally:
+                except Exception as cleanup:
+                    raise HardwareError(f'Motor setup failed: {exc}; original handle close failed: {cleanup}') from exc
+                else:
                     self._serial = None
                 self._emit_trace(
                     "ERROR", port, f"motor setup {port}:{baudrate} failed: {exc}"
@@ -145,11 +147,9 @@ class MotorSerialClient:
     def disconnect(self) -> None:
         with self._io_lock:
             if self._serial is not None:
-                try:
-                    self._serial.close()
-                finally:
-                    self._serial = None
-                    self._emit_trace("INFO", "", f"motor disconnected {self._port}")
+                self._serial.close()  # Retain the original handle for retry if close fails.
+                self._serial = None
+                self._emit_trace("INFO", "", f"motor disconnected {self._port}")
 
     def send_ascii(self, command: str) -> None:
         if not self.is_connected or self._serial is None:

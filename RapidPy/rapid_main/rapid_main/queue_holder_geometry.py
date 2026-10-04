@@ -101,11 +101,10 @@ class QueueBlankHolderMotion:
 
     def prepare(self, session, hole, *, reference_verified=False, field_outputs_off_verified=False):
         self._validate(session, field_outputs_off_verified)
-        if reference_verified is not True:
-            raise HardwareSafetyError('Verify the live XY reference before blank-holder acquisition.')
+        reference_proof = self.table._reference_proof(session, reference_verified)
         state = QueueHolderState(session.token, f'holder-{hole:03d}', hole)
         QueueHolderState.read(state.to_dict(), session, self.table.geometry)
-        return self._execute(session, state, 'verify_blank_holder_pose', move=False)
+        return self._execute(session, state, 'verify_blank_holder_pose', move=False, reference_proof=reference_proof)
 
     def return_to_clearance(self, session, *, field_outputs_off_verified=False):
         self._validate(session, field_outputs_off_verified)
@@ -114,8 +113,9 @@ class QueueBlankHolderMotion:
             raise HardwareSafetyError('Recover the original blank-holder acquisition before returning the rod.')
         return self._execute(session, state, 'return_blank_holder_clearance', move=True)
 
-    def _execute(self, session, state, action, *, move):
-        operation = dict(action=action, holder_context=state.to_dict(), field_outputs_off_verified=True)
+    def _execute(self, session, state, action, *, move, reference_proof=None):
+        operation = dict(action=action, holder_context=state.to_dict(), field_outputs_off_verified=True,
+                         reference_proof=reference_proof)
         child, profile = session.child_store, self.table.profile
         token = child.begin('motion', operation, profile, sample_id=state.sample_id,
                             run_id=session.store._queue(session.token)['run_id'])

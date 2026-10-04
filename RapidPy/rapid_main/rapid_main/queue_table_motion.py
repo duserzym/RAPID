@@ -91,15 +91,25 @@ class QueueXYTableMotion:
         if self.motor.check_internal_status(self.axes['updown'], 4) != 1:
             raise HardwareSafetyError('The live top-reference switch must verify lift clearance before table transfer.')
 
+    def _reference_proof(self, session, reference):
+        if reference is True:
+            return None  # Existing explicit operator-attestation callers.
+        from .queue_xy_reference import QueueXYReferenceState
+        original = QueueXYReferenceState.read(session.store.latest_reference_context(session.token), session, self)
+        if not isinstance(reference, QueueXYReferenceState) or reference != original or original.phase != 'referenced':
+            raise HardwareSafetyError('The original verified live XY reference is required for transfer.')
+        return original.to_dict()
+
     def move_to_slot(self, session, slot, *, reference_verified=False, field_outputs_off_verified=False,
                      sample_id='', run_id=''):
         self._validate(session)
         self._check_cancel()
-        if reference_verified is not True or field_outputs_off_verified is not True:
+        if field_outputs_off_verified is not True:
             raise HardwareSafetyError('Verify the live XY reference and field outputs off before table transfer.')
+        reference_proof = self._reference_proof(session, reference_verified)
         target_x, target_y = self.geometry.xy_target(slot)
         operation = dict(action='xy_slot_move', slot=slot, target_x=target_x, target_y=target_y,
-                         reference_verified=True, field_outputs_off_verified=True)
+                         reference_verified=True, reference_proof=reference_proof, field_outputs_off_verified=True)
         child = session.child_store
         token = child.begin('motion', operation, self.profile, sample_id=sample_id, run_id=run_id)
         observations, error, target_verified = [], '', False

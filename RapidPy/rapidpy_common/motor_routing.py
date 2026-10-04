@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from functools import wraps
 import inspect
+import uuid
 
 from .hardware import HardwareError, MotorAxisConfig, MotorSerialClient
 
@@ -18,6 +19,7 @@ class RoutedMotorSerialClient(MotorSerialClient):
         self._axes_by_id = {axis.motor_id: axis for axis in axes}
         self._bindings = {axis.motor_id: (axis.name, axis.address, axis.port) for axis in axes}
         self._connections = {}
+        self._connection_id = None
         self._routing_depth = 0
         seen = set()
         for axis in axes:
@@ -34,7 +36,8 @@ class RoutedMotorSerialClient(MotorSerialClient):
     def is_connected(self):
         if self._routing_depth:
             return super().is_connected
-        return bool(self._connections) and all(client.is_connected for client in self._connections.values())
+        expected = {axis.port.upper() for axis in self._axes_by_id.values()}
+        return bool(expected) and set(self._connections) == expected and all(client.is_connected for client in self._connections.values())
 
     def connect(self, port=None, baudrate=57600, timeout=.35):
         with self._io_lock:
@@ -48,19 +51,22 @@ class RoutedMotorSerialClient(MotorSerialClient):
                                                self._trace(direction, payload, f"port={port} {detail}") if self._trace else None)
                     self._connections[key] = client
                     client.connect(axis.port, baudrate, timeout)
+                self._connection_id = uuid.uuid4().hex
             except Exception:
                 self.disconnect()
                 raise
 
     def disconnect(self):
         with self._io_lock:
+            self._connection_id = None
             failures = []
-            for client in self._connections.values():
+            for port, client in list(self._connections.items()):
                 try:
                     client.disconnect()
                 except Exception as exc:
                     failures.append(str(exc))
-            self._connections.clear()
+                else:
+                    del self._connections[port]
             self._serial = None
             if failures:
                 raise HardwareError("Motor disconnect failed: " + "; ".join(failures))

@@ -115,3 +115,10 @@ The distinct blank-holder APIs now implement zero-height geometry, verified empt
 pose/rod clearance, original vacuum ownership and staged SQUID/bridge measurement with
 atomic correction replacement. See `queue-blank-holder.md`. The automatic coordinator
 must invoke these APIs; the legacy holder command still requires replacement.
+
+`QueueXYReference` now implements the claimed bounded negative/positive switch-edge
+sequence with independent stopped readbacks, accepted home-coordinate verification
+and connection-bound reference evidence. Table/blank-holder APIs can consume its
+typed proof; see `queue-xy-reference.md`. The coordinator still must establish empty
+rod/field-off preconditions and invoke the reference workflow; imported coordinates
+and legacy Boolean attestations do not independently qualify automatic live operation.

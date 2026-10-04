@@ -1348,3 +1348,39 @@ tray inversion/per-file orientation, and implement original-panel recovery and t
 vacuum release. The legacy holder command still needs replacement by that coordinator.
 Auxiliary tools, portable rebuilding and physical/scientific station acceptance remain
 open requirements. The full-system goal remains active.
+
+### Recorded native XY station reference (2026-10-03)
+
+QueueXYReference now persists a claimed homing intent before I/O, then performs the
+active VB6 negative/positive XY switch-edge sequence using the actual routed native
+controller. It checks complete switch states, live lift top/clearance, independent
+four-axis Stop and stable register 1/7 telemetry at each boundary, relative count
+range, cancellation and a bounded deadline. It zeroes X/Y only after both stopped
+edges verify, checks final positive edges and imported XYHome counts, and publishes
+immutable evidence before handing out the reference. Recovery never replays homing.
+
+Typed reference state binds the original queue, unique reference ID, actual home
+counts and successful motor connection identity. Reconnect/partial disconnect, changed
+calibration/routing, pending stages and changed evidence invalidate it. Table transfers
+and blank-holder pose verification can consume this exact typed proof and persist it
+in their plans; automatic coordinator wiring must use the proof rather than existing
+strict Boolean operator-attestation compatibility calls.
+
+Native motor close failures retain the original handle/client for retry, block replacing
+it on reconnect and invalidate the connection/reference. A partially closed or empty
+axis set no longer reports a complete connected station. An observed post-test Qt
+interpreter shutdown stall also led to explicit offscreen Qt disposal in the isolated
+harness; the final full run exited successfully with status zero.
+
+Verification: all 1041 isolated tests pass in 187.390 seconds and the test process exits
+cleanly. Twenty-two new reference/transport regressions cover native command routing,
+before-I/O journaling, switch edges, deadline/cancellation, clearance, failed stop/close
+acknowledgements, anchor/identity/calibration changes, publication failure and no replay.
+Six-panel/six-helper source smoke, compile and diff checks pass. No instruments actuated.
+See docs/queue-xy-reference.md for proof requirements and physical qualification limits.
+
+Still establish verified field/support/empty-rod preconditions and wire reference,
+blank-holder/specimen transfer and measurement claims into the complete automatic
+coordinator. Operator loading/tray inversion/per-file orientation, original-panel
+recovery/terminal vacuum release, auxiliary tools, portable rebuilding and physical/
+scientific station acceptance remain required. The full-system goal remains active.

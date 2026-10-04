@@ -22,6 +22,12 @@ geometry and original axis ports/addresses. A worker must own the original
 The caller must establish the live XY reference and verify field outputs off.
 Imported home coordinates alone do not establish a live reference.
 
+`QueueXYReference` now supplies a recorded, bounded native two-edge reference;
+see `queue-xy-reference.md`. Table transfers can borrow its typed state and persist
+the exact original reference ID/connection/anchor proof. Automatic coordinator
+wiring must use this proof; existing explicit operator-attestation callers retain
+their strict Boolean contract.
+
 Before native I/O, `move_to_slot` persists a motion stage and specimen identity.
 It independently issues Stop and checks two position/velocity-register samples on
 all four motors. Lift position must be within the calibrated clearance envelope and
