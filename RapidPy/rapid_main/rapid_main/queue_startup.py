@@ -73,7 +73,16 @@ class QueueNativeStartup:
         if (asdict(fields.pulse.cfg) != asdict(backend._config.pulse_irm)
                 or asdict(fields.arm.cfg) != asdict(backend._config.irm_arm)):
             raise HardwareSafetyError('Restore the original accepted ARM and pulse configuration before startup.')
-        profile = dict(helper='rapid_main_queue', resources=dict(vacuum=vacuum._binding()),
+        from .queue_instruments import QueueInstrumentLifetime
+        instruments = QueueInstrumentLifetime(backend)
+        motor_ports = {instruments.port_key(port) for port in station.ports.values()}
+        vacuum_port = instruments.port_key(vacuum._cfg.port)
+        scientific_ports = {instruments.port_key(backend._config.squid.port)}
+        if instruments.bridge_client is not None:
+            scientific_ports.add(instruments.port_key(backend._config.susceptibility.port))
+        if vacuum_port in motor_ports or scientific_ports.intersection(motor_ports | {vacuum_port}):
+            raise HardwareSafetyError('Native motors, vacuum and scientific instruments require distinct serial circuits.')
+        profile = dict(helper='rapid_main_queue', resources=dict(vacuum=vacuum._binding(), instruments=instruments.profile),
             stage_profiles=dict(motion=table.profile, vacuum=vacuum.queue_station_binding(),
                 field_outputs=fields.profile, acquisition=backend._acquisition_safety_profile(),
                 **{family: backend._safety_profile() for family in ('af', 'arm', 'pulse', 'rrm')}))
@@ -83,6 +92,8 @@ class QueueNativeStartup:
         store = QueueSafetyStore(backend._safety_store.path)
         session = QueueWorkflowSession.start(store, original_plan, profile, run_id=run_id)
         instance = cls(backend, vacuum, table, fields, session, attestation)
+        instance.instruments = instruments
+        backend._queue_instruments = instruments
         backend._queue_startup = instance
         backend._safety_store = session.child_store
         return instance
@@ -114,6 +125,7 @@ class QueueNativeStartup:
                 or self.fields.pulse.relays is not self.backend._pulse_irm.relays):
             raise HardwareSafetyError('Prepared startup scientific or field circuit bindings changed.')
         self.fields._validate(self.session)
+        self.instruments.bind(self.session)
 
     def _publish(self, token, operation, observations, cleanup, error, cleanup_error, schema):
         record = QueueTableMoveRecord(copy.deepcopy(operation), copy.deepcopy(self.table.profile),

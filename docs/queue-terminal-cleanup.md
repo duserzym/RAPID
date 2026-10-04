@@ -15,14 +15,15 @@ The proof can never authorize connecting grip. Vacuum persists both exact native
 OFF acknowledgements before any transport close.
 
 A separate pending motion-family terminal close stage stores the clearance record,
-field evidence, original vacuum release, linked event and original station profile
-before closing the native vacuum and motor ports. Both close paths are attempted
+field evidence, original vacuum release, linked event, original station profile and
+scientific instrument ownership before closing vacuum, motor and scientific ports.
+All participating close paths are attempted
 independently. Original controller/client identities and retained serial handles
 are checked; failed closes remain pending and retain the original backend owner.
 Retrying that same live terminal service closes only its remaining original handles.
 It never reopens ports, repeats field/vacuum commands or replays transfer.
 
-After all original motor/vacuum handles settle, immutable close evidence is published
+After all original motor/vacuum/scientific handles settle, immutable close evidence is published
 and the parent queue finishes with explicit field-off, stopped-motor and vacuum-off
 checks plus the linked terminal/pose/release/field identities. The backend then
 restores its parent store and detaches the borrowed coordinator. The OS lifetime
@@ -41,5 +42,8 @@ publication failures, lost acknowledgement, exact-record settlement and no repla
 These are control/position/transport proofs; physical pressure/contact/residual-field
 qualification remains required. MainWindow now attaches startup and full device
 leases to this terminal path; see `native-main-queue.md`. Original-panel restart
-recovery and original SQUID/susceptibility transport settlement still require work.
+recovery still requires work. Original SQUID/susceptibility transport identity and
+independent terminal settlement now participate in this path; see
+`queue-instrument-settlement.md`. Failed-open cleanup and physical qualification
+remain required.
 This terminal API is not a restart-recovery substitute.

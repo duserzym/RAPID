@@ -38,11 +38,12 @@ class QueueTerminalSafeStateRecord(QueueSafeStateRecord):
 
 
 class QueueTerminalCleanup:
-    def __init__(self, coordinator):
+    def __init__(self, coordinator, instruments):
         from .queue_transfer_coordinator import QueueTransferCoordinator
         if not isinstance(coordinator, QueueTransferCoordinator):
             raise HardwareSafetyError('Terminal cleanup requires the original native transfer coordinator.')
         self.coordinator = coordinator
+        self.instruments = instruments
         self.session, self.table = coordinator.session, coordinator.table
         self._motor = self.table.motor
         self.vacuum, self.fields = coordinator.vacuum, coordinator.fields
@@ -66,6 +67,7 @@ class QueueTerminalCleanup:
                 or self._field_handles != (self.fields.af, self.fields.pulse.daq, self.fields.pulse.relays, self.fields.arm.controller)):
             raise HardwareSafetyError('Restore the original motor calibration before terminal cleanup.')
         self.fields._validate(self.session)
+        self.instruments.validate()
         self.session.store.verify_history(root)
         return root
 
@@ -131,7 +133,7 @@ class QueueTerminalCleanup:
             self._close_plan = json.loads(json.dumps(dict(action='queue_terminal_close', pose=pose.record.to_dict(),
                 vacuum_release=release.to_dict(), vacuum_stage_token=root['stage']['token'],
                 vacuum_event=copy.deepcopy(root['history_head']), field_outputs_proof=dict(fields),
-                field_instance_id=self.fields.instance_id), allow_nan=False))
+                field_instance_id=self.fields.instance_id, instruments=self.instruments.settlement_plan()), allow_nan=False))
             self._close_token = self.session.child_store.begin('motion', self._close_plan, self.table.profile)
         return self._close_original_handles()
 
@@ -149,13 +151,16 @@ class QueueTerminalCleanup:
                                                if client._serial is not None}):
             raise HardwareSafetyError('Only original terminal handles and immutable release evidence may be retried.')
         if stage['status'] == 'verified':
+            self.instruments.require_settled()
             if (self.last_record is None or stage['record'] != json.loads(json.dumps(self.last_record.to_dict()))
                     or self._vacuum_controller._serial is not None or self.table.motor._connections
                     or any(client._serial is not None for client in self._motor_handles.values())):
                 raise HardwareSafetyError('Original verified transport settlement changed before root publication.')
             return self._publish_root_finish()
         errors, observations = [], []
-        for name, close in (('vacuum', self._vacuum_controller.disconnect), ('motors', self.table.motor.disconnect)):
+        for name, close in (('vacuum', self._vacuum_controller.disconnect), ('motors', self.table.motor.disconnect),
+                           ('squid', lambda: self.instruments.close('squid')),
+                           ('susceptibility', lambda: self.instruments.close('susceptibility'))):
             try:
                 close()
                 observations.append(dict(transport=name, closed=True))
@@ -168,6 +173,8 @@ class QueueTerminalCleanup:
             errors.append('Original motor handles remain unsettled.')
         if any(client._serial is not None for client in self._motor_handles.values()):
             errors.append('Original motor serial handles have not settled.')
+        if not self.instruments.is_settled():
+            errors.append('Original SQUID/susceptibility handles have not settled.')
         record = QueueTableMoveRecord(copy.deepcopy(self._close_plan), copy.deepcopy(self.table.profile),
             tuple(observations), (), '; '.join(errors), '', not bool(errors), schema='rapidpy.queue_terminal_close.v1')
         self.last_record = record
@@ -177,18 +184,21 @@ class QueueTerminalCleanup:
         return self._publish_root_finish()
 
     def _publish_root_finish(self):
+        self.instruments.require_settled()
         if self.last_root_record is None:
             self.last_root_record = QueueTerminalSafeStateRecord(True, True, True, settlement=dict(queue_token=self.session.token,
                 terminal_stage_token=self._close_token, terminal_record_id=self.last_record.record_id,
                 pose_record_id=self._close_plan['pose']['record_id'],
                 vacuum_release_id=self._close_plan['vacuum_release']['record_id'],
-                field_evidence_id=self._close_plan['field_outputs_proof']['evidence_id']))
+                field_evidence_id=self._close_plan['field_outputs_proof']['evidence_id'],
+                instruments=copy.deepcopy(self._close_plan['instruments'])))
         root_record = self.last_root_record
         self.session.store.finish_queue(self.session.token, self.profile, root_record)
         return self._settle_verified_finish(self.session.store.read())
 
     def _settle_verified_finish(self, state):
         self.session.child_store._owned()
+        self.instruments.require_settled()
         if (state['family'] != 'queue' or state['token'] != self.session.token or state['status'] != 'verified'
                 or state['profile'] != self.profile or self.last_root_record is None
                 or state['record'] != self.last_root_record.to_dict()

@@ -45,7 +45,7 @@ matching scientific profiles, a completed startup and a verified/held child stag
 with no live command worker. Other panels/helpers remain blocked.
 
 Terminal cleanup runs after the actual measurement/command worker exits. Only the
-original verified queue finish and closed native motor/vacuum bindings permit OS
+original verified queue finish and closed native motor/vacuum/scientific bindings permit OS
 and logical group release. Cutoff, acquisition, return, transport/publication failure
 or an invalid journal retains ownership. Shutdown stays open for original recovery
 instead of repeatedly closing or discarding its unresolved owner.
@@ -58,7 +58,7 @@ run and holder command; separate acquisition/holder/worker tests cover those ser
 It does not prove a complete physical scientific station run.
 
 Remaining full-system work includes original-panel live/restart queue recovery,
-SQUID/susceptibility original transport identity and terminal settlement, complete
+failed-open scientific transport cleanup, complete
 per-file step/eligibility and scientific artifact acceptance, optional physically
 absent field circuitry, chain-station transfers, remaining VB6 auxiliary tools,
 portable rebuilding, performance and physical/scientific station qualification.

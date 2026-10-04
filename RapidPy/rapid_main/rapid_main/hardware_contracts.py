@@ -739,7 +739,8 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._queue_coordinator = coordinator
         self._safety_store = session.child_store
         from .queue_terminal import QueueTerminalCleanup
-        self._queue_terminal_cleanup = QueueTerminalCleanup(coordinator)
+        self._queue_instruments.bind(session)
+        self._queue_terminal_cleanup = QueueTerminalCleanup(coordinator, self._queue_instruments)
         from .queue_operator import QueueOperatorStages
         self._queue_operator_stages = QueueOperatorStages(self, coordinator)
 
@@ -774,6 +775,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._queue_terminal_cleanup = None
         self._queue_startup = None
         self._queue_operator_stages = None
+        self._queue_instruments = None
         self._connected = False
         self._retain_transport_recoveries()
         self._bracketed = None
@@ -784,6 +786,10 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         from .queue_station import QueueStationGeometry
         session = coordinator.session
         session.child_store._owned()
+        instruments = getattr(self, '_queue_instruments', None)
+        if instruments is None:
+            raise HardwareError('Original native queue scientific instrument ownership is required.')
+        instruments.bind(session)
         if (getattr(self, '_queue_coordinator', None) is coordinator
                 and self._safety_store is not session.child_store):
             raise HardwareError('Restore the original borrowed queue stage store before I/O.')
@@ -969,6 +975,9 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             connect = getattr(self._measurement, 'connect_for_acquisition', None)
             if callable(connect):
                 connect()
+            instruments = getattr(self, '_queue_instruments', None)
+            if instruments is not None:
+                instruments.validate()
         self._ensure_bracketed()
         if self._bracketed is None:
             if getattr(self, '_queue_specimen_geometry', None) is not None:
@@ -1105,6 +1114,9 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             # Opening the bridge happens only inside an operator-started run
             # that already holds the "susceptibility" ownership lease.
             bridge.test_connection()
+        instruments = getattr(self, '_queue_instruments', None)
+        if instruments is not None:
+            instruments.validate()
         cfg = self._config.susceptibility
         service = SusceptibilityAcquisitionService(
             bridge,

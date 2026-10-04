@@ -116,6 +116,17 @@ class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestC
             with self.assertRaises(DeviceOwnershipError): self.window.acquire_device(resource, 'other_panel')
         self.assertIsNotNone(self.window._queue_native_session._lease)
 
+    def test_replaced_scientific_adapter_cannot_reenter_original_queue(self):
+        self.assertTrue(self.start(), self.window._sb_status.text())
+        original = self.backend._measurement
+        self.backend._measurement = object()
+        try:
+            with self.assertRaises(DeviceOwnershipError):
+                self.window.acquire_device('measurement', 'queue_workflow')
+            self.assertTrue(all(self.window._ownership.is_owned(item) for item in RESOURCES))
+        finally:
+            self.backend._measurement = original
+
     def test_terminal_worker_finishes_root_before_releasing_all_device_and_os_leases(self):
         self.assertTrue(self.start(), self.window._sb_status.text())
         session = self.window._queue_native_session

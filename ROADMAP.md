@@ -1613,3 +1613,40 @@ explicit disposal exposed and drove fixes for styling and initial diagnostics
 callbacks on deleted objects. MainWindow's deferred layout/diagnostics/guide
 callbacks and startup fit callbacks are now owned by the window as well.
 No physical instrument or scientific qualification is implied.
+
+### Original scientific queue ownership and terminal settlement (2026-10-04)
+
+Native startup captures actual SQUID adapter/reader/raw client and configured native
+susceptibility adapter/client before root creation and I/O. The root binds their
+unique lifetime identity and accepted settings. Retained handles and serial circuit
+collisions (including Windows device-prefix/case aliases) block preparation. An
+explicitly disabled unavailable bridge is recorded absent; an enabled missing or
+simulated bridge cannot substitute for native hardware.
+
+Original objects/configuration/full history are checked before transfer/acquisition.
+First handles are captured only inside their original pending acquisition stage and
+token, with actual port/baud/framing/open flags verified before scientific reads.
+Changed, lost, unstaged or mismatched handles block acceptance and remain retained.
+
+Terminal close now journals original scientific ownership and handle presence before
+independent vacuum/motor/SQUID/susceptibility closes. Failure retains the exact handle
+and stage; retry closes only original unsettled handles without outputs, motion,
+reconnect, resets or readings. Both scientific instruments must settle before close
+verification/root publication and MainWindow's post-worker OS/logical lease release.
+The retained startup owner also denies reentry after scientific object replacement.
+See docs/queue-instrument-settlement.md for evidence scope and remaining work.
+
+Original-panel live/restart recovery, failed-open cleanup, per-file scientific
+step/eligibility/artifact acceptance, absent-field participation, chain transfers,
+remaining active VB6 auxiliary tools, portable rebuilding, performance and physical
+qualification still require completion. The full-system goal remains active.
+
+Verification: the isolated full suite passes 1,166 tests in 435.055 seconds and
+exits with code 0 after Qt/interpreter teardown. This includes 14 new scientific
+instrument ownership/close cases, 17 startup cases and 9 native-window cases.
+Focused prior checks pass 14 terminal, 14 startup, 11 coordinator, 4 holder and
+8 native-window cases with clean exits; the full run covers the added collision,
+placeholder and original reentry cases. Compile and diff checks pass. Instrument
+connection-only fixtures and injected DLL/serial interfaces do not constitute
+physical or scientific station acceptance; portable outputs are not rebuilt here.
+Source release smoke also passes all six panels and six helper imports with a clean process exit.

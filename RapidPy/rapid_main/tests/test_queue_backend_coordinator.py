@@ -1,7 +1,7 @@
 """Bind native measurement geometry to the original transfer/field owner."""
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from rapid_main.queue_command_worker import QueueCommandWorker
 from rapid_main.queue_transfer_coordinator import QueueTransferCoordinator
@@ -19,8 +19,20 @@ class QueueBackendCoordinatorFixture(QueueLiftFixture):
         self.backend._af_demag = SimpleNamespace(_controller=self.af)
         self.backend._arm_bias = self.arm
         self.backend._pulse_irm = SimpleNamespace(daq=self.daq, relays=self.af)
+        from rapid_main.diagnostic_services import SquidBackendAdapter
+        from rapid_main.queue_instruments import QueueInstrumentLifetime
+        self.backend._measurement = SquidBackendAdapter(self.backend._config.squid)
+        self.backend._measurement.test_connection = Mock(wraps=self.backend._measurement.test_connection)
+        # Scientific component fixtures supply their own coherent transport.
+        # This stand-in does no instrument I/O; native connection has its own test.
+        self.backend._measurement.connect_for_acquisition = Mock(return_value=None)
+        self.backend._susceptibility = None
+        self.backend._queue_instruments = QueueInstrumentLifetime(self.backend)
         scientific['field_outputs'] = fields['field_outputs']
         return scientific
+
+    def additional_resources(self):
+        return {'instruments': self.backend._queue_instruments.profile}
 
     def setUp(self):
         super().setUp()
@@ -55,9 +67,9 @@ class QueueBackendCoordinatorTests(QueueBackendCoordinatorFixture, unittest.Test
         from rapid_main.diagnostic_services import SquidBackendAdapter
         from updown_control.app import SquidMomentReader
         self.load_backend()
-        reader = SquidMomentReader()
-        adapter = SquidBackendAdapter(self.backend._config.squid)
-        self.backend._measurement = adapter
+        adapter = self.backend._measurement
+        reader = adapter._reader
+        adapter.connect_for_acquisition = SquidBackendAdapter.connect_for_acquisition.__get__(adapter)
         self.backend._backend_errors = []
         calls = []
         def connect(*args, **kwargs):
@@ -66,7 +78,11 @@ class QueueBackendCoordinatorTests(QueueBackendCoordinatorFixture, unittest.Test
             self.assertEqual(root['stage']['status'], 'pending')
             self.assertEqual(root['stage']['token'], self.backend._geometry_stage_token)
             calls.append((args, kwargs))
-            reader.raw_client._serial = SimpleNamespace(is_open=True)
+            handle = SimpleNamespace(is_open=True, port=adapter._cfg.port, baudrate=adapter._cfg.baud,
+                parity='N', bytesize=8, stopbits=1)
+            handle.close = lambda: setattr(handle, 'is_open', False)
+            reader.raw_client._serial = handle
+        self.addCleanup(adapter.disconnect)
         with patch('rapid_main.diagnostic_services.SquidMomentReader', return_value=reader), \
                 patch.object(reader, 'connect', connect), \
                 patch.object(reader, 'take_baseline', side_effect=AssertionError('unexpected diagnostic read')):

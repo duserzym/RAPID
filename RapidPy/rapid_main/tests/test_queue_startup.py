@@ -53,6 +53,31 @@ class QueueStartupFixture(backend_fixture.QueueBackendCoordinatorFixture):
         return patch.object(self.motor, 'connect', side_effect=connect)
 
 class QueueStartupTests(QueueStartupFixture, unittest.TestCase):
+    def test_retained_squid_handle_blocks_preparation_before_new_root_or_io(self):
+        raw = self.backend._measurement.prepare_raw_client()
+        raw._serial = object()
+        before = self.store.read(), len(self.commands), len(self.vacuum_serial.writes)
+        try:
+            with self.assertRaisesRegex(HardwareSafetyError, 'retained SQUID'):
+                self.prepare()
+            self.assertEqual((self.store.read(), len(self.commands), len(self.vacuum_serial.writes)), before)
+        finally:
+            raw._serial = None
+
+    def test_squid_motor_port_alias_blocks_before_new_root_or_io(self):
+        self.backend._config.squid.port = chr(92) * 2 + '.' + chr(92) + 'com3'
+        before = self.store.read(), len(self.commands)
+        with self.assertRaisesRegex(HardwareSafetyError, 'distinct serial circuits'):
+            self.prepare()
+        self.assertEqual((self.store.read(), len(self.commands)), before)
+
+    def test_vacuum_motor_port_collision_blocks_before_new_root_or_io(self):
+        self.backend._config.vacuum.port = self.vacuum._cfg.port = 'COM3'
+        before = self.store.read(), len(self.commands)
+        with self.assertRaisesRegex(HardwareSafetyError, 'distinct serial circuits'):
+            self.prepare()
+        self.assertEqual((self.store.read(), len(self.commands)), before)
+
     def test_prepare_records_empty_rod_and_all_profiles_without_any_io(self):
         before = len(self.commands), len(self.vacuum_serial.writes)
         startup = self.prepare()

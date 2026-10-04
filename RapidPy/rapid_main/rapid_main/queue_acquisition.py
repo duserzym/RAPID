@@ -78,6 +78,11 @@ def run_queue_acquisition(backend, kind, acquire):
     """Begin before instrument I/O; settlement never releases the specimen grip."""
     geometry = backend._queue_specimen_geometry
     geometry.height(backend._sample_name)
+    instruments = getattr(backend, '_queue_instruments', None)
+    if getattr(backend, '_queue_coordinator', None) is not None and instruments is None:
+        raise HardwareSafetyError('Original scientific instrument ownership is required for native acquisition.')
+    if instruments is not None:
+        instruments.validate()
     child = geometry.session.child_store
     if backend._safety_store is not child:
         raise HardwareSafetyError('Acquisition must borrow the original claimed queue journal.')
@@ -91,6 +96,8 @@ def run_queue_acquisition(backend, kind, acquire):
     operation = dict(action=kind, sample_id=backend._sample_name, run_id=backend._run_id,
                      is_holder=getattr(geometry, 'is_holder', False),
                      specimen_geometry=geometry.context.to_dict(), positions=list(positions))
+    if instruments is not None:
+        operation['instruments'] = copy.deepcopy(instruments.profile)
     profile = backend._acquisition_safety_profile()
     axes = copy.deepcopy(backend._axes)
     previous_susc_count = len(getattr(backend, '_susceptibility_records', ()))
@@ -127,6 +134,11 @@ def run_queue_acquisition(backend, kind, acquire):
                 if isinstance(failed, SusceptibilityAcquisitionRecord):
                     evidence = failed.to_dict()
         finally:
+            if instruments is not None:
+                try:
+                    instruments.validate()
+                except Exception as exc:
+                    error = '; '.join(filter(None, (error, str(exc))))
             # Every axis is attempted independently, including after failed instrument I/O.
             for key, axis in axes.items():
                 samples, failure = verify_stopped_in_place(backend._client, axis)

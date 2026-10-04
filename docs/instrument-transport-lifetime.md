@@ -21,9 +21,9 @@ the real adapter, reader and composition path and inspect the durable stage at
 the connect call. An absent valid holder still fails scientific acquisition and
 retains its pending owner; the test does not fabricate a qualified specimen block.
 
-These changes are prerequisites for full native instrument settlement. Original
-SQUID/susceptibility adapter/client/serial identity and port-configuration binding,
-terminal independent close evidence before root publication, live/restart recovery
-controls, failed-open cleanup, and physical/scientific station acceptance remain.
+Original native queue adapter/client/serial identity and port configuration now
+bind to QueueInstrumentLifetime; terminal independent close evidence precedes root
+publication and MainWindow release. See queue-instrument-settlement.md. Live/restart
+recovery controls, failed-open cleanup, and physical/scientific acceptance remain.
 The separate VRM logger serial client is not changed by this checkpoint.
 No physical instrument was actuated by the injected tests.

@@ -1114,7 +1114,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 return False
             if (not state or state['family'] != 'queue' or state['token'] != session.token
                     or state['status'] != 'verified' or self._measurement_backend._client._connections
-                    or self._vacuum_backend._queue_binding is not None):
+                    or self._vacuum_backend._queue_binding is not None
+                    or self._queue_native_startup is None
+                    or not self._queue_native_startup.instruments.is_settled()):
                 return False
             try:
                 session.release()
@@ -1702,6 +1704,8 @@ class MainWindow(QtWidgets.QMainWindow):
             resources = ('measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptibility')
             return (self._uses_native_queue() and startup is not None and startup.session is session
                 and startup.backend is backend and startup.completed is True
+                and backend._queue_instruments is startup.instruments
+                and startup.instruments.session is session and startup.instruments.is_original()
                 and self._queue_command_thread is None and session._lease is not None and session._owner is None
                 and backend._safety_store is session.child_store and root['status'] == 'pending'
                 and root['stage'] is not None and root['stage']['status'] in {'verified', 'held'}

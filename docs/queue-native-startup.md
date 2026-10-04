@@ -47,3 +47,8 @@ confirmation/loading stages and dispatch through this startup API; see
 Physically present participating circuits are currently mandatory; absent-hardware
 configuration must be distinguished from disabled treatments before optional
 circuits can be supported.
+
+Startup also captures original scientific adapters/clients and accepted serial
+settings without opening ports, rejects retained scientific handles and serial
+circuit collisions, and binds that ownership to the durable root. See
+`queue-instrument-settlement.md` for acquisition and terminal participation.
