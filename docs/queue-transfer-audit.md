@@ -46,17 +46,32 @@ multiple files, periodic blanks, an existing Flip and final return placement.
 from the full accepted motor calibration and imported `HoleSlotNum`. XY stations
 have one explicit empty slot; chain stations use multiples of `HoleSlotNum`, circular
 distance and the legacy upper-on-tie rule. Unsupported chain origins fail validation.
-The resolver rejects specimen/blank confusion and checks signed controller position
-readbacks for slot alignment and the exact requested empty location. It performs no
-I/O and is not yet wired into the automatic transfer coordinator. Workers must obtain
-fresh readbacks and persist ownership before motion; an aligned position alone does
-not prove stopped motors or safe vertical clearance.
+The resolver rejects specimen/blank confusion. Chain readbacks use counts per slot;
+XY readbacks require both coordinates from the imported `XYTable.XY<n>X/Y` map.
+A single chain count can never prove an XY slot. Unmatched or ambiguous coordinates
+fail validation, including a large Y mismatch which the legacy asymmetric comparison
+could mistakenly accept. Home and slot coordinates use strict signed integer counts.
+New station imports clear earlier native calibration, wiring and geometry so missing
+entries cannot silently inherit another station's settings.
 
-Implement separate pump/valve phases under the durable parent queue and record each
-native motion/acquisition/transfer stage. Wire accepted empty-hole resolution and
+`rapid_main.queue_table_motion.QueueXYTableMotion` now supplies claimed native XY
+motion. It binds all four original ports/addresses, full motor calibration and the
+coordinate map into the queue motion profile. It persists the stage before any
+commands, checks motor stops and live lift top-switch/clearance readbacks, commands
+the independent X/Y targets with native absolute motion, then checks both final
+positions and stopped telemetry. Stop checks run independently for all four motors
+after a failed axis command or cancellation. Failed checks/publication remain pending;
+restart recovery cannot replay motion. See `queue-xy-motion.md` for its boundaries.
+
+The resolver and claimed motion path are not yet wired into the automatic transfer
+coordinator. That coordinator must establish a fresh XY home reference, verify field
+outputs off and persist specimen transfer state; aligned coordinates alone do not
+prove specimen support or safe grip release.
+
+Wire the separate pump/valve phases under the durable parent queue and record each
+remaining native motion/acquisition/transfer stage. Wire accepted empty-hole resolution and
 fresh readback verification into those stages, persist the specimen's original slot
-and transfer state, and verify
-clearance/stop/support before changing vacuum. Add the original-panel recovery path
+and transfer state, and verify clearance/stop/support before changing vacuum. Add the original-panel recovery path
 which preserves grip when specimen support or field/motion safety is unknown. Wrap
 acquisition and treatment workers in the queue claim without moving hardware waits
 back onto the GUI thread. Restore initial loading and Flip operator interventions

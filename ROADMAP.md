@@ -1194,3 +1194,35 @@ Actual pickup/return with dynamic sample height, empty-hole/clearance verificati
 operator tray inversion and per-file orientation, durable acquisition integration,
 original-panel coordinated recovery, auxiliary tools, portable rebuilding and
 physical/scientific acceptance remain open full-system requirements. Goal active.
+
+### Native XY calibration and claimed transfer motion (2026-10-03)
+
+The transfer audit identified that XY stations use saved per-slot X/Y coordinate
+pairs, not chain counts derived from OneStep. Restored XYTable UseXYTableAPS,
+XYHomeX/Y and XY<n>X/Y import with strict complete signed integer coordinate pairs.
+Incomplete new station imports clear prior native wiring/calibration/geometry instead
+of combining separate station files. Configuration roundtrip preserves all 100
+coordinate pairs in the representative legacy station file.
+
+QueueStationGeometry now requires matching explicit station mode and accepted XY
+home/map settings. XY targets and live slot/empty-hole readbacks require both axes;
+chain counts cannot verify XY locations. Unmatched or ambiguous coordinates fail
+closed without the legacy fallback to SlotMin or asymmetric Y comparison.
+
+QueueXYTableMotion implements a claimed native worker path with original four-axis
+port/address, motor-calibration and geometry binding. It persists a motion stage
+before any I/O, independently verifies stops and live lift top-switch/clearance,
+sends absolute X/Y targets to their registered ports and checks both final positions
+and stopped telemetry. Every axis is stopped independently after errors/cancellation.
+Missing stop replies, slop, unsafe clearance and failed evidence publication retain
+the pending original stage. Recovery never replays transfer motion.
+
+Verification: all 947 isolated tests pass in 137.456 seconds. Queue regressions
+include 13 actual-routed-controller/injected-serial XY tests and 16 station geometry
+tests; five legacy-import tests cover native map persistence and invalid/partial
+imports. Six-panel/six-helper source smoke passes. No physical instruments actuated.
+This claimed motion API and separate vacuum phases still need wiring into the full
+pickup/grip/home/empty-hole/read/return/drop/release coordinator with dynamic sample
+height, live XY reference establishment, original-slot persistence, stop/support/
+field recovery and operator tray inversion/per-file orientation. Other full-system
+requirements and portable/physical/scientific acceptance remain open. Goal active.

@@ -59,10 +59,70 @@ class TestLegacyIniImport(unittest.TestCase):
         self.assertEqual(cfg.motor_station.hole_slot, 46)
         self.assertEqual(cfg.motor_station.ports, {"changer_x": "COM3", "changer_y": "COM4", "updown": "COM5", "turning": "COM6"})
         self.assertEqual(set(cfg.motor_station.addresses.values()), {16})
+        self.assertTrue(cfg.motor_station.use_xy_table)
+        self.assertEqual(cfg.motor_station.xy_home, [-3, -2])
+        self.assertEqual(cfg.motor_station.xy_positions['1'], [9590, -11916])
+        self.assertEqual(cfg.motor_station.xy_positions['46'], [0, 39])
+        self.assertEqual(len(cfg.motor_station.xy_positions), 100)
 
         self.assertIn("Program.LastLogin -> general.operator", report.mapped_fields)
         self.assertTrue(any("AFRampRate" in item for item in report.mapped_fields))
         self.assertTrue(any("COMPortSusceptibility" in item for item in report.mapped_fields))
+
+    def test_xy_import_never_rounds_or_defaults_an_incomplete_coordinate_pair(self):
+        text = '''[XYTable]
+UseXYTableAPS=invalid
+XYHomeX=-3
+XY1X=1.2
+XY1Y=4
+XY2X=2147483648
+XY2Y=4
+XY3X=0
+XY4X=nan
+XY4Y=4
+XY5X=0
+XY5Y=39
+'''
+        config = AppConfig()
+        config.motor_station.xy_positions = {'1': [500, 600]}
+        config.motor_station.xy_home = [0, 0]
+        config.motor_station.use_xy_table = True
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'station.ini'
+            path.write_text(text)
+            report = import_vb6_ini(config, path)
+        self.assertIsNone(config.motor_station.use_xy_table)
+        self.assertEqual(config.motor_station.xy_home, [])
+        self.assertEqual(config.motor_station.xy_positions, {'5': [0, 39]})
+        self.assertTrue(any('coordinate pair required' in warning for warning in report.warnings))
+
+    def test_xy_calibration_survives_config_roundtrip(self):
+        config = AppConfig()
+        path = Path(__file__).resolve().parents[3] / 'VB6' / 'settings' / 'Paleomag_v3.INI'
+        import_vb6_ini(config, path)
+        with tempfile.TemporaryDirectory() as directory:
+            saved = Path(directory) / 'config.json'
+            config.save(saved)
+            restored = AppConfig.load(saved)
+        self.assertEqual(restored.motor_station.xy_positions, config.motor_station.xy_positions)
+        self.assertEqual(restored.motor_station.xy_home, [-3, -2])
+        self.assertTrue(restored.motor_station.use_xy_table)
+
+    def test_new_partial_station_import_cannot_reuse_previous_geometry_or_wiring(self):
+        config = AppConfig()
+        original = Path(__file__).resolve().parents[3] / 'VB6' / 'settings' / 'Paleomag_v3.INI'
+        import_vb6_ini(config, original)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'different.ini'
+            path.write_text('[COMPorts]\nCOMPortChanger=9\n[SampleChanger]\nSlotMin=1\n')
+            import_vb6_ini(config, path)
+        self.assertEqual(config.motor_station.ports, {'changer_x': 'COM9'})
+        self.assertEqual(config.motor_station.addresses, {})
+        self.assertEqual(set(config.motor_station.controller), {'slot_min', 'sample_height'})
+        self.assertEqual(config.motor_station.hole_slot, 0)
+        self.assertIsNone(config.motor_station.use_xy_table)
+        self.assertEqual(config.motor_station.xy_positions, {})
+        self.assertEqual(config.motor_station.xy_home, [])
 
     def test_invalid_numbers_are_defaulted_with_warnings(self) -> None:
         ini_text = """[Program]

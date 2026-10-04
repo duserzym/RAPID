@@ -657,6 +657,16 @@ def import_vb6_ini(config: AppConfig, path: str | Path) -> LegacyIniImportReport
 
     # Native motion calibration must not be confused with UI speed percentages.
     station = config.motor_station
+    # A new station file is one calibration provenance. Never combine omitted
+    # wiring/geometry with values accepted from an earlier file.
+    station.calibration_source = ''
+    station.ports = {}
+    station.addresses = {}
+    station.controller = {}
+    station.hole_slot = 0
+    station.xy_positions = {}
+    station.xy_home = []
+    station.use_xy_table = None
     for axis, port_key, address_key in (
         ("changer_x", "COMPortChanger", "MotorIDChanger"),
         ("changer_y", "COMPortChangerY", "MotorIDChangerY"),
@@ -710,6 +720,50 @@ def import_vb6_ini(config: AppConfig, path: str | Path) -> LegacyIniImportReport
             warnings=warnings,
         )
         mark_mapped("SampleChanger", "HoleSlotNum", "motor_station.hole_slot")
+
+    # XY positions are controller counts, not chain spacing or UI millimetres.
+    # A partial reimport must not reuse coordinates from an earlier station.
+    if parser.has_section('XYTable'):
+        station.xy_positions = {}
+        station.xy_home = []
+        station.use_xy_table = None
+        raw = _value(parser, 'XYTable', 'UseXYTableAPS')
+        if raw is not None:
+            if raw.lower() in {'true', '1', 'yes', 'y', 'on'}:
+                station.use_xy_table = True
+            elif raw.lower() in {'false', '0', 'no', 'n', 'off'}:
+                station.use_xy_table = False
+            else:
+                warnings.append('XYTable.UseXYTableAPS: invalid table mode; station mode remains unaccepted')
+            mark_mapped('XYTable', 'UseXYTableAPS', 'motor_station.use_xy_table')
+
+        def xy_pair(x_key, y_key, destination='motor_station.xy_positions'):
+            raw_values = [_value(parser, 'XYTable', key) for key in (x_key, y_key)]
+            if raw_values == [None, None]:
+                return None
+            for key, raw_value in zip((x_key, y_key), raw_values):
+                if raw_value is not None:
+                    mark_mapped('XYTable', key, destination)
+            try:
+                values = [float(value) for value in raw_values]
+                if any(not math.isfinite(value) or not value.is_integer()
+                       or not -(2**31) <= value < 2**31 for value in values):
+                    raise ValueError('invalid controller count')
+                return [int(value) for value in values]
+            except (TypeError, ValueError):
+                warnings.append(f'XYTable.{x_key}/{y_key}: complete signed 32-bit integer coordinate pair required; omitted')
+                return None
+
+        home = xy_pair('XYHomeX', 'XYHomeY', 'motor_station.xy_home')
+        if home is not None:
+            station.xy_home = home
+        slots = {int(match.group(1)) for key, _ in parser.items('XYTable')
+                 if (match := re.fullmatch(r'XY([1-9][0-9]*)[XY]', key))}
+        for slot in sorted(slots):
+            coordinates = xy_pair(f'XY{slot}X', f'XY{slot}Y')
+            if coordinates is not None:
+                station.xy_positions[str(slot)] = coordinates
+        station.calibration_source = str(ini_path.resolve())
 
     # Compositional summary of unmapped keys
     for sec_name in parser.sections():

@@ -243,6 +243,9 @@ class MotorStationConfig:
     addresses: dict[str, int] = field(default_factory=dict)
     controller: dict[str, float] = field(default_factory=dict)
     hole_slot: int = 0
+    use_xy_table: bool | None = None
+    xy_positions: dict[str, list[int]] = field(default_factory=dict)
+    xy_home: list[int] = field(default_factory=list)
 
 
 @dataclass
