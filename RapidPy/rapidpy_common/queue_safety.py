@@ -302,6 +302,10 @@ class QueueSafetyStore(HardwareSafetyStore):
         """A later field treatment consumes an earlier off-state proof."""
         return self._latest_context(token, 'field_context', invalidating_families={'af', 'arm', 'pulse', 'rrm'})
 
+    def latest_operator_context(self, token):
+        """Read acknowledged tray orientation from the full verified queue history."""
+        return self._latest_context(token, 'operator_context')
+
     def _latest_context(self, token, key, *, invalidating_families=()):
         state = self._queue(token)
         self.verify_history(state)
@@ -463,6 +467,11 @@ class QueueStageStore:
     """Treatment store adapter; only the current claimed worker may borrow it."""
     def __init__(self, session):
         self.session = session
+
+    @property
+    def path(self):
+        """Original journal location for evidence publishers; never a new latch."""
+        return self.session.store.path
 
     def _owned(self):
         if self.session._lease is None or self.session._owner != threading.get_ident():

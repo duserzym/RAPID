@@ -740,6 +740,20 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._safety_store = session.child_store
         from .queue_terminal import QueueTerminalCleanup
         self._queue_terminal_cleanup = QueueTerminalCleanup(coordinator)
+        from .queue_operator import QueueOperatorStages
+        self._queue_operator_stages = QueueOperatorStages(self, coordinator)
+
+    def park_queue_station(self):
+        return self._queue_operator_stages.park()
+
+    def record_queue_tray_confirmation(self, kind, file_id='', *, operator):
+        return self._queue_operator_stages.confirm(kind, file_id, operator=operator)
+
+    def queue_file_direction(self, file_id):
+        directions = self._queue_operator_stages.directions()
+        if file_id not in directions:
+            raise HardwareError('The specimen must retain its original registered file orientation.')
+        return directions[file_id]
 
     def finish_queue_lifetime(self):
         coordinator = getattr(self, '_queue_coordinator', None)
@@ -759,6 +773,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._queue_coordinator = None
         self._queue_terminal_cleanup = None
         self._queue_startup = None
+        self._queue_operator_stages = None
         self._connected = False
         self._retain_transport_recoveries()
         self._bracketed = None
@@ -813,6 +828,31 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         state = coordinator.return_specimen()
         self.clear_specimen_geometry()
         return state
+
+    def measure_queue_holder(self, marker=0):
+        """Compose the original empty-hole pose, owned acquisition and rod return."""
+        from .queue_holder_geometry import QueueBlankHolderMotion
+        coordinator = getattr(self, '_queue_coordinator', None)
+        if coordinator is None or getattr(self, '_queue_specimen_geometry', None) is not None:
+            raise HardwareError('An original idle native queue is required for a blank holder.')
+        self._validate_queue_bindings(coordinator)
+        reference = coordinator._validate()
+        # XY has one calibrated blank; no nominal specimen or pickup is needed.
+        hole = coordinator.table.geometry.resolve_holder(marker, current_slot=coordinator.table.geometry.hole_slot)
+        fields = coordinator.fields.verify_off(coordinator.session)
+        coordinator.table.move_to_slot(coordinator.session, hole, reference_verified=reference,
+            field_outputs_off_verified=fields)
+        blank = QueueBlankHolderMotion(coordinator.table, coordinator.vacuum)
+        blank.prepare(coordinator.session, hole, reference_verified=reference, field_outputs_off_verified=fields)
+        self.bind_holder_geometry(coordinator.session, coordinator.vacuum)
+        previous_direction = self._direction_up
+        self._direction_up = True  # VB6 Holder always uses doUp=True.
+        outcome = self.measure_bound_holder()
+        fields = coordinator.fields.verify_off(coordinator.session)
+        blank.return_to_clearance(coordinator.session, field_outputs_off_verified=fields)
+        self.clear_holder_geometry()
+        self._direction_up = previous_direction
+        return outcome
 
     def bind_specimen_geometry(self, session):
         """Bind the original verified transfer before planning a sample stage."""
@@ -1420,6 +1460,25 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             blockers.append("Pulse capacitor/relay safe state is unverified; discharge recovery is required before motion.")
         if self._config.general.nocomm:
             return PreflightResult.pass_ok()
+
+        if getattr(self._safety_store, 'session', None) is not None:
+            # Opening/testing SQUID and instrument reset belong to acquisition's
+            # pending stage. Queue preflight is validation and composition only.
+            try:
+                coordinator = getattr(self, '_queue_coordinator', None)
+                geometry = getattr(self, '_queue_specimen_geometry', None)
+                if coordinator is None or geometry is None:
+                    raise HardwareError('Verify the original native queue geometry before measurement preflight.')
+                self._validate_queue_bindings(coordinator)
+                geometry.height(self._sample_name)
+                if self._measurement is None or getattr(self._measurement, 'simulated', False) is not False:
+                    raise HardwareError('The original native SQUID backend is required.')
+                self._ensure_bracketed()
+                if self._bracketed is None:
+                    raise HardwareError(self._acquisition_error or 'Native bracketed acquisition is unavailable.')
+            except Exception as exc:
+                blockers.append(str(exc))
+            return PreflightResult(ok=not blockers, blockers=tuple(blockers), warnings=tuple(warnings))
 
         warnings.extend(self._collect_preflight_warnings())
 

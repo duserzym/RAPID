@@ -4,6 +4,8 @@ import sys
 import json
 import os
 import subprocess
+import uuid
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -22,6 +24,7 @@ from . import software_version
 from .config import AppConfig
 from .hardware_contracts import (
     MeasurementAutomationBackend,
+    QueueHardwareBackend,
     build_measurement_backend,
     config_fingerprint,
 )
@@ -439,6 +442,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._queue_last_warnings: list[str] = []
         self._queue_paused: bool = False
         self._queue_lease: object | None = None
+        self._queue_native_startup = None
+        self._queue_native_session = None
+        self._queue_loaded_command = None
+        self._queue_meas_pending_start = False
         self._queue_command_thread = self._queue_command_worker = None
         self._queue_command_leases = []
         self._queue_worker_command = None
@@ -942,8 +949,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.set_status("Cannot start queue while a live measurement is running.")
             return False
 
-        if self._queue_lease is not None:
-            self._release_queue_lease()
+        if self._queue_lease is not None and not self._release_queue_lease():
+            self.set_status('Recover the original unfinished native queue before starting another run.')
+            return False
         self._queue_paused = False
         self._queue_active = False
         self._queue_plan = []
@@ -976,6 +984,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.set_status("Queue has no executable commands.")
             QtWidgets.QMessageBox.information(self, "Queue", "Queue has no measurement steps.")
             return False
+
+        if self._uses_native_queue():
+            return self._start_native_queue(samples, options)
 
         vacuum_fault = self._queue_vacuum_fault_reason()
         if vacuum_fault:
@@ -1029,16 +1040,96 @@ class MainWindow(QtWidgets.QMainWindow):
         self._run_next_queue_command()
         return True
 
-    def _release_queue_lease(self) -> None:
+    def _uses_native_queue(self):
+        return self.config.general.nocomm is False and isinstance(self._measurement_backend, QueueHardwareBackend)
+
+    def _start_native_queue(self, samples, options):
+        missing = self._missing_required_queue_methods(self._queue_plan)
+        if missing:
+            self.set_flow_state('error')
+            QtWidgets.QMessageBox.critical(self, 'Native Queue Unavailable',
+                'Native queue commands are unavailable: ' + ', '.join(missing))
+            return False
+        try:
+            if options.use_xy_table is not self.config.motor_station.use_xy_table:
+                raise ValueError('Queue options must match the accepted physical table mode.')
+            from .queue_station import QueueStationGeometry
+            station = QueueStationGeometry.from_config(self.config, use_xy_table=True)
+            for sample in samples:
+                station.specimen_slot(sample.hole)
+                station.xy_target(sample.hole)
+            self._queue_lease = self.acquire_devices(
+                ('measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptibility'), 'queue_workflow',
+                allow_reentrant=False)
+            if QtWidgets.QMessageBox.question(self, 'Confirm empty control rod',
+                    'Remove every specimen from the control rod and verify that the table is mechanically clear.\n\n'
+                    'Confirm the rod is empty before native motor and vacuum startup?',
+                    QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                    QtWidgets.QMessageBox.StandardButton.No) != QtWidgets.QMessageBox.StandardButton.Yes:
+                self._release_queue_lease()
+                self.set_flow_state('idle')
+                return False
+            directions = {}
+            for sample in samples:
+                if sample.file_id in directions and directions[sample.file_id] is not sample.do_up:
+                    raise ValueError('All rows from one specimen file must agree on initial tray orientation.')
+                if type(sample.do_up) is not bool:
+                    raise ValueError('Queue specimen orientation must be an explicit boolean.')
+                directions[sample.file_id] = sample.do_up
+            startup = self._measurement_backend.prepare_queue_lifetime(self._vacuum_backend,
+                dict(commands=[asdict(command) for command in self._queue_plan],
+                     samples=[asdict(sample) for sample in samples], options=asdict(options), file_directions=directions),
+                run_id='queue-' + uuid.uuid4().hex, operator=self.config.general.operator,
+                empty_rod_confirmed=True)
+            self._queue_native_startup, self._queue_native_session = startup, startup.session
+            self._queue_active = True
+            self._queue_loaded_command = None
+            self._queue_meas_pending_start = False
+            self._save_queue_state()
+            self._start_queue_command_worker(QueueCommand('NativeStartup'),
+                self._measurement_backend.start_queue_lifetime, [], recover_on_error=False)
+            return True
+        except Exception as exc:
+            self._queue_active = False
+            self._release_queue_lease()
+            self.set_flow_state('error')
+            self.set_status('Native queue startup failed: ' + str(exc))
+            QtWidgets.QMessageBox.critical(self, 'Native Queue Error', str(exc))
+            return False
+
+    def _release_queue_lease(self) -> bool:
         """Release queue workflow lease if present."""
+        session = self._queue_native_session
+        if session is not None:
+            if self._queue_command_thread is not None or self._measurement.is_active() or session._owner is not None:
+                return False
+            try:
+                state = session.store.read()
+                session.store.verify_history(state)
+            except Exception as exc:
+                self.set_status('Original queue ownership cannot be released: ' + str(exc))
+                return False
+            if (not state or state['family'] != 'queue' or state['token'] != session.token
+                    or state['status'] != 'verified' or self._measurement_backend._client._connections
+                    or self._vacuum_backend._queue_binding is not None):
+                return False
+            try:
+                session.release()
+            except Exception as exc:
+                self.set_status('Original queue ownership cannot be released: ' + str(exc))
+                return False
+            self._queue_native_session = self._queue_native_startup = None
+            self._queue_loaded_command = None
+            self._queue_meas_pending_start = False
         if self._queue_lease is None:
-            return
+            return True
         try:
             self._queue_lease.release()
         except Exception:
             pass
         finally:
             self._queue_lease = None
+        return True
 
     def _finalize_queue_run(
         self,
@@ -1066,7 +1157,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if return_to_safe:
             backend = self._measurement_backend
-            cleanup = getattr(backend, 'return_to_safe_state', None)
+            cleanup = (getattr(backend, 'finish_queue_lifetime', None) if self._queue_native_session is not None
+                       else getattr(backend, 'return_to_safe_state', None))
             if getattr(backend, 'queue_commands_require_worker', False) is True and callable(cleanup):
                 self._queue_pending_finalize = dict(state=state, reason=reason, return_to_safe=False,
                     clear_plan=clear_plan, clear_current=clear_current, clear_command=clear_command)
@@ -1087,7 +1179,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if clear_command:
             self._queue_current_command = None
 
-        self._release_queue_lease()
+        released = self._release_queue_lease()
+        if not released:
+            state = 'error'
+            reason = (reason or 'Queue stopped') + '; original native queue ownership remains held for recovery.'
         self._save_queue_state()
         if state:
             self.set_flow_state(state)
@@ -1139,7 +1234,14 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
         if self._queue_pos >= len(self._queue_plan):
+            if self._queue_meas_pending_start:
+                self._run_measure_command()
+                return
             self._finalize_queue_run("complete", reason="Queue run complete.")
+            return
+
+        if self._queue_meas_pending_start:
+            self._run_measure_command()
             return
 
         self._queue_current_command = self._queue_plan[self._queue_pos]
@@ -1162,6 +1264,21 @@ class MainWindow(QtWidgets.QMainWindow):
             self.set_status("Queue measurement command missing sample name; continuing.")
             self._run_next_queue_command()
             return
+
+        if self._queue_native_session is not None and self._queue_loaded_command is not self._queue_current_command:
+            self._queue_meas_pending_start = True
+            command = self._queue_current_command
+            def load():
+                backend = self._measurement_backend
+                backend.set_measurement_context(is_up=backend.queue_file_direction(command.file_id))
+                backend.load_queue_specimen(command.hole, command.sample_name, file_id=command.file_id)
+            self._start_queue_command_worker(command, load, [], recover_on_error=False)
+            return
+
+        if self._queue_native_session is not None and self._queue_paused:
+            self.set_flow_state('paused')
+            return
+        self._queue_meas_pending_start = False
 
         self._queue_current_sample = sample_name
         self._sample_queue.start_queue_sample(sample_name)
@@ -1199,6 +1316,23 @@ class MainWindow(QtWidgets.QMainWindow):
         leases: list[object] = []
         command_type = command.command_type
         try:
+            if self._queue_native_session is not None:
+                backend = self._measurement_backend
+                if command_type == 'InitUp':
+                    # VB6 uses this as a preprocessing marker, never a lift home.
+                    self._set_queue_position_status(command_type, command)
+                    self._queue_advance_timer.start(0)
+                    return
+                if command_type == 'Holder':
+                    action = lambda: backend.measure_queue_holder(command.hole)
+                elif command_type == 'Goto':
+                    action = backend.park_queue_station
+                elif command_type == 'Flip':
+                    action = backend.park_queue_station
+                else:
+                    raise ValueError('Unsupported native queue command: ' + command_type)
+                self._start_queue_command_worker(command, action, [], recover_on_error=False)
+                return
             leases.append(self.acquire_device("changer", "queue_workflow"))
             if command_type == "Holder" and bool(self.config.susceptibility.enabled):
                 leases.append(
@@ -1296,16 +1430,45 @@ class MainWindow(QtWidgets.QMainWindow):
                 pending['reason'] = (pending.get('reason') or 'Queue stopped') + ': ' + worker.error
             if 'recovery remains unverified' in worker.error or command is None and not worker.ok:
                 pending['state'] = 'error'
+            if self._queue_native_session is not None and command is not None:
+                pending['return_to_safe'] = True
             self._finalize_queue_run(**pending)
         elif not worker.ok:
             self._finalize_queue_run('error', reason=f'Queue {command.command_type} failed: {worker.error}', return_to_safe=False)
         else:
+            if self._queue_native_session is not None:
+                if command.command_type == 'NativeStartup':
+                    self._start_queue_command_worker(QueueCommand('NativeLoadPark'),
+                        self._measurement_backend.park_queue_station, [], recover_on_error=False)
+                    return
+                if command.command_type in {'NativeLoadPark', 'Flip'}:
+                    self._confirm_native_tray(command)
+                    return
+                if command.command_type == 'Meas':
+                    self._queue_loaded_command = command
+                    self._run_measure_command()
+                    return
             self._set_queue_position_status(command.command_type, command)
             self._save_queue_state()
             if self._queue_paused:
                 self.set_flow_state('paused')
             else:
                 self._queue_advance_timer.start(0)
+
+    def _confirm_native_tray(self, command):
+        flip = command.command_type == 'Flip'
+        message = (f'Place specimens from {command.file_id} in the tray with their arrows reversed.' if flip
+                   else 'Load the specimen tray using the registered slots and the selected file orientations.')
+        answer = QtWidgets.QMessageBox.question(self, 'Flip specimen tray' if flip else 'Load specimen tray',
+            message + '\n\nConfirm the tray is secured and your hands are clear before continuing.',
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No)
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            self._finalize_queue_run('halted', reason='Operator did not confirm the specimen tray.')
+            return
+        action = lambda: self._measurement_backend.record_queue_tray_confirmation(
+            'flip' if flip else 'load', command.file_id, operator=self.config.general.operator)
+        self._start_queue_command_worker(QueueCommand('NativeTrayConfirmed'), action, [], recover_on_error=False)
 
     def _run_device_command(
         self,
@@ -1347,6 +1510,12 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.config.general.nocomm:
             return []
 
+        if self._uses_native_queue():
+            required = ['prepare_queue_lifetime', 'start_queue_lifetime', 'finish_queue_lifetime',
+                        'park_queue_station', 'record_queue_tray_confirmation', 'queue_file_direction',
+                        'load_queue_specimen', 'measure_queue_holder']
+            return [name for name in required if not callable(getattr(self._measurement_backend, name, None))]
+
         missing: list[str] = []
         for cmd in plan:
             command_type = cmd.command_type
@@ -1372,6 +1541,11 @@ class MainWindow(QtWidgets.QMainWindow):
         return missing
 
     def _set_queue_position_status(self, command_type: str, command: QueueCommand) -> None:
+        if self._queue_native_session is not None and command_type in {'Goto', 'NativeTrayConfirmed'}:
+            self.set_position('Loading corner')
+            self.set_status('Tray confirmation recorded.' if command_type == 'NativeTrayConfirmed'
+                            else 'Table parked at the loading corner.')
+            return
         details = f"{command_type} command"
         if command.hole not in (0, -1):
             details = f"{details} @ hole {command.hole}"
@@ -1399,6 +1573,22 @@ class MainWindow(QtWidgets.QMainWindow):
             self.log_event(f"Queue safe-state warning: {exc}")
 
     def _queue_vacuum_fault_reason(self) -> str | None:
+        if self._queue_native_session is not None:
+            try:
+                session, vacuum = self._queue_native_session, self._vacuum_backend
+                root = session.store._queue(session.token)
+                session.store.verify_history(root)
+                geometry = getattr(self._measurement_backend, '_queue_specimen_geometry', None)
+                expected_grip = geometry is not None and not getattr(geometry, 'is_holder', False)
+                if (session._lease is None or vacuum._queue_binding is None
+                        or vacuum._queue_binding.session is not session or vacuum.output_state_known is not True
+                        or vacuum.is_pump_on() is not True or vacuum.is_valve_connected() is not expected_grip
+                        or root['profile']['stage_profiles']['vacuum'] != vacuum.queue_station_binding()
+                        or (root['stage'] is not None and root['stage']['status'] == 'pending')):
+                    return 'Original native queue vacuum state or stage is unverified.'
+                return None
+            except Exception as exc:
+                return str(exc)
         try:
             require_vacuum_ready(
                 self._vacuum_backend,
@@ -1409,6 +1599,10 @@ class MainWindow(QtWidgets.QMainWindow):
         return None
 
     def _queue_squid_fault_reason(self) -> str | None:
+        if self._queue_native_session is not None:
+            # Native connection/reset and instrument commands belong to the
+            # original acquisition stage, never the GUI diagnostic adapter.
+            return None
         if self.config.general.nocomm or getattr(self._squid_backend, "simulated", False):
             return None
         if not any(cmd.command_type == "Meas" for cmd in self._queue_plan):
@@ -1476,9 +1670,44 @@ class MainWindow(QtWidgets.QMainWindow):
             unresolved = any(getattr(backend, name, False) is True for name in ('has_unresolved_hardware_fault', 'has_unresolved_pulse_fault', 'has_unresolved_rotation_fault'))
         except HardwareSafetyError as exc:
             raise DeviceOwnershipError(str(exc)) from exc
-        if resource in {'measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptibility'} and not (irm_recovery or dc_recovery or vacuum_recovery) and unresolved:
+        native_reentrant = owner == 'queue_workflow' and self._allows_native_queue_reentrant(resource, owner)
+        if resource in {'measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptibility'} and not (irm_recovery or dc_recovery or vacuum_recovery or native_reentrant) and unresolved:
             raise DeviceOwnershipError("Hardware safe state is unverified. Recover the unfinished operation with its original panel or helper before using other controls.")
         return self._ownership.acquire(resource, owner, allow_reentrant=allow_reentrant)
+
+    def acquire_devices(self, resources, owner, *, allow_reentrant=True):
+        """Validate each fault guard, then atomically reserve the whole circuit."""
+        resources = tuple(resources)
+        probes = []
+        try:
+            for resource in resources:
+                probes.append(self.acquire_device(resource, owner, allow_reentrant=allow_reentrant))
+        finally:
+            for probe in reversed(probes):
+                probe.release()
+        return self._ownership.acquire_many(resources, owner, allow_reentrant=allow_reentrant)
+
+    def _allows_native_queue_reentrant(self, resource, owner):
+        session = self._queue_native_session
+        if session is None or owner != 'queue_workflow' or self._ownership.owner_of(resource) != owner:
+            return False
+        try:
+            startup = self._queue_native_startup
+            backend = self._measurement_backend
+            root = session.store._queue(session.token)
+            session.store.verify_history(root)
+            resources = ('measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptibility')
+            return (self._uses_native_queue() and startup is not None and startup.session is session
+                and startup.backend is backend and startup.completed is True
+                and self._queue_command_thread is None and session._lease is not None and session._owner is None
+                and backend._safety_store is session.child_store and root['status'] == 'pending'
+                and root['stage'] is not None and root['stage']['status'] in {'verified', 'held'}
+                and root['profile']['stage_profiles']['acquisition'] == backend._acquisition_safety_profile()
+                and all(root['profile']['stage_profiles'][family] == backend._safety_profile()
+                        for family in ('af', 'arm', 'pulse', 'rrm'))
+                and all(self._ownership.owner_of(item) == owner for item in resources))
+        except Exception:
+            return False
 
     def release_measurement_device(self, owner: str) -> None:
         """Release measurement ownership for this owner when no longer running."""
@@ -2164,6 +2393,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self._shutdown_cleanup_requested:
             event.ignore()
             return
+        if (self._queue_native_session is not None and not self._queue_active
+                and self._queue_command_thread is None and not self._measurement.is_active()):
+            self._diagnostic_shutdown_blocked('Recover the original unfinished native queue before closing.')
+            event.ignore()
+            return
         if self._owned_dialog_leases or self._has_active_automation():
             event.ignore()
             self.set_status('Shutdown is waiting for hardware workers and diagnostic cleanup.')
@@ -2195,7 +2429,8 @@ class MainWindow(QtWidgets.QMainWindow):
         measurement_active = bool(
             hasattr(self._measurement, "is_active") and self._measurement.is_active()
         )
-        return measurement_active or bool(self._queue_active) or self._queue_command_thread is not None
+        return (measurement_active or bool(self._queue_active) or self._queue_command_thread is not None
+                or self._queue_native_session is not None)
 
     def _confirm_shutdown(self, *, prompt: bool = True, on_close: bool = False) -> bool:
         """Prompt the operator to confirm shutdown and safely halt active workflow."""

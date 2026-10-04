@@ -22,6 +22,21 @@ class DeviceLease:
         self._manager.release(self.resource, self.owner)
 
 
+class DeviceLeaseGroup:
+    """One atomic reservation; release never decrements a later reservation."""
+    def __init__(self, resources, owner, manager):
+        self.resources, self.owner, self._manager = tuple(resources), owner, manager
+        self._released = False
+
+    def release(self):
+        with self._manager._lock:
+            if self._released:
+                return
+            self._released = True
+            for resource in self.resources:
+                self._manager._release_owned(resource, self.owner)
+
+
 class DeviceOwnershipManager:
     """Tracks exclusive ownership of logical devices.
 
@@ -81,12 +96,28 @@ class DeviceOwnershipManager:
         owner = str(owner)
 
         with self._lock:
-            current_entry = self._owners.get(resource)
-            if current_entry is None or current_entry[0] != owner:
-                return
+            self._release_owned(resource, owner)
 
-            owner_name, count = current_entry
-            if count <= 1:
-                del self._owners[resource]
-            else:
-                self._owners[resource] = (owner_name, count - 1)
+    def _release_owned(self, resource, owner):
+        current_entry = self._owners.get(resource)
+        if current_entry is None or current_entry[0] != owner:
+            return
+        owner_name, count = current_entry
+        if count <= 1:
+            del self._owners[resource]
+        else:
+            self._owners[resource] = (owner_name, count - 1)
+
+    def acquire_many(self, resources, owner, *, allow_reentrant=True):
+        resources, owner = tuple(str(resource) for resource in resources), str(owner)
+        if not resources or len(set(resources)) != len(resources):
+            raise DeviceOwnershipError('A device reservation requires distinct resources.')
+        with self._lock:
+            for resource in resources:
+                current = self._owners.get(resource)
+                if current is not None and (current[0] != owner or not allow_reentrant):
+                    raise DeviceOwnershipError(f"Resource '{resource}' is in use by '{current[0]}', not '{owner}'")
+            for resource in resources:
+                current = self._owners.get(resource)
+                self._owners[resource] = (owner, current[1] + 1 if current else 1)
+        return DeviceLeaseGroup(resources, owner, self)

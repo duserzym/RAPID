@@ -39,6 +39,7 @@ Injected native DLL/serial regressions cover loaded/empty finish, cutoff/clearan
 failure, independent failed closes, retained handles, before-close journaling,
 publication failures, lost acknowledgement, exact-record settlement and no replay.
 These are control/position/transport proofs; physical pressure/contact/residual-field
-qualification remains required. MainWindow startup, full device-lease wiring and
-original-panel restart recovery still require integration. This terminal API is not
-a completed automatic UI workflow or a restart-recovery substitute.
+qualification remains required. MainWindow now attaches startup and full device
+leases to this terminal path; see `native-main-queue.md`. Original-panel restart
+recovery and original SQUID/susceptibility transport settlement still require work.
+This terminal API is not a restart-recovery substitute.

@@ -41,9 +41,9 @@ Injected native DLL/serial tests cover preparation, claim boundaries, before-I/O
 journaling, cutoff/stop failures, calibration/retained handle rejection, successful
 top referencing, cancellation before zero and startup-to-terminal settlement.
 These tests do not qualify physical top/XY switches, pressure, field strength or
-mechanical clearance. MainWindow still needs whole-run device leases, operator
-confirmation/loading stages and dispatch through this startup API; blank-holder,
-per-command slot/file/orientation and restart recovery integration remain open.
+mechanical clearance. MainWindow now supplies whole-run device leases, operator
+confirmation/loading stages and dispatch through this startup API; see
+`native-main-queue.md` for the integration and remaining recovery/qualification work.
 Physically present participating circuits are currently mandatory; absent-hardware
 configuration must be distinguished from disabled treatments before optional
 circuits can be supported.

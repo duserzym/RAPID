@@ -77,7 +77,7 @@ class QueueLiftFixture:
         self.profile = dict(helper='rapid_main_queue', resources={'vacuum': self.vacuum._binding()},
             stage_profiles={'motion': self.table.profile, 'vacuum': self.vacuum.queue_station_binding(), 'acquisition': {'test': 1}})
         self.profile['stage_profiles'].update(self.additional_stage_profiles())
-        self.session = QueueWorkflowSession.start(self.store, {'sample': 'S1'}, self.profile, run_id='run-1')
+        self.session = QueueWorkflowSession.start(self.store, self.queue_plan(), self.profile, run_id='run-1')
         self.addCleanup(self.session.release)
         self.lift = QueueLiftTransfer(self.table, self.vacuum, monotonic=self.clock.monotonic)
         with self.session.claim():
@@ -93,6 +93,9 @@ class QueueLiftFixture:
 
     def additional_stage_profiles(self):
         return {}
+
+    def queue_plan(self):
+        return {'sample': 'S1'}
 
     def call(self, method, *args, **kwargs):
         with self.session.claim():

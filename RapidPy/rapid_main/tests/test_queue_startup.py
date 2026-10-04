@@ -10,7 +10,7 @@ from tests import test_queue_backend_coordinator as backend_fixture
 from tests.test_queue_vacuum import SerialInterface
 
 
-class QueueStartupTests(backend_fixture.QueueBackendCoordinatorFixture, unittest.TestCase):
+class QueueStartupFixture(backend_fixture.QueueBackendCoordinatorFixture):
     def setUp(self):
         super().setUp()
         worker = self.command(self.backend.finish_queue_lifetime)
@@ -52,6 +52,7 @@ class QueueStartupTests(backend_fixture.QueueBackendCoordinatorFixture, unittest
                 serial.on_write = observe
         return patch.object(self.motor, 'connect', side_effect=connect)
 
+class QueueStartupTests(QueueStartupFixture, unittest.TestCase):
     def test_prepare_records_empty_rod_and_all_profiles_without_any_io(self):
         before = len(self.commands), len(self.vacuum_serial.writes)
         startup = self.prepare()

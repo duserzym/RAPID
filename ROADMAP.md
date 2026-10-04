@@ -1539,3 +1539,41 @@ teardown and normal process exit code zero. The 14 focused startup regressions
 pass in 24.733 seconds. Six-panel/six-helper source smoke, compilation and diff
 checks pass. All native DLL/serial startup tests use injected interfaces; no
 physical instruments actuated and no station qualification is implied.
+
+### MainWindow native queue ownership and command dispatch (2026-10-04)
+
+MainWindow now reserves measurement/changer/field/vacuum/SQUID/susceptibility as
+an atomic whole-run device group, records named empty-rod confirmation, prepares
+the durable root before I/O and runs native startup in its original worker. The
+loading corner uses bounded negative XY edges with top clearance and no zero or
+rod rotation. Operator load/flip confirmations have fresh cutoff/stop/switch/valve
+proof and linked per-file orientation; InitUp remains a non-motion VB6 marker.
+
+Native Holder composes the empty-hole zero-height pose, owned acquisition/correction
+installation and verified rod clearance without specimen pickup. Meas loads the
+original command slot/specimen/file in an owned worker and binds measured height
+before MeasurementPanel. Pause at this handoff resumes the same measurement without
+reloading or skipping it. Native preflight performs no SQUID test/open/reset; that
+I/O belongs to acquisition's pending stage. Evidence publishers now see the borrowed
+store's read-only original journal path.
+
+Native pump/valve and acquisition ownership replace diagnostic ON/test prerequisites.
+Only the exact original native session/full group may reenter with matching profiles
+and no live command worker. Verified terminal root/transport settlement precedes
+logical and OS lease release; failure or corrupt evidence retains ownership, and
+shutdown remains open for original recovery. See docs/native-main-queue.md.
+
+Original-panel live/restart recovery, original SQUID/susceptibility identity and
+terminal transport settlement, full per-file step/eligibility/scientific artifact
+acceptance, absent-field participation, chain transfers, auxiliary VB6 tools,
+portable rebuilding, performance and physical/scientific qualification remain
+required. The full-system goal remains active; no physical station run is claimed.
+Verification: the isolated full suite passes 1,143 tests in 379.017 seconds and
+exits with code 0 after Qt/interpreter teardown. Focused original motor/vacuum
+recovery checks pass 31 tests; native-window checks pass 8 tests with clean exit.
+The native-window fixture now requires measured handoff before testing terminal
+failure (an earlier run reached that assertion with unverified vacuum state).
+Source release smoke passes six panels and six helper imports; compile and diff
+checks pass. All hardware interfaces are injected, and the MainWindow fixture
+substitutes scientific measurement/holder commands as documented above. No physical
+instruments were actuated; portable output has not been rebuilt for these changes.

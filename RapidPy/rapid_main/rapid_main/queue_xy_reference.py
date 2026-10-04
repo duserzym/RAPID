@@ -90,9 +90,14 @@ class QueueXYReference:
             raise HardwareSafetyError('Live lift top switch lost clearance during XY referencing.')
         return dict(phase=phase, switches=result)
 
-    def _phase(self, phase, deadline, observations):
+    def _phase(self, phase, deadline, observations, *, distance_override=None):
         direction = -1 if phase == 'negative' else 1
         distance = self.table.motor.config.xy_neg_homing_distance if direction < 0 else self.table.motor.config.xy_pos_homing_distance
+        if distance_override is not None:
+            if (type(distance_override) is not int or distance_override * direction <= 0
+                    or abs(distance_override) > abs(distance)):
+                raise HardwareSafetyError('Bounded XY travel must stay within the accepted homing envelope.')
+            distance = distance_override
         if type(distance) is not int or not -(2**31) <= distance < 2**31 or distance * direction <= 0:
             raise HardwareSafetyError('Accepted XY homing travel has the wrong sign or count range.')
         active = 'negative' if direction < 0 else 'positive'

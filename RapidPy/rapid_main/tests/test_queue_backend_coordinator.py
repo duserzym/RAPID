@@ -51,6 +51,29 @@ class QueueBackendCoordinatorFixture(QueueLiftFixture):
 
 
 class QueueBackendCoordinatorTests(QueueBackendCoordinatorFixture, unittest.TestCase):
+    def test_borrowed_evidence_path_is_the_fixed_parent_journal_and_cannot_be_rebound(self):
+        self.assertEqual(self.session.child_store.path, self.session.store.path)
+        with self.assertRaises(AttributeError):
+            self.session.child_store.path = self.path.parent / 'different.json'
+
+    def test_owned_preflight_never_opens_or_tests_squid_before_acquisition_stage(self):
+        self.load_backend()
+        self.backend._backend_errors = []
+        def compose():
+            self.backend._bracketed = SimpleNamespace()
+        with patch.object(self.backend, '_ensure_bracketed', compose), self.backend.queue_worker_claim():
+            result = self.backend.preflight()
+        self.assertTrue(result.ok, result.blockers)
+        self.backend._measurement.test_connection.assert_not_called()
+
+    def test_unclaimed_queue_preflight_cannot_test_squid_or_reopen_motors(self):
+        self.backend._backend_errors = []
+        with patch.object(self.motor, 'connect') as connect:
+            result = self.backend.preflight()
+        self.assertFalse(result.ok)
+        self.backend._measurement.test_connection.assert_not_called()
+        connect.assert_not_called()
+
     def test_worker_load_binds_measured_geometry_and_return_clears_only_after_support_release(self):
         self.load_backend()
         self.assertIs(self.backend._safety_store, self.session.child_store)

@@ -155,4 +155,6 @@ Native empty-rod startup now has a production backend API: see
 `queue-native-startup.md`. It persists the root owner before I/O, verifies fields
 and all four stops, establishes acknowledged valve OFF/pump ON, references the
 empty lift and both XY edges, then binds the same transfer/terminal coordinator.
-MainWindow dispatch and whole-run device leases still require integration.
+MainWindow now dispatches these native stages under whole-run device leases;
+see `native-main-queue.md` for operator/holder/measured-transfer integration and
+the remaining original recovery, instrument transport and qualification work.
