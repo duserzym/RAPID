@@ -3,6 +3,7 @@
 from collections import deque
 from datetime import datetime
 import json
+import hashlib
 from pathlib import Path
 from typing import Optional
 
@@ -524,9 +525,12 @@ class MeasurementPanel(QtWidgets.QWidget):
             mw.cancel_queue_run("Manual run started.")
 
         labels = getattr(mw, "_sequence_labels", [])
+        queue_source = None
         if queue_run and hasattr(mw, 'queue_measurement_labels'):
             try:
                 labels = mw.queue_measurement_labels(sample)
+                if hasattr(mw, 'queue_measurement_source'):
+                    queue_source = mw.queue_measurement_source(sample)
             except Exception as exc:
                 mw.set_status('Queue sequence cannot start: ' + str(exc))
                 return False
@@ -567,9 +571,9 @@ class MeasurementPanel(QtWidgets.QWidget):
         # output. Resolve the same values instead of starting with blanks.
         resolution = resolve_specimen_meta(
             self._current_sample,
-            sample_dir=(cfg.general.sample_dir if cfg else None),
-            data_dir=(cfg.general.data_dir if cfg else None),
-            registrations=getattr(mw, "sample_registrations", None),
+            sample_dir=(queue_source[0].parent if queue_source else (cfg.general.sample_dir if cfg else None)),
+            data_dir=(None if queue_source else (cfg.general.data_dir if cfg else None)),
+            registrations=(queue_source[1] if queue_source else getattr(mw, "sample_registrations", None)),
         )
         meta = resolution.meta
         if resolution.defaulted_fields:
@@ -579,6 +583,10 @@ class MeasurementPanel(QtWidgets.QWidget):
                 + ". Check the specimen header or sample index before archiving."
             )
         run_output_dir = out / meta.name
+        if queue_source:
+            index = queue_source[0]
+            group = index.stem + '-' + hashlib.sha256(str(index).encode('utf-8')).hexdigest()[:12]
+            run_output_dir = out / group / meta.name
         self._current_output_dir = (
             run_output_dir / SIMULATED_SUBDIR
             if self._current_run_simulated

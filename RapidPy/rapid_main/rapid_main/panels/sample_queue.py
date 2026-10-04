@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import re
+import uuid
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -13,7 +14,7 @@ from rapid_main.queue_compiler import QueueOptions, QueueSample, validate_queue_
 
 
 # Sample table column definitions
-_COLS = ["#", "Position", "Sample Name", "Sample Set", "Treatment Steps", "Status"]
+_COLS = ["#", "Position", "Sample Name", "Sample Set", "Treatment Steps", "Status", "Index File", "Orientation", "Both Sides"]
 _QUEUE_FILE_SCHEMA = "rapidpy.sample_queue.v1"
 
 
@@ -129,6 +130,9 @@ class SampleQueuePanel(QtWidgets.QWidget):
         self._table.horizontalHeader().setSectionResizeMode(
             2, QtWidgets.QHeaderView.ResizeMode.Stretch
         )
+        self._table.horizontalHeader().setSectionResizeMode(6, QtWidgets.QHeaderView.ResizeMode.Fixed)
+        self._table.setColumnWidth(6, 220)
+        self._table.horizontalHeaderItem(8).setToolTip('Adds a Down pass after Up for a one-step file. Starting Down runs only Down.')
         self._table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.setEditTriggers(QtWidgets.QAbstractItemView.DoubleClicked)
@@ -163,6 +167,13 @@ class SampleQueuePanel(QtWidgets.QWidget):
                 item.setTextAlignment(QtCore.Qt.AlignCenter)
             self._table.setItem(row, col, item)
         self._set_status(row, status)
+        self._set_file_settings(row)
+
+    def _set_file_settings(self, row: int, source_file: str = '', orientation: str = 'Up', both_sides: str = 'No') -> None:
+        for column, value in zip((6, 7, 8), (source_file, orientation, both_sides)):
+            item = QtWidgets.QTableWidgetItem(value)
+            item.setToolTip(value if column == 6 else ('Up or Down' if column == 7 else 'Yes or No'))
+            self._table.setItem(row, column, item)
 
     def _insert_sample_row(
         self,
@@ -173,6 +184,9 @@ class SampleQueuePanel(QtWidgets.QWidget):
         sample_set: str,
         treatment: str,
         status: str = "Pending",
+        source_file: str = '',
+        do_up: bool = True,
+        do_both: bool = False,
     ) -> None:
         row = max(0, min(int(row), self._table.rowCount()))
         self._table.insertRow(row)
@@ -183,6 +197,7 @@ class SampleQueuePanel(QtWidgets.QWidget):
                 item.setTextAlignment(QtCore.Qt.AlignCenter)
             self._table.setItem(row, col, item)
         self._set_status(row, status)
+        self._set_file_settings(row, source_file, 'Up' if do_up else 'Down', 'Yes' if do_both else 'No')
         self._renumber_rows()
 
     def _add_sample_dialog(self, *, insert_at: int | None = None) -> bool:
@@ -194,10 +209,17 @@ class SampleQueuePanel(QtWidgets.QWidget):
         name = QtWidgets.QLineEdit()
         sample_set = QtWidgets.QLineEdit()
         treatment = QtWidgets.QLineEdit("NRM")
+        source_file = QtWidgets.QLineEdit()
+        orientation = QtWidgets.QComboBox()
+        orientation.addItems(['Up', 'Down'])
+        both_sides = QtWidgets.QCheckBox('Add a Down pass after Up (one step)')
         form.addRow("Changer position", position)
         form.addRow("Sample name", name)
         form.addRow("Sample set", sample_set)
         form.addRow("Treatment sequence", treatment)
+        form.addRow('Index file (optional)', source_file)
+        form.addRow('Initial orientation', orientation)
+        form.addRow('', both_sides)
         buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Ok
             | QtWidgets.QDialogButtonBox.StandardButton.Cancel
@@ -221,6 +243,9 @@ class SampleQueuePanel(QtWidgets.QWidget):
             name=name.text().strip(),
             sample_set=sample_set.text().strip(),
             treatment=treatment.text().strip() or "NRM",
+            source_file=source_file.text().strip(),
+            do_up=orientation.currentText() == 'Up',
+            do_both=both_sides.isChecked(),
         )
         return True
 
@@ -232,11 +257,16 @@ class SampleQueuePanel(QtWidgets.QWidget):
         sample_set: str = "",
         treatment: str = "NRM",
         insert_at: int | None = None,
+        source_file: str = '',
+        do_up: bool = True,
+        do_both: bool = False,
     ) -> int:
         """Add a validated operator-selected specimen and return its row."""
 
         clean_position = position.strip()
         clean_name = name.strip()
+        if type(do_up) is not bool or type(do_both) is not bool:
+            raise ValueError('Orientation settings must be explicit booleans.')
         if not clean_position or not clean_name:
             raise ValueError("Changer position and sample name are required.")
         row = self._table.rowCount() if insert_at is None else int(insert_at)
@@ -246,6 +276,7 @@ class SampleQueuePanel(QtWidgets.QWidget):
             name=clean_name,
             sample_set=sample_set.strip(),
             treatment=treatment.strip() or "NRM",
+            source_file=source_file.strip(), do_up=do_up, do_both=do_both,
         )
         return max(0, min(row, self._table.rowCount() - 1))
 
@@ -327,6 +358,7 @@ class SampleQueuePanel(QtWidgets.QWidget):
         menu.addAction("Delete without Gap", lambda: self._table.removeRow(row))
         menu.addSeparator()
         menu.addAction("Mark Pending", lambda: self._set_status(row, "Pending"))
+        menu.addAction('File settings…', lambda: self.edit_file_settings(row))
         menu.addAction("Mark Done", lambda: self._set_status(row, "Done"))
         menu.addAction("Mark Skipped", lambda: self._set_status(row, "Skipped"))
         menu.addAction("Mark Error", lambda: self._set_status(row, "Error"))
@@ -348,6 +380,38 @@ class SampleQueuePanel(QtWidgets.QWidget):
                 for index, column in enumerate(_COLS[1:], start=1)
             ),
         )
+
+    def edit_file_settings(self, row: int) -> bool:
+        """Apply orientation settings to every queued row of the selected file."""
+        if not 0 <= row < self._table.rowCount():
+            return False
+        def identity(index):
+            source = self._safe_cell(index, 6)
+            return ('index', os.path.normcase(str(Path(source).resolve()))) if source else ('manual', self._safe_cell(index, 3) or 'SampleSet')
+        key = identity(row)
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle('Queue file settings')
+        form = QtWidgets.QFormLayout(dialog)
+        description = QtWidgets.QLabel(self._safe_cell(row, 6) or self._safe_cell(row, 3) or 'SampleSet')
+        description.setWordWrap(True)
+        form.addRow('File', description)
+        orientation = QtWidgets.QComboBox(dialog)
+        orientation.addItems(['Up', 'Down'])
+        orientation.setCurrentText(self._safe_cell(row, 7) or 'Up')
+        both = QtWidgets.QCheckBox('Add a Down pass after Up (one step)', dialog)
+        both.setChecked(self._safe_cell(row, 8) == 'Yes')
+        form.addRow('Initial orientation', orientation)
+        form.addRow('', both)
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel, dialog)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QtWidgets.QDialog.Accepted:
+            return False
+        for index in range(self._table.rowCount()):
+            if identity(index) == key:
+                self._set_file_settings(index, self._safe_cell(index, 6), orientation.currentText(), 'Yes' if both.isChecked() else 'No')
+        return True
 
     def _delete_row_span(self, start: int, count: int) -> None:
         for _ in range(max(0, int(count))):
@@ -452,6 +516,22 @@ class SampleQueuePanel(QtWidgets.QWidget):
                 self._set_status(row, "Running")
                 return
 
+    def set_queue_command_status(self, command, status: str) -> bool:
+        """Update only the original compiled row, including repeated side passes."""
+        for row in range(self._table.rowCount()):
+            number = self._table.item(row, 0)
+            if command.row_id:
+                matches = number is not None and number.data(QtCore.Qt.UserRole) == command.row_id
+            else:
+                source = self._safe_cell(row, 6)
+                identity = os.path.normcase(str(Path(source).resolve())) if source else self._safe_cell(row, 3) or 'SampleSet'
+                hole, error = _parse_hole(self._safe_cell(row, 1))
+                matches = error is None and hole == command.hole and identity == command.file_id and self._safe_cell(row, 2) == command.sample_name
+            if matches:
+                self._set_status(row, status)
+                return True
+        return False
+
     def mark_queue_sample_done(self, sample_name: str) -> None:
         """Set the selected sample to Done state."""
         for row in range(self._table.rowCount()):
@@ -533,6 +613,12 @@ class SampleQueuePanel(QtWidgets.QWidget):
                 "treatment": self._safe_cell(row, 4),
                 "status": self._safe_cell(row, 5),
             })
+            source_file, orientation, both_sides = (self._safe_cell(row, column) for column in (6, 7, 8))
+            if source_file or orientation not in {'', 'Up'} or both_sides not in {'', 'No'}:
+                rows[-1].update(source_file=source_file, orientation=orientation, both_sides=both_sides)
+            number = self._table.item(row, 0)
+            if number is not None and number.data(QtCore.Qt.UserRole):
+                rows[-1]['row_id'] = number.data(QtCore.Qt.UserRole)
         return rows
 
     def load_rows(self, rows: list[dict[str, str]]) -> None:
@@ -554,6 +640,12 @@ class SampleQueuePanel(QtWidgets.QWidget):
                 treatment,
                 status,
             )
+            self._set_file_settings(self._table.rowCount() - 1,
+                self._safe_cell_from_map(row, 'source_file', ''),
+                self._safe_cell_from_map(row, 'orientation', 'Up') or 'Up',
+                self._safe_cell_from_map(row, 'both_sides', 'No') or 'No')
+            if row.get('row_id'):
+                self._table.item(self._table.rowCount() - 1, 0).setData(QtCore.Qt.UserRole, row['row_id'])
         self._renumber_rows()
 
     def _append_row(
@@ -698,7 +790,7 @@ def write_queue_file(path: Path | str, rows: list[dict[str, str]]) -> Path:
         destination = destination.with_suffix(".json")
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.name + ".tmp")
-    fields = ("position", "sample_name", "sample_set", "treatment", "status")
+    fields = ("position", "sample_name", "sample_set", "treatment", "status", "source_file", "orientation", "both_sides", "row_id")
     try:
         if destination.suffix.lower() == ".csv":
             with temporary.open("w", encoding="utf-8", newline="") as handle:
@@ -747,6 +839,10 @@ def read_queue_file(path: Path | str) -> list[dict[str, str]]:
             raise ValueError(f"Queue row {index} requires position and sample_name.")
         row["treatment"] = row["treatment"] or "NRM"
         row["status"] = _normalize_status(row["status"])
+        for field in ('source_file', 'orientation', 'both_sides', 'row_id'):
+            value = str(raw.get(field, '') or '').strip()
+            if value:
+                row[field] = value
         rows.append(row)
     return rows
 
@@ -830,6 +926,17 @@ def _read_queue_rows(table: QtWidgets.QTableWidget) -> tuple[list[QueueSample], 
         sample_name = _cell(2)
         sample_set = _cell(3) or "SampleSet"
         treatment = _cell(4)
+        source_file, orientation, both_sides = _cell(6), _cell(7) or 'Up', _cell(8) or 'No'
+        if orientation not in {'Up', 'Down'} or both_sides not in {'Yes', 'No'}:
+            errors.append(f'row {row_no}: orientation must be Up/Down and Both Sides must be Yes/No')
+            continue
+        if source_file:
+            if not Path(source_file).is_absolute():
+                errors.append(f'row {row_no}: index file must be an absolute path')
+                continue
+            file_id = os.path.normcase(str(Path(source_file).resolve()))
+        else:
+            file_id = sample_set
 
         hole, hole_error = _parse_hole(position)
         if hole_error is not None:
@@ -844,15 +951,22 @@ def _read_queue_rows(table: QtWidgets.QTableWidget) -> tuple[list[QueueSample], 
         if any(not label for label in labels):
             errors.append(f'row {row_no}: treatment sequence contains an empty step')
             continue
+        number = table.item(row, 0)
+        row_id = number.data(QtCore.Qt.UserRole) if number is not None else None
+        if not row_id:
+            row_id = uuid.uuid4().hex
+            if number is not None: number.setData(QtCore.Qt.UserRole, row_id)
         samples.append(
             QueueSample(
                 sample_name=sample_name,
-                file_id=sample_set,
+                file_id=file_id,
                 hole=hole,
-                do_up=True,
-                do_both=False,
+                do_up=orientation == 'Up',
+                do_both=both_sides == 'Yes',
                 measurement_step_count=_parse_step_count(treatment),
                 measurement_labels=labels,
+                source_file=str(Path(source_file).resolve()) if source_file else '',
+                row_id=row_id,
             )
         )
 

@@ -299,6 +299,7 @@ class SampleSelectDialog(QtWidgets.QDialog):
                     formation=values[2],
                     location=values[3],
                     order=len(registrations) + 1,
+                    source_file=str(csv_path.resolve()),
                 )
             )
         if not parsed_rows:

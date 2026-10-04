@@ -1,6 +1,8 @@
 """MainWindow reserves, starts, loads and settles its original native queue."""
 import time
 import threading
+import os
+from pathlib import Path
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -16,6 +18,41 @@ RESOURCES = ('measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptib
 
 
 class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestCase):
+    def test_source_index_snapshot_and_digest_are_required_for_native_handoff(self):
+        path = self.store.path.parent / 'index.sam'
+        path.write_text('S1 2 OriginalUnit OriginalSite\n', encoding='latin-1')
+        identity = os.path.normcase(str(path.resolve()))
+        sample = QueueSample('S1', identity, 1, source_file=identity)
+        with self.arm_xy_edges(), patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.StandardButton.Yes):
+            self.assertTrue(self.window.start_queue_run([sample], QueueOptions()))
+            self.wait_for(lambda: bool(self.started), timeout=30)
+        source, registrations = self.window.queue_measurement_source('S1')
+        self.assertEqual(source, path.resolve())
+        self.assertEqual(registrations.entries[0].formation, 'OriginalUnit')
+        before = len(self.commands), len(self.vacuum_serial.writes)
+        captured = self.window._queue_source_indexes[identity]
+        captured['entries'][0]['formation'] = 'Changed'
+        with self.assertRaisesRegex(ValueError, 'journaled index metadata'):
+            self.window.queue_measurement_source('S1')
+        captured['entries'][0]['formation'] = 'OriginalUnit'
+        path.write_text('S1 2 ChangedUnit ChangedSite\n', encoding='latin-1')
+        with self.assertRaisesRegex(ValueError, 'index changed'):
+            self.window.queue_measurement_source('S1')
+        self.assertEqual((len(self.commands), len(self.vacuum_serial.writes)), before)
+        self.assertTrue(all(self.window._ownership.is_owned(item) for item in RESOURCES))
+
+    def test_missing_or_duplicate_source_specimen_blocks_before_root_or_operator_prompt(self):
+        path = self.store.path.parent / 'index.sam'
+        identity = os.path.normcase(str(path.resolve()))
+        before = self.store.read(), len(self.commands), len(self.vacuum_serial.writes)
+        for text in ('OTHER\n', 'S1\nS1\n'):
+            path.write_text(text, encoding='latin-1')
+            with self.subTest(text=text), patch.object(QtWidgets.QMessageBox, 'critical', return_value=None), patch.object(QtWidgets.QMessageBox, 'question') as question:
+                self.assertFalse(self.window.start_queue_run([QueueSample('S1', identity, 1, source_file=identity)], QueueOptions()))
+                question.assert_not_called()
+            self.assertEqual((self.store.read(), len(self.commands), len(self.vacuum_serial.writes)), before)
+            self.assertTrue(all(not self.window._ownership.is_owned(item) for item in RESOURCES))
+
     @classmethod
     def setUpClass(cls):
         cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])

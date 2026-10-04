@@ -33,6 +33,17 @@ class TestSampleIndexIO(unittest.TestCase):
             self.assertEqual(registrations.entries[0].location, "47.2 -122.1")
             self.assertEqual(registrations_to_samples(registrations), ["BK-01", "BK-02", "BK-03"])
             self.assertEqual(registrations.entries[0].order, 1)
+            self.assertEqual(registrations.entries[0].source_file, str(p.resolve()))
+
+    def test_csv_index_preserves_source_identity_and_sparse_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'index.csv'
+            path.write_text('Sample Name,Depth (cm),Formation,Location\nA,2,Unit A,Site A\nB\n', encoding='utf-8')
+            records = read_sample_index_registrations(path)
+            self.assertEqual(records.names, ['A', 'B'])
+            self.assertEqual(records.entries[0].formation, 'Unit A')
+            self.assertEqual(records.entries[1].location, '')
+            self.assertTrue(all(entry.source_file == str(path.resolve()) for entry in records.entries))
 
     def test_read_sample_index_plain_list(self) -> None:
         with tempfile.TemporaryDirectory() as td:

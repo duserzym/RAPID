@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import unittest
+import os
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from PySide6 import QtWidgets
 
@@ -16,9 +18,83 @@ from rapid_main.panels.sample_queue import (
     _status_for_recovery_action,
     write_queue_file,
 )
+from rapid_main.queue_compiler import compile_queue, QueueOptions
 
 
 class TestSampleQueueHelpers(unittest.TestCase):
+    def test_file_settings_update_all_rows_of_one_index_without_touching_other_indexes(self):
+        panel = SampleQueuePanel()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                first, second = str(Path(directory) / 'one.sam'), str(Path(directory) / 'two.sam')
+                panel.add_sample(position='A1', name='A', sample_set='Same Unit', source_file=first)
+                panel.add_sample(position='A2', name='B', sample_set='Same Unit', source_file=first)
+                panel.add_sample(position='A3', name='C', sample_set='Same Unit', source_file=second)
+                def accept(dialog):
+                    dialog.findChild(QtWidgets.QComboBox).setCurrentText('Down')
+                    dialog.findChild(QtWidgets.QCheckBox).setChecked(True)
+                    return QtWidgets.QDialog.Accepted
+                with patch.object(QtWidgets.QDialog, 'exec', accept):
+                    self.assertTrue(panel.edit_file_settings(0))
+                samples, errors = _read_queue_rows(panel._table)
+                self.assertEqual(errors, [])
+                self.assertEqual([(item.do_up, item.do_both) for item in samples], [(False, True), (False, True), (True, False)])
+        finally:
+            panel.deleteLater()
+    def test_index_identity_and_orientation_survive_json_csv_and_panel_restore(self):
+        panel = SampleQueuePanel()
+        restored = SampleQueuePanel()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                index = Path(directory) / 'index.sam'
+                panel.add_sample(position='A1', name='A', sample_set='Display Unit', treatment='NRM',
+                    source_file=str(index), do_up=False, do_both=True)
+                _read_queue_rows(panel._table)
+                rows = panel.row_snapshot()
+                for suffix in ('.json', '.csv'):
+                    path = write_queue_file(Path(directory) / ('queue' + suffix), rows)
+                    self.assertEqual(read_queue_file(path), rows)
+                    restored.load_rows(read_queue_file(path))
+                    samples, errors = _read_queue_rows(restored._table)
+                    self.assertEqual(errors, [])
+                    self.assertEqual(samples[0].file_id, os.path.normcase(samples[0].source_file))
+                    self.assertNotEqual(samples[0].file_id, 'Display Unit')
+                    self.assertFalse(samples[0].do_up)
+                    self.assertTrue(samples[0].do_both)
+                    self.assertEqual(restored.row_snapshot(), rows)
+        finally:
+            panel.deleteLater()
+            restored.deleteLater()
+
+    def test_distinct_indexes_with_same_display_name_keep_independent_file_flags(self):
+        panel = SampleQueuePanel()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                panel.add_sample(position='A1', name='A', sample_set='Same Unit', source_file=str(Path(directory) / 'one.sam'), do_both=True)
+                panel.add_sample(position='A2', name='B', sample_set='Same Unit', source_file=str(Path(directory) / 'two.sam'), do_up=False)
+                samples, errors = _read_queue_rows(panel._table)
+                self.assertEqual(errors, [])
+                commands = compile_queue(samples, QueueOptions(), strict=True)
+                self.assertNotEqual(samples[0].file_id, samples[1].file_id)
+                self.assertEqual([item.file_id for item in commands if item.command_type == 'Flip'], [samples[0].file_id])
+        finally:
+            panel.deleteLater()
+
+    def test_invalid_orientation_or_relative_source_blocks_row_admission(self):
+        panel = SampleQueuePanel()
+        try:
+            panel.add_sample(position='A1', name='A')
+            for column, text in ((7, 'Maybe'), (8, 'True'), (6, 'relative.sam')):
+                panel._set_file_settings(0)
+                panel._table.item(0, column).setText(text)
+                samples, errors = _read_queue_rows(panel._table)
+                self.assertEqual(samples, [])
+                self.assertTrue(errors)
+            with self.assertRaises(ValueError):
+                panel.add_sample(position='A2', name='B', do_both=1)
+        finally:
+            panel.deleteLater()
+
     @classmethod
     def setUpClass(cls) -> None:
         if QtWidgets.QApplication.instance() is None:

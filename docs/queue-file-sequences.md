@@ -37,16 +37,46 @@ journal tampering. The panel construction test does not start its worker. Native
 window tests inject DLL/serial interfaces and substitute scientific/holder execution;
 these checks do not prove final scientific artifacts or physical station acceptance.
 
-File-registry source-file identity and step-progress/eligibility counters, operator editing/import of initial
-orientation/doBoth (the queue UI currently defaults up/single-side), final scientific
+File-registry step-progress/eligibility counters, final scientific
 bundle acceptance, earlier-stage/restart recovery, chain station support, remaining
 VB6 auxiliary capabilities, portable rebuilding, performance and physical/scientific
 qualification remain required for full-system completion.
 
-Currently the queue's Sample Set value is used as file_id, and adding from the
-sample selector derives it from formation/location. That does not establish the
-original .sam file identity. Correct registry-to-queue source identity must be
-completed before claiming legacy file-registry parity.
+Index-backed queue rows now preserve their absolute source path independently of
+the display Sample Set. Index File, Orientation and Both Sides are editable table
+columns, also available when adding a sample. File settings in the row context menu
+applies orientation settings to every row from that index. JSON/CSV/session rows
+preserve these fields; old rows remain compatible as manually grouped rows with
+default Up/single-side settings. The VB6 convention remains: a one-step file starting
+Up can add a Down pass; starting Down runs only Down, and multiple steps suppress
+the second pass.
+
+SAM/CSV registrations carry the actual resolved source path. Queue startup requires
+an absolute supported index, matching canonical identity and exactly one matching
+specimen entry. It captures original index bytes SHA-256 and detached registrations
+before any root, device lease or operator startup confirmation. Native roots link
+this snapshot. Handoff verifies original source metadata against the journal and
+rejects changed index bytes before acquiring measurement worker leases.
+
+Rows receive a persistent identity when compiled. It survives JSON/CSV/session
+restore and stays on duplicated second-side commands. Running/Done/Error updates
+target that original row, so equal specimen names from different files remain
+independent. Old programmatic commands without a row identity match file, slot and
+name. Duplicate or malformed persisted identities are rejected, and completion for
+another specimen fails the current queue rather than advancing its plan.
+
+The panel resolves metadata and specimen headers from that index's directory and
+captured registrations, rather than another selected index or the configured output
+directory. Index-backed outputs have separate source-specific folders, so identical
+specimen names from different indexes do not overwrite each other's bundles. File
+identity is case-normalized on Windows, while actual resolved paths are preserved
+for reads. Manually grouped rows without a source retain their prior metadata path;
+this does not invent source-index provenance for old queues.
+
+This proves source-index routing and integrity, not full legacy registry or final
+scientific acceptance. Source specimen-header snapshots/digests, registry progress
+counters, standalone selection provenance, complete scientific bundle acceptance,
+earlier-stage/restart recovery and the other qualification gates remain required.
 
 Full-suite verification exposed Windows access denial when publishing a journal
 during native startup. Safety-store reads now capture and close bytes under a

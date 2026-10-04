@@ -15,6 +15,8 @@ from rapid_main.hardware_contracts import NoCommBackend
 from rapid_main.measurement_worker import StepResult
 from rapid_main.measurement_worker import MeasurementWorker
 from rapid_main.config import AppConfig
+from rapid_main.io.sample_index import read_sample_index_registrations
+from rapid_main.data_model import SampleIndexRegistration, SampleIndexRegistrations
 from rapid_main.panels.measurement import _resolve_measurement_backend
 from rapid_main.panels.measurement import MeasurementPanel
 
@@ -41,6 +43,33 @@ class _WindowWithNonCallableBackendAttr:
 
 
 class TestMeasurementPanelHelpers(unittest.TestCase):
+    def test_queue_uses_original_index_metadata_and_separate_outputs_for_duplicate_names(self):
+        window = QtWidgets.QMainWindow()
+        panel = MeasurementPanel(window)
+        window._sequence_labels = ['IRM100']
+        window.queue_measurement_labels = lambda name: ['NRM']
+        window.measurement_backend = lambda: NoCommBackend()
+        window.sample_registrations = SampleIndexRegistrations([SampleIndexRegistration('SAME', formation='WrongUnit', location='WrongSite')])
+        folders = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            window.config = AppConfig()
+            window.config.general.data_dir = str(root / 'output')
+            window.config.general.sample_dir = str(root / 'wrong')
+            for folder, unit in (('one', 'OriginalUnit'), ('two', 'OtherUnit')):
+                index = root / folder / 'index.sam'
+                index.parent.mkdir()
+                index.write_text('SAME 2 ' + unit + ' Site\n', encoding='latin-1')
+                registrations = read_sample_index_registrations(index)
+                window.queue_measurement_source = lambda name, index=index, registrations=registrations: (index, registrations)
+                with patch.object(MeasurementWorker, 'start', lambda worker: None):
+                    self.assertTrue(panel.start_measurement_for_sample('SAME', queue_run=True))
+                self.assertEqual(panel._worker._meta.site, unit)
+                self.assertEqual(panel._worker._meta.location, 'Site')
+                folders.append(panel._worker._output_dir)
+            self.assertNotEqual(folders[0], folders[1])
+        window.deleteLater()
+
     @classmethod
     def setUpClass(cls) -> None:
         cls._app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])

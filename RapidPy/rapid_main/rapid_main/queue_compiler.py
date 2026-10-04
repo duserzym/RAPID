@@ -13,6 +13,8 @@ class QueueSample:
     do_both: bool = False
     measurement_step_count: int = 1
     measurement_labels: tuple[str, ...] = ()
+    source_file: str = ""
+    row_id: str = ""
 
 
 @dataclass(slots=True)
@@ -22,6 +24,7 @@ class QueueCommand:
     file_id: str = ""
     sample_name: str = ""
     measurement_labels: tuple[str, ...] = ()
+    row_id: str = ""
 
 
 @dataclass(slots=True)
@@ -63,6 +66,7 @@ def validate_queue_samples(samples: Iterable[QueueSample]) -> QueueValidationRes
 
     seen_holes: dict[int, int] = {}
     file_settings: dict[str, tuple] = {}
+    row_ids = set()
     for idx, item in enumerate(samples):
         if not item.sample_name:
             errors.append(f"row {idx + 1}: sample_name is required")
@@ -83,7 +87,19 @@ def validate_queue_samples(samples: Iterable[QueueSample]) -> QueueValidationRes
             errors.append(f"row {idx + 1}: measurement labels must be a tuple of nonempty strings")
         elif labels and len(labels) != item.measurement_step_count:
             errors.append(f"row {idx + 1}: measurement step count does not match its labels")
-        settings = (item.do_up, item.do_both, item.measurement_step_count, labels)
+        if not isinstance(item.source_file, str):
+            errors.append(f'row {idx + 1}: source_file must be a string')
+        if not isinstance(item.row_id, str):
+            errors.append(f'row {idx + 1}: row_id must be a string')
+        elif item.row_id:
+            try:
+                if len(item.row_id) != 32: raise ValueError('length')
+                int(item.row_id, 16)
+                if item.row_id in row_ids: raise ValueError('duplicate')
+                row_ids.add(item.row_id)
+            except ValueError:
+                errors.append(f'row {idx + 1}: row_id must be unique 32-digit hexadecimal identity')
+        settings = (item.do_up, item.do_both, item.measurement_step_count, labels, item.source_file)
         if isinstance(item.file_id, str) and item.file_id in file_settings and file_settings[item.file_id] != settings:
             errors.append(f"row {idx + 1}: rows from one file must agree on measurement steps and orientation settings")
         elif isinstance(item.file_id, str):
@@ -159,7 +175,7 @@ def compile_queue(
     ordered = sorted(samples, key=lambda s: s.hole, reverse=not options.ascending)
     measured_count = 0
     for item in ordered:
-        cmds.append(QueueCommand("Meas", item.hole, item.file_id, item.sample_name, item.measurement_labels))
+        cmds.append(QueueCommand("Meas", item.hole, item.file_id, item.sample_name, item.measurement_labels, item.row_id))
         measured_count += 1
         if (
             options.repeat_holder

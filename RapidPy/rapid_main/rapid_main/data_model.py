@@ -52,6 +52,7 @@ class SampleIndexRegistration:
     formation: str = ""
     depth_cm: str = ""
     order: int = 0
+    source_file: str = ""
 
 
 @dataclass

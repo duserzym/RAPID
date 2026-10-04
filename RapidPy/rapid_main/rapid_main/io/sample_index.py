@@ -1,6 +1,7 @@
 from __future__ import annotations
 """Utilities for VB6-style sample index files (.sam) and queue registry rows."""
 from pathlib import Path
+import csv
 from typing import Iterable
 
 from rapid_main.data_model import SampleIndexRegistration, SampleIndexRegistrations
@@ -32,6 +33,20 @@ def read_sample_index_registrations(
     The remaining lines are treated as specimen names and are stored in order.
     """
     sam_path = Path(sam_path)
+    if sam_path.suffix.lower() == '.csv':
+        with sam_path.open('r', encoding='utf-8-sig', newline='') as handle:
+            rows = list(csv.reader(handle))
+        if rows and rows[0] and rows[0][0].strip().lower() in {'sample name', 'name', 'specimen'}:
+            rows = rows[1:]
+        entries = []
+        for row in rows:
+            if not row or not row[0].strip():
+                continue
+            values = [row[index].strip() if index < len(row) else '' for index in range(4)]
+            entries.append(SampleIndexRegistration(specimen_name=values[0], sample_set=sam_path.stem,
+                depth_cm=values[1], formation=values[2], location=values[3], order=len(entries) + 1,
+                source_file=str(sam_path.resolve())))
+        return SampleIndexRegistrations(entries)
     with sam_path.open("r", encoding="latin-1", errors="replace") as fh:
         rows = _build_rows(fh)
 
@@ -67,6 +82,7 @@ def read_sample_index_registrations(
                 formation=formation,
                 depth_cm=depth_cm,
                 order=idx,
+                source_file=str(sam_path.resolve()),
             )
         )
 

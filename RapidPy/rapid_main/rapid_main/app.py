@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import json
+import hashlib
 import os
 import subprocess
 import uuid
@@ -22,6 +23,8 @@ from rapidpy_common.ui import (
 
 from . import software_version
 from .config import AppConfig
+from .data_model import SampleIndexRegistration, SampleIndexRegistrations
+from .io.sample_index import read_sample_index_registrations
 from .hardware_contracts import (
     MeasurementAutomationBackend,
     QueueHardwareBackend,
@@ -976,6 +979,26 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             samples = resolve_queue_samples(samples, self._sequence_labels)
             self._queue_plan = compile_queue(samples, options, strict=True)
+            self._queue_source_indexes = {}
+            for sample in samples:
+                if not sample.source_file:
+                    continue
+                path = Path(sample.source_file)
+                if not path.is_absolute() or path.suffix.lower() not in {'.sam', '.csv'}:
+                    raise ValueError('Source indexes must be absolute SAM or CSV file paths.')
+                identity = os.path.normcase(str(path.resolve()))
+                if sample.file_id != identity:
+                    raise ValueError('Queue source-file identity must match its original index path.')
+                if identity not in self._queue_source_indexes:
+                    payload = path.read_bytes()
+                    registrations = read_sample_index_registrations(path)
+                    if payload != path.read_bytes():
+                        raise ValueError('Sample index changed while preparing the queue.')
+                    self._queue_source_indexes[identity] = dict(source_file=str(path.resolve()),
+                        sha256=hashlib.sha256(payload).hexdigest(), entries=[asdict(entry) for entry in registrations.entries])
+                matches = [entry for entry in self._queue_source_indexes[identity]['entries'] if entry['specimen_name'] == sample.sample_name]
+                if len(matches) != 1:
+                    raise ValueError('Each queued specimen must match exactly one entry in its original source index.')
             for plan in (self._rockmag_routine_plan, self._thermal_routine_plan):
                 if plan is not None and any(command.command_type == 'Meas'
                         and list(command.measurement_labels) != list(plan.to_queue_labels()) for command in self._queue_plan):
@@ -1087,7 +1110,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 directions[sample.file_id] = sample.do_up
             startup = self._measurement_backend.prepare_queue_lifetime(self._vacuum_backend,
                 dict(commands=[asdict(command) for command in self._queue_plan],
-                     samples=[asdict(sample) for sample in samples], options=asdict(options), file_directions=directions),
+                     samples=[asdict(sample) for sample in samples], options=asdict(options), file_directions=directions,
+                     source_indexes=self._queue_source_indexes),
                 run_id='queue-' + uuid.uuid4().hex, operator=self.config.general.operator,
                 empty_rod_confirmed=True)
             self._queue_native_startup, self._queue_native_session = startup, startup.session
@@ -1213,7 +1237,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self._measurement, "halt_run"):
             self._measurement.halt_run()
         if self._queue_current_sample:
-            self._sample_queue.set_queue_sample_failed(self._queue_current_sample)
+            self._set_queue_sample_status(self._queue_current_sample, 'Error')
         self._finalize_queue_run("idle", reason=reason, return_to_safe=True)
 
     @QtCore.Slot()
@@ -1264,7 +1288,7 @@ class MainWindow(QtWidgets.QMainWindow):
         vacuum_fault = self._queue_vacuum_fault_reason()
         if vacuum_fault:
             if self._queue_current_sample:
-                self._sample_queue.set_queue_sample_failed(self._queue_current_sample)
+                self._set_queue_sample_status(self._queue_current_sample, 'Error')
             self._finalize_queue_run(
                 "error",
                 reason=f"Queue halted by vacuum fault: {vacuum_fault}",
@@ -1274,7 +1298,7 @@ class MainWindow(QtWidgets.QMainWindow):
         squid_fault = self._queue_squid_fault_reason()
         if squid_fault:
             if self._queue_current_sample:
-                self._sample_queue.set_queue_sample_failed(self._queue_current_sample)
+                self._set_queue_sample_status(self._queue_current_sample, 'Error')
             self._finalize_queue_run(
                 "error",
                 reason=f"Queue halted by SQUID communication fault: {squid_fault}",
@@ -1326,6 +1350,34 @@ class MainWindow(QtWidgets.QMainWindow):
                 raise ValueError('The reviewed routine identity does not match this file measurement sequence.')
         return labels
 
+    def queue_measurement_source(self, sample_name: str):
+        """Resolve only the original captured source index and registrations."""
+        self.queue_measurement_labels(sample_name)
+        indexes = getattr(self, '_queue_source_indexes', {})
+        session = self._queue_native_session
+        if session is not None:
+            state = session.store.read()
+            session.store.verify_history(state)
+            if state['plan']['commands']['source_indexes'] != indexes:
+                raise ValueError('Restore the original journaled index metadata before measurement.')
+        source = indexes.get(self._queue_current_command.file_id)
+        if source is None:
+            return None
+        path = Path(source['source_file'])
+        if hashlib.sha256(path.read_bytes()).hexdigest() != source['sha256']:
+            raise ValueError('The original sample index changed after queue preparation.')
+        registrations = SampleIndexRegistrations([SampleIndexRegistration(**entry) for entry in source['entries']])
+        return path, registrations
+
+    def _set_queue_sample_status(self, sample_name: str, status: str) -> None:
+        command = self._queue_current_command
+        setter = getattr(self._sample_queue, 'set_queue_command_status', None)
+        if callable(setter) and command is not None and command.command_type == 'Meas':
+            setter(command, status)
+            return
+        method = {'Running': 'start_queue_sample', 'Done': 'mark_queue_sample_done', 'Error': 'set_queue_sample_failed'}[status]
+        getattr(self._sample_queue, method)(sample_name)
+
     def _run_measure_command(self) -> None:
         if self._queue_current_command is None:
             return
@@ -1351,7 +1403,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._queue_meas_pending_start = False
 
         self._queue_current_sample = sample_name
-        self._sample_queue.start_queue_sample(sample_name)
+        self._set_queue_sample_status(sample_name, 'Running')
         try:
             started = self._measurement.start_measurement_for_sample(
                 sample_name,
@@ -1365,7 +1417,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
 
         if not started:
-            self._sample_queue.set_queue_sample_failed(sample_name)
+            self._set_queue_sample_status(sample_name, 'Error')
             self._finalize_queue_run(
                 "error",
                 reason="Queue run failed to start.",
@@ -1447,7 +1499,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         except Exception as exc:
             if self._queue_current_sample:
-                self._sample_queue.set_queue_sample_failed(self._queue_current_sample)
+                self._set_queue_sample_status(self._queue_current_sample, 'Error')
             self._finalize_queue_run(
                 "error",
                 reason=f"Queue {command.command_type} failed: {exc}",
@@ -1686,9 +1738,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_queue_sample_finished(self, aborted: bool, sample: str) -> None:
         if not self._queue_active:
             return
+        command = self._queue_current_command
+        if command is not None and command.command_type == 'Meas' and command.sample_name != sample:
+            self._set_queue_sample_status(command.sample_name, 'Error')
+            self._finalize_queue_run('error', reason='Measurement completion does not match the original queued specimen.')
+            return
         if self._queue_pending_finalize is not None and self._queue_command_thread is None:
             pending, self._queue_pending_finalize = self._queue_pending_finalize, None
-            self._sample_queue.set_queue_sample_failed(sample)
+            self._set_queue_sample_status(sample, 'Error')
             self._finalize_queue_run(**pending)
             return
         had_error = (
@@ -1697,14 +1754,14 @@ class MainWindow(QtWidgets.QMainWindow):
             else False
         )
         if aborted:
-            self._sample_queue.set_queue_sample_failed(sample)
+            self._set_queue_sample_status(sample, 'Error')
             self._finalize_queue_run("halted", reason=f"Queue stopped after sample {sample}.")
             return
         if had_error:
-            self._sample_queue.set_queue_sample_failed(sample)
+            self._set_queue_sample_status(sample, 'Error')
             self._finalize_queue_run("error", reason=f"Queue sample {sample} failed with an error.")
             return
-        self._sample_queue.mark_queue_sample_done(sample)
+        self._set_queue_sample_status(sample, 'Done')
         if self._queue_current_command is not None:
             self._set_queue_position_status("Meas", self._queue_current_command)
         self._save_queue_state()
@@ -3036,6 +3093,7 @@ class MainWindow(QtWidgets.QMainWindow):
             name=record["sample_name"],
             sample_set=sample_set,
             treatment=treatment,
+            source_file=str(dialog.source_path.resolve()) if dialog.source_path is not None else '',
         )
         if dialog.registrations is not None:
             self.sample_registrations = dialog.registrations

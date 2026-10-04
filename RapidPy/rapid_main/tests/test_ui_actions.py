@@ -135,6 +135,7 @@ class TestCompletedUiActions(unittest.TestCase):
             name="SPEC-42",
             sample_set="Basalt Unit",
             treatment="NRM → AF20",
+            source_file=str(dialog.source_path.resolve()),
         )
         measurement.set_specimen_context.assert_called_once_with(
             "SPEC-42",

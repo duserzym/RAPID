@@ -1730,3 +1730,55 @@ compilation and diff checks pass. Earlier full runs exposed the combined observe
 wait budget and Windows publication race described above; the final run verifies
 the fixes together. No physical instruments were actuated, and portable artifacts
 and physical/final scientific acceptance are not established by these checks.
+
+### Source-index queue identity and per-file orientation controls
+
+Queue rows now expose Index File, Orientation and Both Sides. Add Sample accepts
+these settings; the File settings context action updates every row of the selected
+source index while preserving other indexes, even with identical display metadata.
+JSON/CSV/session persistence retains optional fields; legacy rows remain manual
+file groups with default Up/single-side settings. VB6 Up/Down/one-step dual-pass
+eligibility remains unchanged. SAM/CSV registrations preserve their source path,
+and sample selector addition carries it separately from formation/location.
+
+Before new queue ownership/root/startup confirmation, MainWindow verifies absolute
+SAM/CSV source identity, stable bytes and exactly one specimen membership, then
+captures detached registrations and SHA-256. Native startup links these snapshots.
+Handoff requires original journal metadata and unchanged source bytes before worker
+lease acquisition. Actual resolved source paths are retained for file access;
+Windows case normalization is used for file identity. The panel uses that source's
+parent and captured registrations, without falling back to another selected index
+or the output directory. Source-specific output folders separate duplicate specimen
+names across indexes. See docs/queue-file-sequences.md.
+
+Regressions cover optional-field persistence, bulk file settings, duplicate display
+metadata, strict source/flag admission, actual selector source transfer, CSV source
+registrations, native membership/snapshot/digest rejection without new hardware I/O,
+and original-source worker metadata/separate output folders. Worker-construction
+checks do not start scientific acquisition; native DLL/serial/holder/panel fixtures
+remain injected and do not prove complete physical/scientific station acceptance.
+
+Registry step-progress/eligibility counters, source specimen-header snapshots and
+standalone selection provenance, final scientific bundle acceptance, earlier-stage
+and restart recovery, chain station support, remaining active VB6 auxiliary tools,
+portable rebuilding, performance and physical/scientific qualification remain
+required. Full-system goal remains active.
+
+Compilation now captures persistent row identities, preserved in optional
+JSON/CSV/session fields and second-side commands. Running/Done/Error updates target
+that original row, avoiding first-name matches across source indexes. Legacy
+programmatic commands without an identity match file/slot/name. Duplicate or malformed
+persisted identities fail validation; completion for another specimen fails the
+original queue instead of advancing. Row restoration and position edits cannot
+redirect a compiled row's status. Focused row-identity and orchestration checks pass.
+
+Verification for this source-index/row-identity checkpoint: all 1,202 assertions
+passed in the full run (600.755 seconds), but the owned process stalled after Qt
+application shutdown while returning to interpreter shutdown. It was stopped only
+after its exact command line/parent were verified. An experimental pre-shutdown
+Python/Qt-cycle collection also passed all 1,202 assertions (503.953 seconds) but
+did not resolve teardown and was removed. Neither run counts as a clean full-suite
+process exit. Resolving this full-suite teardown regression remains required.
+Focused source/queue/panel/row-identity/orchestration runs exited normally; source
+smoke passed all six panels, compilation and diff checks passed. Injected interfaces
+were used throughout; no physical scientific station was actuated or qualified.
