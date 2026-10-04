@@ -14,6 +14,7 @@ the JSON provenance record.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
 import json
 import os
 import shutil
@@ -25,6 +26,7 @@ from rapid_main.io.magic_specimen_writer import append_specimen
 from rapid_main.io.magic_writer import append_measurement
 from rapid_main.io.rmg_writer import append_rmg_record
 from rapid_main.io.specimen_writer import append_step, write_header
+from rapid_main.specimen_paths import contained_path, specimen_output_path
 
 SIMULATED_SUBDIR = "SIMULATED"
 SIMULATION_MARKER_FILE = "SIMULATION.txt"
@@ -61,21 +63,21 @@ class MeasurementBundleWriter:
         resume: bool = False,
         provenance: Mapping[str, Any] | None = None,
     ) -> None:
-        self.output_dir = Path(output_dir)
-        self.meta = meta
+        self.output_dir = Path(output_dir).resolve()
+        self.meta = deepcopy(meta)
         self.simulated = bool(simulated)
         self._allow_simulated_production_output = bool(allow_simulated_production_output)
         self.publish_dir = (
             self.output_dir
             if (not self.simulated or self._allow_simulated_production_output)
-            else self.output_dir / SIMULATED_SUBDIR
+            else contained_path(self.output_dir, SIMULATED_SUBDIR, output=True)
         )
+        self.paths = validate_measurement_output(self.output_dir, self.meta.name, simulated=self.simulated,
+            allow_simulated_production_output=self._allow_simulated_production_output)
+        self.staging_dir = contained_path(self.publish_dir, f"{STAGING_PREFIX}-{os.getpid()}", output=True)
+        self._staged = _paths_for(self.staging_dir, self.meta.name)
         self.publish_dir.mkdir(parents=True, exist_ok=True)
-        self.staging_dir = self.publish_dir / f"{STAGING_PREFIX}-{os.getpid()}"
         _reset_directory(self.staging_dir)
-
-        self.paths = _paths_for(self.publish_dir, meta.name)
-        self._staged = _paths_for(self.staging_dir, meta.name)
         self._closed = False
         self._committed = False
         self._appended_labels: list[str] = []
@@ -115,6 +117,8 @@ class MeasurementBundleWriter:
     def append_step(self, step: MeasurementStep, susceptibility: float = 0.0) -> bool:
         """Append one accepted step. Returns ``False`` when it was a duplicate."""
         self._require_open()
+        _paths_for(self.publish_dir, self.meta.name)
+        _paths_for(self.staging_dir, self.meta.name)
         self._ensure_headers()
         label = str(step.demag_label)
         if label in self._existing_labels or label in self._appended_labels:
@@ -136,6 +140,8 @@ class MeasurementBundleWriter:
     def commit(self) -> MeasurementBundlePaths:
         """Publish every staged file atomically."""
         self._require_open()
+        validate_measurement_output(self.publish_dir, self.meta.name)
+        _paths_for(self.staging_dir, self.meta.name)
         for staged, published in (
             (self._staged.specimen_file, self.paths.specimen_file),
             (self._staged.rmg_file, self.paths.rmg_file),
@@ -143,30 +149,35 @@ class MeasurementBundleWriter:
             (self._staged.magic_specimens_file, self.paths.magic_specimens_file),
         ):
             if staged.exists():
+                published.parent.mkdir(parents=True, exist_ok=True)
                 _fsync_file(staged)
                 os.replace(staged, published)
         _write_json_atomic(
-            self.publish_dir / STEP_LEDGER_FILE,
+            contained_path(self.publish_dir, STEP_LEDGER_FILE, output=True),
             {
                 "schema": "rapidpy.measurement.step_ledger.v1",
                 "specimen": self.meta.name,
                 "labels": list(self._existing_labels) + list(self._appended_labels),
             },
         )
-        _write_json_atomic(self.publish_dir / "provenance.json", self._provenance_payload())
+        _write_json_atomic(contained_path(self.publish_dir, "provenance.json", output=True), self._provenance_payload())
         if self.simulated:
-            (self.publish_dir / SIMULATION_MARKER_FILE).write_text(
+            contained_path(self.publish_dir, SIMULATION_MARKER_FILE, output=True).write_text(
                 SIMULATION_STATEMENT, encoding="utf-8"
             )
-        shutil.rmtree(self.staging_dir, ignore_errors=True)
+        self._discard_staging()
         self._closed = True
         self._committed = True
         return self.paths
 
     def abort(self) -> None:
         """Discard everything staged; published files are left untouched."""
-        shutil.rmtree(self.staging_dir, ignore_errors=True)
+        self._discard_staging()
         self._closed = True
+
+    def _discard_staging(self) -> None:
+        contained_path(self.publish_dir, self.staging_dir.name, output=True)
+        shutil.rmtree(self.staging_dir, ignore_errors=True)
 
     def __enter__(self) -> "MeasurementBundleWriter":
         return self
@@ -215,6 +226,7 @@ class MeasurementBundleWriter:
             (self.paths.magic_specimens_file, self._staged.magic_specimens_file),
         ):
             if published.exists():
+                staged.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(published, staged)
 
     def _require_open(self) -> None:
@@ -226,11 +238,24 @@ class MeasurementBundleWriter:
 
 def _paths_for(directory: Path, name: str) -> MeasurementBundlePaths:
     return MeasurementBundlePaths(
-        specimen_file=directory / name,
-        rmg_file=directory / f"{name}.rmg",
-        magic_measurements_file=directory / "measurements.txt",
-        magic_specimens_file=directory / "specimens.txt",
+        specimen_file=specimen_output_path(directory, name),
+        rmg_file=contained_path(directory, f"{name}.rmg", output=True),
+        magic_measurements_file=contained_path(directory, "measurements.txt", output=True),
+        magic_specimens_file=contained_path(directory, "specimens.txt", output=True),
     )
+
+
+def validate_measurement_output(directory: str | Path, name: str, *, simulated: bool = False,
+                                allow_simulated_production_output: bool = False) -> MeasurementBundlePaths:
+    root = Path(directory).absolute()
+    publish = root if not simulated or allow_simulated_production_output else contained_path(root, SIMULATED_SUBDIR, output=True)
+    paths = _paths_for(publish, name)
+    contained_path(publish, f'{STAGING_PREFIX}-{os.getpid()}', output=True)
+    for filename in (STEP_LEDGER_FILE, 'provenance.json', SIMULATION_MARKER_FILE,
+                     'artifact_index.json', 'workflow_summary.json', 'quicklook.json',
+                     'communication.tsv', 'susceptibility.json', 'rockmag_run.json', 'thermal_run.json'):
+        contained_path(publish, filename, output=True)
+    return paths
 
 
 def _reset_directory(path: Path) -> None:
@@ -239,7 +264,7 @@ def _reset_directory(path: Path) -> None:
 
 
 def _read_step_ledger(directory: Path) -> list[str]:
-    path = directory / STEP_LEDGER_FILE
+    path = contained_path(directory, STEP_LEDGER_FILE, output=True)
     if not path.exists():
         return []
     try:
@@ -268,7 +293,7 @@ def _fsync_file(path: Path) -> None:
 
 
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
-    temp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    temp_path = contained_path(path.parent, f"{path.name}.tmp-{os.getpid()}", output=True)
     text = json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n"
     try:
         with open(temp_path, "w", encoding="utf-8", newline="\n") as handle:

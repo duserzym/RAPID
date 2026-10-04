@@ -27,6 +27,8 @@ from .config import AppConfig
 from .data_model import SampleIndexRegistration, SampleIndexRegistrations
 from .io.sample_index import read_sample_index_registrations
 from .specimen_metadata import capture_specimen_metadata, restore_specimen_metadata, validate_specimen_provenance
+from .specimen_paths import specimen_run_directory
+from .io.measurement_bundle import validate_measurement_output
 from .hardware_contracts import (
     MeasurementAutomationBackend,
     QueueHardwareBackend,
@@ -983,6 +985,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self._queue_plan = compile_queue(samples, options, strict=True)
             self._queue_source_indexes = {}
             for sample in samples:
+                index = Path(sample.source_file).resolve() if sample.source_file else None
+                output = self.config.general.data_dir or (Path.home() / 'RAPID_data')
+                run_directory = specimen_run_directory(output, sample.sample_name, index)
+                validate_measurement_output(run_directory, sample.sample_name,
+                    simulated=bool(getattr(self._measurement_backend, 'simulated', False)))
                 if not sample.source_file:
                     continue
                 path = Path(sample.source_file)

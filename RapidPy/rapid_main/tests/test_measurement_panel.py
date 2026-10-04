@@ -51,6 +51,25 @@ class TestMeasurementPanelHelpers(unittest.TestCase):
         QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
         QtWidgets.QApplication.instance().processEvents()
 
+    def test_invalid_specimen_paths_do_not_acquire_ownership_or_construct_workers(self):
+        window = QtWidgets.QMainWindow()
+        self.addCleanup(self._dispose_window, window)
+        panel = MeasurementPanel(window)
+        window._sequence_labels = ['NRM']
+        window.measurement_backend = lambda: NoCommBackend()
+        acquired, warnings = [], []
+        panel._acquire_ownerships = lambda *args, **kwargs: acquired.append(True)
+        with tempfile.TemporaryDirectory() as directory:
+            window.config = AppConfig()
+            window.config.general.data_dir = str(Path(directory) / 'output')
+            with patch.object(QtWidgets.QMessageBox, 'warning', lambda *args: warnings.append(args[-1])):
+                for name in ('../outside', 'C:outside', 'NUL', 'provenance.json'):
+                    self.assertFalse(panel.start_measurement_for_sample(name))
+            self.assertFalse((Path(directory) / 'output').exists())
+        self.assertEqual(acquired, [])
+        self.assertEqual(len(warnings), 4)
+        self.assertIsNone(panel._worker)
+
     def test_queue_uses_original_index_metadata_and_separate_outputs_for_duplicate_names(self):
         window = QtWidgets.QMainWindow()
         self.addCleanup(self._dispose_window, window)

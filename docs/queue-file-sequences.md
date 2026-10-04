@@ -124,3 +124,19 @@ Manually grouped rows have no fabricated source provenance.
 These links support source traceability; full scientific acceptance still requires
 per-step/file progress and .UP combination/eligibility, artifact checks across real
 formats, standalone provenance, containment and all other completion gates.
+
+Specimen header candidates and output destinations now resolve within their
+selected directory. Relative nested specimen names remain supported; absolute,
+drive-relative, escaped, device/stream and reserved artifact names are rejected.
+Queue validation occurs before native root/operator startup; panel resolution and
+output admission precede device leases, and worker construction checks paths before
+preflight. Captured metadata records its source root and rejects changed source
+parents, including identical bytes redirected through an external junction.
+
+Bundle/staging/sidecar/JSON-temporary output paths reject child links or junctions
+and shared hard links, and publication rechecks destinations. Copied bundle
+metadata cannot be redirected by caller edits. Nested legacy/RMG parent directories
+are created within the admitted root, and resume copies preserve those paths.
+These are admission/use checks, not an atomic defense against arbitrary concurrent
+filesystem mutation. Complete scientific acceptance, registry/.UP/eligibility,
+standalone provenance, recovery, portable/performance and physical gates remain.

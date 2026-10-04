@@ -50,6 +50,7 @@ from rapid_main.analysis import ReadingCycleStatistics, reading_cycle_statistics
 from rapid_main.communication_log import CommunicationEvent, CommunicationLogger
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.specimen_metadata import validate_specimen_provenance
+from rapid_main.specimen_paths import contained_path
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
 from rapid_main.geometry import Cartesian3D, cartesian3d_to_angular3d
 from rapid_main.magnetometer import (
@@ -74,6 +75,7 @@ from rapid_main.io.measurement_bundle import (
     SIMULATION_STATEMENT,
     SIMULATED_SUBDIR,
     MeasurementBundleWriter,
+    validate_measurement_output,
 )
 
 
@@ -162,7 +164,7 @@ class MeasurementWorker(QtCore.QThread):
             validate_specimen_provenance(self._specimen_provenance, meta)
         self._meta = deepcopy(meta)
         self._labels = list(labels)
-        self._output_dir = Path(output_dir)
+        self._output_dir = Path(output_dir).resolve()
         self._backend = backend or NoCommBackend()
         self._pending_run_result = None
         sources: list[object] = [self._backend]
@@ -183,6 +185,8 @@ class MeasurementWorker(QtCore.QThread):
         # A backend that declares itself simulated taints every artifact it
         # produces: the run is labelled and kept out of the production path.
         self._simulated = bool(getattr(self._backend, "simulated", False))
+        validate_measurement_output(self._output_dir, self._meta.name, simulated=self._simulated,
+            allow_simulated_production_output=self._allow_simulated_production_output)
         self._last_block_audit: BlockAudit | None = None
         self._last_block_result: BracketedMeasurementResult | None = None
         self._holder_record_id = ""
@@ -195,7 +199,7 @@ class MeasurementWorker(QtCore.QThread):
         self._publish_dir = (
             self._output_dir
             if not self._simulated or self._allow_simulated_production_output
-            else self._output_dir / SIMULATED_SUBDIR
+            else contained_path(self._output_dir, SIMULATED_SUBDIR, output=True)
         )
 
         # Control flags (thread-safe via threading.Event)
@@ -550,7 +554,7 @@ class MeasurementWorker(QtCore.QThread):
         if not aborted:
             try:
                 write_susceptibility_summary_json(
-                    self._publish_dir / "susceptibility.json",
+                    self._artifact_path("susceptibility.json"),
                     susceptibility_records,
                     sample=self._meta.name,
                     operator=self._operator,
@@ -824,7 +828,7 @@ class MeasurementWorker(QtCore.QThread):
                     continue
                 if not re.fullmatch(r"irm-[0-9a-f]{32}",identity):
                     raise ValueError("Invalid pulse IRM artifact identity.")
-                path = self._publish_dir/"pulse_treatments"/f"{identity}.json"
+                path = self._artifact_path(f"pulse_treatments/{identity}.json")
                 write_af_treatment_record(path,record)
             except Exception as exc:
                 message = f"Pulse IRM artifact write failed: {exc}"
@@ -843,7 +847,7 @@ class MeasurementWorker(QtCore.QThread):
             try:
                 if not re.fullmatch(r"af-[0-9a-f]{32}", identity):
                     raise ValueError("Invalid AF treatment artifact identity.")
-                path = self._publish_dir / "af_treatments" / f"{identity}.json"
+                path = self._artifact_path(f"af_treatments/{identity}.json")
                 write_af_treatment_record(path, record)
             except Exception as exc:
                 self._error_messages.append(f"AF treatment artifact write failed: {exc}")
@@ -865,7 +869,7 @@ class MeasurementWorker(QtCore.QThread):
             acquisition_id = str(getattr(record, "acquisition_id", "")).strip()
             if not acquisition_id or acquisition_id in written:
                 continue
-            target = self._publish_dir / "susceptibility_acquisitions" / f"{acquisition_id}.json"
+            target = self._artifact_path(f"susceptibility_acquisitions/{acquisition_id}.json")
             try:
                 write_susceptibility_acquisition(target, record)
             except Exception as exc:
@@ -1099,7 +1103,7 @@ class MeasurementWorker(QtCore.QThread):
         }
         try:
             self._publish_dir.mkdir(parents=True, exist_ok=True)
-            (self._publish_dir / "workflow_summary.json").write_text(
+            (self._artifact_path("workflow_summary.json")).write_text(
                 json.dumps(payload, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
@@ -1128,7 +1132,7 @@ class MeasurementWorker(QtCore.QThread):
                     self._comm_logger.transcript.extend(fresh)
                     self._published_event_ids.update(id(event) for event in fresh)
                     self._communication_event_counts[id(source)] = len(events)
-            self._comm_logger.write_text(self._publish_dir / "communication.tsv")
+            self._comm_logger.write_text(self._artifact_path("communication.tsv"))
         except Exception as exc:
             self.error_occurred.emit(f"Failed to write communication transcript: {exc}")
 
@@ -1161,7 +1165,7 @@ class MeasurementWorker(QtCore.QThread):
             return
         try:
             write_rockmag_run_artifact(
-                self._publish_dir / "rockmag_run.json",
+                self._artifact_path("rockmag_run.json"),
                 self._routine_context,
                 run_id=self._run_id,
                 sample=self._meta.name,
@@ -1192,7 +1196,7 @@ class MeasurementWorker(QtCore.QThread):
             return
         try:
             write_thermal_run_artifact(
-                self._publish_dir / "thermal_run.json",
+                self._artifact_path("thermal_run.json"),
                 self._thermal_context,
                 run_id=self._run_id,
                 sample=self._meta.name,
@@ -1219,7 +1223,7 @@ class MeasurementWorker(QtCore.QThread):
                 self._comm_logger.error(self._error_messages[-1])
 
     def _write_artifact_index(self, *, aborted: bool) -> None:
-        artifact_path = self._publish_dir / "artifact_index.json"
+        artifact_path = self._artifact_path("artifact_index.json")
 
         def entry(
             name: str,
@@ -1280,63 +1284,63 @@ class MeasurementWorker(QtCore.QThread):
             "artifacts": [
                 entry(
                     "measurement_provenance",
-                    self._publish_dir / 'provenance.json',
+                    self._artifact_path('provenance.json'),
                     required=not aborted,
                     producer='MeasurementBundleWriter',
                     description='Scientific metadata and original queue source provenance.',
                 ),
                 entry(
                     "vb6_specimen_file",
-                    self._publish_dir / self._meta.name,
+                    self._artifact_path(self._meta.name),
                     required=not aborted,
                     producer="MeasurementBundleWriter",
                     description="Legacy specimen output compatible with VB6/CIT review paths.",
                 ),
                 entry(
                     "rmg_file",
-                    self._publish_dir / f"{self._meta.name}.rmg",
+                    self._artifact_path(f"{self._meta.name}.rmg"),
                     required=not aborted,
                     producer="MeasurementBundleWriter",
                     description="RMG sidecar with per-step treatment and susceptibility values.",
                 ),
                 entry(
                     "magic_measurements",
-                    self._publish_dir / "measurements.txt",
+                    self._artifact_path("measurements.txt"),
                     required=not aborted,
                     producer="MeasurementBundleWriter",
                     description="MagIC measurements table emitted in lockstep with specimen output.",
                 ),
                 entry(
                     "magic_specimens",
-                    self._publish_dir / "specimens.txt",
+                    self._artifact_path("specimens.txt"),
                     required=not aborted,
                     producer="MeasurementBundleWriter",
                     description="MagIC specimen metadata table for the run bundle.",
                 ),
                 entry(
                     "susceptibility_summary",
-                    self._publish_dir / "susceptibility.json",
+                    self._artifact_path("susceptibility.json"),
                     required=not aborted,
                     producer="MeasurementWorker",
                     description="Per-step susceptibility readings and summary statistics.",
                 ),
                 entry(
                     "workflow_summary",
-                    self._publish_dir / "workflow_summary.json",
+                    self._artifact_path("workflow_summary.json"),
                     required=True,
                     producer="MeasurementWorker",
                     description="Phase/status trace for completion, abort, or preflight failure evidence.",
                 ),
                 entry(
                     "communication_transcript",
-                    self._publish_dir / "communication.tsv",
+                    self._artifact_path("communication.tsv"),
                     required=False,
                     producer="CommunicationLogger",
                     description="Transport-neutral transcript emitted when bundle execution begins.",
                 ),
                 entry(
                     "quicklook_summary",
-                    self._publish_dir / "quicklook.json",
+                    self._artifact_path("quicklook.json"),
                     required=False,
                     producer="MeasurementPanel",
                     description="Panel-level quicklook plot contract, written after completed UI runs.",
@@ -1352,7 +1356,7 @@ class MeasurementWorker(QtCore.QThread):
             payload["artifacts"].append(
                 entry(
                     "rockmag_run",
-                    self._publish_dir / "rockmag_run.json",
+                    self._artifact_path("rockmag_run.json"),
                     required=True,
                     producer="MeasurementWorker",
                     description=(
@@ -1387,7 +1391,7 @@ class MeasurementWorker(QtCore.QThread):
             payload["artifacts"].append(
                 entry(
                     "thermal_run",
-                    self._publish_dir / "thermal_run.json",
+                    self._artifact_path("thermal_run.json"),
                     required=True,
                     producer="MeasurementWorker",
                     description=(
@@ -1405,6 +1409,9 @@ class MeasurementWorker(QtCore.QThread):
         except Exception as exc:
             if self._comm_logger is not None:
                 self._comm_logger.error(f"artifact index write failed: {exc}")
+
+    def _artifact_path(self, name: str) -> Path:
+        return contained_path(self._publish_dir, name, output=True)
 
     def _relative_artifact_path(self, path: Path) -> str:
         try:

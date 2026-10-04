@@ -1866,3 +1866,38 @@ Compilation and diff checks passed. Explicit watchdog ownership corrects the tes
 harness teardown; physical station, scientific-format/.UP/progress/eligibility,
 standalone provenance/containment, restart recovery, chain/auxiliary, portable and
 performance completion gates remain required. The full-system goal remains active.
+
+Specimen path-containment checkpoint: source/header paths are bounded by their
+selected dataset directory, including portable Windows-style relative components.
+Absolute/drive-relative paths, escapes, device/stream names and fixed-artifact
+namespace collisions fail admission. Nested relative specimen paths remain
+supported, including nested legacy specimen/RMG publication and resume copying.
+Queue admission validates destinations before root/operator/native startup; panel
+resolution and path admission now precede device leases, and worker construction
+validates destinations before backend preflight.
+
+Output paths reject links/junctions below the admitted directory and shared hard
+links; staging, publication, fixed sidecars and atomic JSON temporary destinations
+are checked. Bundle metadata is copied so caller edits cannot redirect a run.
+Publication rechecks destinations; staged cleanup is bounded by its publish root.
+Captured header snapshots now include their original source root, and restore
+rejects retargeted source parents even when the header bytes are identical.
+
+Focused runs exited normally: 11 real filesystem containment cases (1.135 seconds),
+17 panel cases (3.349 seconds), 29 compiler/bundle cases (2.726 seconds), 22 worker
+cases (7.784 seconds) and 16 injected native MainWindow cases (160.538 seconds).
+Containment cases exercise actual NTFS junctions and hard links, external sentinel
+preservation, preflight rejection, nested publication and post-admission changes.
+Compilation/source smoke passed; the full 1,223-test run is underway. These checks
+revalidate paths at admission/use; they do not claim atomic filesystem isolation
+from arbitrary concurrent external mutation or full scientific bundle acceptance.
+Registry progress/.UP/eligibility, standalone provenance, restart recovery,
+chain/auxiliary capabilities, portable/performance and physical qualification
+remain completion gates. The full-system goal remains active.
+
+Full verification for specimen containment: all 1,223 tests passed in 590.917
+seconds and the owned process exited normally with code 0 after Qt and watchdog
+cleanup. Six-panel source smoke, compilation and diff checks passed. Tests use
+injected instrument interfaces; real NTFS filesystem cases establish the stated
+path checks, not physical/scientific station qualification. Full-system completion
+remains unproven and the goal remains active.

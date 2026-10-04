@@ -22,6 +22,7 @@ from typing import Iterable
 
 from rapid_main.data_model import SampleIndexRegistration, SampleIndexRegistrations, SpecimenMeta
 from rapid_main.io.specimen_reader import read_specimen
+from rapid_main.specimen_paths import contained_path, relative_specimen_path
 
 
 def _source_digest(path: Path) -> str | None:
@@ -38,7 +39,7 @@ def capture_specimen_metadata(name: str, *, sample_dir: Path,
     resolution = resolve_specimen_meta(name, sample_dir=sample_dir, registrations=registrations)
     if sources != {str(path.resolve()): _source_digest(path) for path in paths}:
         raise ValueError('Specimen header changed while preparing the queue.')
-    snapshot = dict(meta=asdict(resolution.meta), source=resolution.source,
+    snapshot = dict(meta=asdict(resolution.meta), source=resolution.source, source_root=str(sample_dir.resolve()),
                 header_path=str(resolution.header_path.resolve()) if resolution.header_path else None,
                 registration=asdict(resolution.registration) if resolution.registration else None,
                 defaulted_fields=list(resolution.defaulted_fields), sources=sources)
@@ -56,7 +57,12 @@ def validate_specimen_provenance(provenance: dict, meta: SpecimenMeta) -> None:
 
 def restore_specimen_metadata(snapshot: dict) -> 'SpecimenMetaResolution':
     """Verify original inputs and return detached frozen scientific metadata."""
+    root = Path(snapshot['source_root'])
+    if root.resolve() != root:
+        raise ValueError('The original specimen source directory changed after queue preparation.')
     for path, digest in snapshot['sources'].items():
+        if not Path(path).resolve().is_relative_to(root):
+            raise ValueError('The original specimen header escapes its captured source directory.')
         if _source_digest(Path(path)) != digest:
             raise ValueError('The original specimen header changed after queue preparation.')
     return SpecimenMetaResolution(meta=SpecimenMeta(**snapshot['meta']), source=snapshot['source'],
@@ -89,11 +95,12 @@ def candidate_specimen_paths(
     """Places VB6 would look for an existing specimen file, in order."""
 
     candidates: list[Path] = []
+    relative_specimen_path(name)
     if sample_dir:
-        candidates.append(Path(sample_dir) / name)
+        candidates.append(contained_path(sample_dir, name))
     if data_dir:
-        candidates.append(Path(data_dir) / name / name)
-        candidates.append(Path(data_dir) / name)
+        candidates.append(contained_path(data_dir, (relative_specimen_path(name) / relative_specimen_path(name)).as_posix()))
+        candidates.append(contained_path(data_dir, name))
     return candidates
 
 

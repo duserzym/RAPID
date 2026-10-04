@@ -1,9 +1,8 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from collections import deque
 from datetime import datetime
 import json
-import hashlib
 from pathlib import Path
 from typing import Optional
 
@@ -16,7 +15,8 @@ from rapid_main.specimen_metadata import resolve_specimen_meta, validate_specime
 from rapid_main.device_ownership import DeviceOwnershipError
 from rapid_main.dialogs.plots import build_quicklook_summary, write_quicklook_json
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
-from rapid_main.io.measurement_bundle import SIMULATED_SUBDIR
+from rapid_main.io.measurement_bundle import SIMULATED_SUBDIR, validate_measurement_output
+from rapid_main.specimen_paths import specimen_run_directory
 from rapid_main.measurement_worker import MeasurementWorker, StepResult
 from rapid_main.printing import print_widget_snapshot
 
@@ -552,6 +552,26 @@ class MeasurementPanel(QtWidgets.QWidget):
             )
             return False
 
+        cfg = getattr(mw, "config", None)
+        backend = _resolve_measurement_backend(mw, NoCommBackend()) or NoCommBackend()
+        self._current_run_simulated = bool(getattr(backend, "simulated", False))
+        op = cfg.general.operator if cfg else ""
+        out = Path(cfg.general.data_dir) if cfg and cfg.general.data_dir else Path.home() / "RAPID_data"
+        try:
+            resolution = queue_metadata or resolve_specimen_meta(sample,
+                sample_dir=(queue_source[0].parent if queue_source else (cfg.general.sample_dir if cfg else None)),
+                data_dir=(None if queue_source else (cfg.general.data_dir if cfg else None)),
+                registrations=(queue_source[1] if queue_source else getattr(mw, "sample_registrations", None)))
+            meta = resolution.meta
+            run_output_dir = specimen_run_directory(out, meta.name, queue_source[0] if queue_source else None)
+            validate_measurement_output(run_output_dir, meta.name, simulated=self._current_run_simulated)
+        except (OSError, ValueError) as exc:
+            QtWidgets.QMessageBox.warning(self, "Invalid Specimen Path", str(exc))
+            return False
+        if resolution.defaulted_fields:
+            self._on_preflight_warning("Specimen metadata defaulted for: "
+                + ", ".join(resolution.defaulted_fields)
+                + ". Check the specimen header or sample index before archiving.")
         try:
             self._last_run_error = False
             self._clear_measurement_plot()
@@ -569,34 +589,6 @@ class MeasurementPanel(QtWidgets.QWidget):
 
         self.set_specimen_context(sample)
 
-        cfg = getattr(mw, "config", None)
-        backend = _resolve_measurement_backend(mw, NoCommBackend())
-        if backend is None:
-            backend = NoCommBackend()
-        self._current_run_simulated = bool(getattr(backend, "simulated", False))
-        op = cfg.general.operator if cfg else ""
-        out = Path(cfg.general.data_dir) if cfg and cfg.general.data_dir else Path.home() / "RAPID_data"
-        # VB6 reads comment, orientation, volume, and the sample hierarchy from
-        # the specimen header and the .sam registry, and writes them into every
-        # output. Resolve the same values instead of starting with blanks.
-        resolution = queue_metadata or resolve_specimen_meta(
-            self._current_sample,
-            sample_dir=(queue_source[0].parent if queue_source else (cfg.general.sample_dir if cfg else None)),
-            data_dir=(None if queue_source else (cfg.general.data_dir if cfg else None)),
-            registrations=(queue_source[1] if queue_source else getattr(mw, "sample_registrations", None)),
-        )
-        meta = resolution.meta
-        if resolution.defaulted_fields:
-            self._on_preflight_warning(
-                "Specimen metadata defaulted for: "
-                + ", ".join(resolution.defaulted_fields)
-                + ". Check the specimen header or sample index before archiving."
-            )
-        run_output_dir = out / meta.name
-        if queue_source:
-            index = queue_source[0]
-            group = index.stem + '-' + hashlib.sha256(str(index).encode('utf-8')).hexdigest()[:12]
-            run_output_dir = out / group / meta.name
         self._current_output_dir = (
             run_output_dir / SIMULATED_SUBDIR
             if self._current_run_simulated

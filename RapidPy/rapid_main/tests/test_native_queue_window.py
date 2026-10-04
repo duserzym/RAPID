@@ -20,6 +20,17 @@ RESOURCES = ('measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptib
 
 
 class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestCase):
+    def test_invalid_specimen_output_blocks_before_root_operator_prompt_or_io(self):
+        before = self.store.read(), len(self.commands), len(self.vacuum_serial.writes)
+        prompts = []
+        with patch.object(QtWidgets.QMessageBox, 'critical', lambda *args: None), patch.object(
+                QtWidgets.QMessageBox, 'question', lambda *args: prompts.append(True)):
+            for name in ('../outside', 'C:outside', 'NUL', 'provenance.json'):
+                self.assertFalse(self.window.start_queue_run([QueueSample(name, 'manual', 1)], QueueOptions()))
+        self.assertEqual(prompts, [])
+        self.assertEqual((self.store.read(), len(self.commands), len(self.vacuum_serial.writes)), before)
+        self.assertTrue(all(not self.window._ownership.is_owned(item) for item in RESOURCES))
+
     def test_source_index_snapshot_and_digest_are_required_for_native_handoff(self):
         path = self.store.path.parent / 'index.sam'
         path.write_text('S1 2 OriginalUnit OriginalSite\n', encoding='latin-1')
