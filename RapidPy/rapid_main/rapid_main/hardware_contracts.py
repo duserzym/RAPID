@@ -19,6 +19,7 @@ import uuid
 from rapid_main import software_version
 from rapid_main.communication_log import CommunicationLogger
 from rapid_main.config import AppConfig
+from rapid_main.queue_compiler import validate_average_count
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from rapid_main.holder_measurement import HolderMeasurementOutcome
@@ -187,7 +188,7 @@ class QueueAutomationBackend(Protocol):
         """Prepare or validate a sample set before first-side measurement."""
         ...
 
-    def holder(self, hole: int) -> None:
+    def holder(self, hole: int, *, averaging_cycles: int | None = None) -> None:
         """Move to a safe holder position for the current queue step."""
         ...
 
@@ -244,8 +245,10 @@ class NoCommBackend:
         del file_id
         self._flipped = False
 
-    def holder(self, hole: int) -> None:
+    def holder(self, hole: int, *, averaging_cycles: int | None = None) -> None:
         """No-op queue automation adapter for simulator mode."""
+        if averaging_cycles is not None:
+            validate_average_count(averaging_cycles)
         self._current_hole = int(hole)
 
     def goto_hole(self, hole: int) -> None:
@@ -863,9 +866,11 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self.clear_specimen_geometry()
         return state
 
-    def measure_queue_holder(self, marker=0):
+    def measure_queue_holder(self, marker=0, *, averaging_cycles: int | None = None):
         """Compose the original empty-hole pose, owned acquisition and rod return."""
         from .queue_holder_geometry import QueueBlankHolderMotion
+        if averaging_cycles is not None:
+            validate_average_count(averaging_cycles)
         coordinator = getattr(self, '_queue_coordinator', None)
         if coordinator is None or getattr(self, '_queue_specimen_geometry', None) is not None:
             raise HardwareError('An original idle native queue is required for a blank holder.')
@@ -881,7 +886,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self.bind_holder_geometry(coordinator.session, coordinator.vacuum)
         previous_direction = self._direction_up
         self._direction_up = True  # VB6 Holder always uses doUp=True.
-        outcome = self.measure_bound_holder()
+        outcome = self.measure_bound_holder(averaging_cycles=averaging_cycles)
         fields = coordinator.fields.verify_off(coordinator.session)
         blank.return_to_clearance(coordinator.session, field_outputs_off_verified=fields)
         self.clear_holder_geometry()
@@ -935,9 +940,11 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         self._bracketed = None
         self._bracketed_geometry_signature = None
 
-    def measure_bound_holder(self):
+    def measure_bound_holder(self, *, averaging_cycles: int | None = None):
         """Measure a verified queue blank and atomically replace its correction."""
         from .holder_measurement import HolderMeasurementService
+        averages = (max(1, int(self._config.squid.samples_per_pos or 1)) if averaging_cycles is None
+                    else validate_average_count(averaging_cycles))
         geometry = getattr(self, '_queue_specimen_geometry', None)
         if geometry is None or not getattr(geometry, 'is_holder', False):
             raise HardwareError('Verify and bind the original blank-holder geometry before measurement.')
@@ -949,7 +956,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             self._persist_holder_susceptibility_evidence(strict=True)
         service = HolderMeasurementService(self.read_squid, self._holder_store,
             recover=lambda validation: self.recover_flux_count_discontinuity(validation),
-            averaging_cycles=max(1, int(self._config.squid.samples_per_pos or 1)),
+            averaging_cycles=averages,
             clock=getattr(self._acquisition_clock, 'now', None))
         outcome = service.measure(holder_id=geometry.context.sample_id, hole=geometry.context.hole,
                                   susceptibility=susceptibility)
@@ -1720,13 +1727,15 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
 
     # -- queue automation --------------------------------------------------
 
-    def holder(self, hole: int) -> None:
+    def holder(self, hole: int, *, averaging_cycles: int | None = None) -> None:
         """Move to the holder position and measure a replacement correction.
 
         VB6 ``SampleCommand`` "Holder" is a measurement, not just motion. The
         previous correction stays active unless the new block passes every
         check.
         """
+        if averaging_cycles is not None:
+            validate_average_count(averaging_cycles)
         self._ensure_connected()
         hole = int(hole)
         measure_susceptibility = bool(self._config.susceptibility.enabled)
@@ -1752,10 +1761,12 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             self._require_motion_success(f"holder sample pickup at hole {hole}", pickup)
             self._sample_loaded = True
 
-        self._measure_holder(hole, measure_susceptibility=measure_susceptibility)
+        self._measure_holder(hole, measure_susceptibility=measure_susceptibility, averaging_cycles=averaging_cycles)
 
-    def _measure_holder(self, hole: int, *, measure_susceptibility: bool = False) -> None:
+    def _measure_holder(self, hole: int, *, measure_susceptibility: bool = False, averaging_cycles: int | None = None) -> None:
         from .holder_measurement import HolderMeasurementService
+        averages = (max(1, int(self._config.squid.samples_per_pos or 1)) if averaging_cycles is None
+                    else validate_average_count(averaging_cycles))
 
         self._ensure_bracketed()
         if self._bracketed is None:
@@ -1782,7 +1793,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                 self._bracketed.read_squid,
                 self._holder_store,
                 recover=self._bracketed.recover_flux_count_discontinuity,
-                averaging_cycles=max(1, int(self._config.squid.samples_per_pos or 1)),
+                averaging_cycles=averages,
                 flux_discontinuity_retries=int(self._bracketed.flux_discontinuity_retries),
                 clock=getattr(self._acquisition_clock, "now", None),
             )

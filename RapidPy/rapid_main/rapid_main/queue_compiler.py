@@ -15,6 +15,7 @@ class QueueSample:
     measurement_labels: tuple[str, ...] = ()
     source_file: str = ""
     row_id: str = ""
+    avg_steps: int = 1
 
 
 @dataclass(slots=True)
@@ -25,6 +26,7 @@ class QueueCommand:
     sample_name: str = ""
     measurement_labels: tuple[str, ...] = ()
     row_id: str = ""
+    avg_steps: int = 1
 
 
 @dataclass(slots=True)
@@ -35,6 +37,13 @@ class QueueOptions:
     repeat_holder: bool = True
     samples_between_holder: int = 8
     use_xy_table: bool = True
+
+
+def validate_average_count(value: int) -> int:
+    """VB6 AvgSteps is a positive signed 16-bit integer, never a boolean."""
+    if type(value) is not int or not 1 <= value <= 32767:
+        raise ValueError('AvgSteps must be an integer from 1 to 32767.')
+    return value
 
 
 def _first_hole(samples: list[QueueSample], ascending: bool) -> int:
@@ -82,6 +91,10 @@ def validate_queue_samples(samples: Iterable[QueueSample]) -> QueueValidationRes
             errors.append(f"row {idx + 1}: file_id is required")
         if type(item.do_up) is not bool or type(item.do_both) is not bool:
             errors.append(f"row {idx + 1}: orientation settings must be explicit booleans")
+        try:
+            validate_average_count(item.avg_steps)
+        except ValueError as exc:
+            errors.append(f'row {idx + 1}: {exc}')
         labels = item.measurement_labels
         if (type(labels) is not tuple or any(not isinstance(label, str) or not label.strip() for label in labels)):
             errors.append(f"row {idx + 1}: measurement labels must be a tuple of nonempty strings")
@@ -99,9 +112,9 @@ def validate_queue_samples(samples: Iterable[QueueSample]) -> QueueValidationRes
                 row_ids.add(item.row_id)
             except ValueError:
                 errors.append(f'row {idx + 1}: row_id must be unique 32-digit hexadecimal identity')
-        settings = (item.do_up, item.do_both, item.measurement_step_count, labels, item.source_file)
+        settings = (item.do_up, item.do_both, item.measurement_step_count, labels, item.source_file, item.avg_steps)
         if isinstance(item.file_id, str) and item.file_id in file_settings and file_settings[item.file_id] != settings:
-            errors.append(f"row {idx + 1}: rows from one file must agree on measurement steps and orientation settings")
+            errors.append(f"row {idx + 1}: rows from one file must agree on measurement steps, orientation settings and AvgSteps")
         elif isinstance(item.file_id, str):
             file_settings[item.file_id] = settings
 
@@ -170,12 +183,13 @@ def compile_queue(
         if do_both and file_item.do_up:
             cmds.append(QueueCommand("InitUp", 0, file_item.file_id, ""))
 
-    cmds.append(QueueCommand("Holder"))
+    holder_average = max(validate_average_count(item.avg_steps) for item in samples)
+    cmds.append(QueueCommand("Holder", avg_steps=holder_average))
 
     ordered = sorted(samples, key=lambda s: s.hole, reverse=not options.ascending)
     measured_count = 0
     for item in ordered:
-        cmds.append(QueueCommand("Meas", item.hole, item.file_id, item.sample_name, item.measurement_labels, item.row_id))
+        cmds.append(QueueCommand("Meas", item.hole, item.file_id, item.sample_name, item.measurement_labels, item.row_id, item.avg_steps))
         measured_count += 1
         if (
             options.repeat_holder
@@ -185,7 +199,7 @@ def compile_queue(
         ):
             # Holder is a blank at a station-resolved empty hole, never the
             # specimen slot just measured. Zero requests that empty-hole path.
-            cmds.append(QueueCommand("Holder", 0))
+            cmds.append(QueueCommand("Holder", 0, avg_steps=holder_average))
 
     goto_hole = -1 if options.use_xy_table else _first_hole(samples, options.ascending)
     if options.load_return:
@@ -209,6 +223,7 @@ def preprocess_queue(commands: list[QueueCommand], per_file: dict[str, QueueSamp
     appended: list[QueueCommand] = []
     needs_second_pass: dict[str, bool] = {}
     second_pass_count = 0
+    holder_average = max((validate_average_count(item.avg_steps) for item in per_file.values()), default=1)
 
     for cmd in commands:
         if cmd.command_type == "InitUp" and cmd.file_id:
@@ -216,7 +231,7 @@ def preprocess_queue(commands: list[QueueCommand], per_file: dict[str, QueueSamp
             if item and item.do_both and item.do_up and item.measurement_step_count <= 1:
                 needs_second_pass[cmd.file_id] = True
                 appended.append(QueueCommand("Flip", -1 if options.use_xy_table else 0, cmd.file_id, ""))
-                appended.append(QueueCommand("Holder", 0))
+                appended.append(QueueCommand("Holder", 0, avg_steps=holder_average))
         elif cmd.command_type == "Flip" and cmd.file_id:
             needs_second_pass[cmd.file_id] = False
         elif cmd.command_type == "Meas" and needs_second_pass.get(cmd.file_id, False):
@@ -224,7 +239,7 @@ def preprocess_queue(commands: list[QueueCommand], per_file: dict[str, QueueSamp
             second_pass_count += 1
             if (options.repeat_holder and options.samples_between_holder > 0
                     and second_pass_count % options.samples_between_holder == 0):
-                appended.append(QueueCommand("Holder", 0))
+                appended.append(QueueCommand("Holder", 0, avg_steps=holder_average))
 
     # VB6 SampleCommands.Preprocess appends to the collection while visiting
     # its original entries. Flip and repeat measurements therefore follow the

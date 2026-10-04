@@ -72,7 +72,7 @@ from .panels import (
     SequencePanel,
     SettingsPanel,
 )
-from .queue_compiler import QueueCommand, QueueOptions, QueueSample, compile_queue, resolve_queue_samples
+from .queue_compiler import QueueCommand, QueueOptions, QueueSample, compile_queue, resolve_queue_samples, validate_average_count
 from .queue_command_worker import QueueCommandWorker
 from .package_launch import ToolUnavailableError, resolve_tool_launch
 from .runtime_estimator import RuntimeEstimator
@@ -1384,6 +1384,25 @@ class MainWindow(QtWidgets.QMainWindow):
         registrations = SampleIndexRegistrations([SampleIndexRegistration(**entry) for entry in source['entries']])
         return path, registrations
 
+    def _queue_command_avg_steps(self, command: QueueCommand) -> int:
+        if (not self._queue_active or self._queue_current_command is not command
+                or command.command_type not in {'Meas', 'Holder'}
+                or not any(item is command for item in self._queue_plan)):
+            raise ValueError('The original active queue command is required for AvgSteps.')
+        session = self._queue_native_session
+        if session is not None:
+            state = session.store.read()
+            session.store.verify_history(state)
+            expected = json.loads(json.dumps([asdict(item) for item in self._queue_plan]))
+            if (state['family'] != 'queue' or state['token'] != session.token or state['status'] != 'pending'
+                    or state['plan']['commands']['commands'] != expected):
+                raise ValueError('Restore the original journaled queue AvgSteps before acquisition.')
+        return validate_average_count(command.avg_steps)
+
+    def queue_measurement_avg_steps(self, sample_name: str) -> int:
+        self.queue_measurement_labels(sample_name)
+        return self._queue_command_avg_steps(self._queue_current_command)
+
     def queue_measurement_metadata(self, sample_name: str):
         source = self.queue_measurement_source(sample_name)
         if source is None:
@@ -1472,6 +1491,8 @@ class MainWindow(QtWidgets.QMainWindow):
         leases: list[object] = []
         command_type = command.command_type
         try:
+            command_kwargs = ({'averaging_cycles': self._queue_command_avg_steps(command)}
+                              if command_type == 'Holder' else {})
             if self._queue_native_session is not None:
                 backend = self._measurement_backend
                 if command_type == 'InitUp':
@@ -1480,7 +1501,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     self._queue_advance_timer.start(0)
                     return
                 if command_type == 'Holder':
-                    action = lambda: backend.measure_queue_holder(command.hole)
+                    action = lambda: backend.measure_queue_holder(command.hole, **command_kwargs)
                 elif command_type == 'Goto':
                     action = backend.park_queue_station
                 elif command_type == 'Flip':
@@ -1515,7 +1536,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 method = getattr(self._measurement_backend, method_name, None)
                 if not callable(method):
                     raise AttributeError(f"Backend does not support required command '{method_name}'.")
-                self._start_queue_command_worker(command, lambda: method() if arg is None else method(arg), leases)
+                self._start_queue_command_worker(command, lambda: method(**command_kwargs) if arg is None else method(arg, **command_kwargs), leases)
                 leases = []  # Ownership transfers to the live worker's terminal callback.
                 return
             self._run_device_command(
@@ -1523,6 +1544,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 method_name,
                 arg,
                 required=self._is_queue_command_required(command_type),
+                kwargs=command_kwargs,
             )
             self._set_queue_position_status(command_type, command)
             self._save_queue_state()
@@ -1633,6 +1655,7 @@ class MainWindow(QtWidgets.QMainWindow):
         arg: str | int | None = None,
         *,
         required: bool,
+        kwargs: dict | None = None,
     ) -> None:
         method = getattr(backend, method_name, None)
         if method is None or not callable(method):
@@ -1647,9 +1670,9 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         if arg is None:
-            method()
+            method(**(kwargs or {}))
         else:
-            method(arg)
+            method(arg, **(kwargs or {}))
 
         self.set_flow_state("positioning")
 

@@ -20,6 +20,39 @@ RESOURCES = ('measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptib
 
 
 class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestCase):
+    def test_invalid_average_count_fails_before_root_operator_prompt_and_outputs(self):
+        before = self.store.read(), len(self.commands), len(self.vacuum_serial.writes)
+        prompts = []
+        with patch.object(QtWidgets.QMessageBox, 'critical', lambda *args: None), patch.object(
+                QtWidgets.QMessageBox, 'question', lambda *args: prompts.append(True)):
+            for count in (0, True, 32768, 2.5):
+                self.assertFalse(self.window.start_queue_run([QueueSample('S1', 'F1', 1, avg_steps=count)], QueueOptions()))
+        self.assertEqual(prompts, [])
+        self.assertEqual((self.store.read(), len(self.commands), len(self.vacuum_serial.writes)), before)
+        self.assertTrue(all(not self.window._ownership.is_owned(item) for item in RESOURCES))
+
+    def test_original_avgsteps_are_frozen_for_holder_and_measurement_handoff(self):
+        self.window.config.squid.samples_per_pos = 7
+        with self.arm_xy_edges(), patch.object(QtWidgets.QMessageBox, 'question',
+                lambda *args: QtWidgets.QMessageBox.StandardButton.Yes):
+            self.assertTrue(self.window.start_queue_run([QueueSample('S1', 'F1', 1, avg_steps=3)], QueueOptions()))
+            self.wait_for(lambda: bool(self.started), timeout=30)
+        self.assertEqual(self.holder_averages, [3])
+        self.assertEqual(self.window.queue_measurement_avg_steps('S1'), 3)
+        self.assertEqual(self.store.read()['plan']['commands']['samples'][0]['avg_steps'], 3)
+        before = len(self.commands), len(self.vacuum_serial.writes)
+        command = self.window._queue_current_command
+        command.avg_steps = 4
+        with self.assertRaisesRegex(ValueError, 'journaled queue'):
+            self.window.queue_measurement_avg_steps('S1')
+        command.avg_steps = 3
+        holder = next(item for item in self.window._queue_plan if item.command_type == 'Holder')
+        holder.avg_steps = 4
+        with self.assertRaisesRegex(ValueError, 'journaled queue'):
+            self.window.queue_measurement_avg_steps('S1')
+        self.assertEqual((len(self.commands), len(self.vacuum_serial.writes)), before)
+        holder.avg_steps = 3
+
     def test_invalid_specimen_output_blocks_before_root_operator_prompt_or_io(self):
         before = self.store.read(), len(self.commands), len(self.vacuum_serial.writes)
         prompts = []
@@ -104,7 +137,11 @@ class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestC
         self.window._sequence_labels = ['NRM']
         self.started = []
         self.holders = []
-        self.backend.measure_queue_holder = lambda marker: self.holders.append(marker)
+        self.holder_averages = []
+        def measure_holder(marker, *, averaging_cycles=None):
+            self.holders.append(marker)
+            self.holder_averages.append(averaging_cycles)
+        self.backend.measure_queue_holder = measure_holder
         self.window._measurement = SimpleNamespace(is_active=lambda: False, halt_run=lambda: None,
             start_measurement_for_sample=self.start_measurement)
         self.backend._operator, self.backend._treatment_label = '', ''

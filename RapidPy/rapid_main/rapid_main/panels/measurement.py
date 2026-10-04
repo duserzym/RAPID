@@ -9,6 +9,7 @@ from typing import Optional
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from rapid_main.analysis import ReadingCycleStatistics, reading_cycle_statistics
+from rapid_main.queue_compiler import validate_average_count
 from rapid_main.calibration_registry import CalibrationRegistry, CalibrationRegistryError
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.specimen_metadata import resolve_specimen_meta, validate_specimen_provenance
@@ -528,9 +529,12 @@ class MeasurementPanel(QtWidgets.QWidget):
         queue_source = None
         queue_metadata = None
         queue_provenance = None
+        queue_averages = 1
         if queue_run and hasattr(mw, 'queue_measurement_labels'):
             try:
                 labels = mw.queue_measurement_labels(sample)
+                if hasattr(mw, 'queue_measurement_avg_steps'):
+                    queue_averages = validate_average_count(mw.queue_measurement_avg_steps(sample))
                 if hasattr(mw, 'queue_measurement_source'):
                     queue_source = mw.queue_measurement_source(sample)
                 if hasattr(mw, 'queue_measurement_metadata'):
@@ -634,7 +638,7 @@ class MeasurementPanel(QtWidgets.QWidget):
             output_dir=run_output_dir,
             backend=backend,
             operator=op,
-            samples_per_position=max(
+            samples_per_position=queue_averages if queue_run else max(
                 1,
                 int(getattr(getattr(cfg, "squid", None), "samples_per_pos", 1)),
             ),

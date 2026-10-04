@@ -168,3 +168,27 @@ Tuple-only steps clear earlier block quality and preserve their existing behavio
 The explicit historical exact-alignment Fischer convention still requires
 scientific acceptance. This supports current repeated cycles; durable per-step
 Up artifacts, queue AvgSteps and cross-run Up/Down assimilation remain unfinished.
+
+Queue files now carry `avg_steps` (AvgSteps), a positive VB6 signed-16-bit count
+of complete accepted acquisition blocks per treatment. The queue table adds this
+field after the existing columns; Add Sample and File Settings expose it. File
+Settings applies the count to every row of the selected source index, retaining
+independent counts for different indexes even when display names match. Rows of
+one file must agree on count as well as sequence/orientation. Missing fields in
+older queue rows default to one; explicit invalid/blank/boolean/fractional counts
+are rejected. Nondefault counts survive JSON/CSV/session persistence.
+
+Each Meas command carries its file count, including a duplicated Down command.
+All initial/periodic/second-pass Holder commands carry the largest queued file
+count, matching VB6 maxAvgSteps. Native Root serialization includes these counts;
+MainWindow validates the original command and full frozen plan at handoff. The
+measurement panel supplies the file count to the worker instead of global SQUID
+averaging. Native/legacy holder backends accept the explicit queue count and
+reuse the atomic multi-block holder replacement service without changing accepted
+station settings. Manual measurement retains its configured global count.
+
+This migrates count configuration/handoff, not the remaining durable per-step
+.UP/eligibility/Up-Down publication workflow. Holder collection metadata/quality
+still needs complete scientific acceptance: the existing service averages holder
+positions but derives several quality/audit fields from its last constituent
+block. The complete source/artifact/orientation/format and physical gates remain.

@@ -1975,3 +1975,43 @@ AvgSteps/.UP integration/progress/eligibility, original-stage restart recovery,
 standalone provenance/orientation/format acceptance, chain/auxiliary functions,
 portable distribution and performance gates remain required. The full-system
 goal remains active.
+
+Per-file AvgSteps checkpoint: positive VB6 signed-16-bit counts are validated
+before queue/native admission and must agree within a file. Queue editing, Add
+Sample, per-source File Settings, JSON/CSV and session restore preserve counts;
+older missing fields default to one, while explicit malformed counts fail closed.
+Meas/second-side commands retain their file count; every initial/periodic/second-
+pass holder uses the maximum queued count as VB6 maxAvgSteps. Native Root command
+serialization protects these counts. Original-command/full-plan checks precede
+measurement handoff and native holder action; the panel passes its file count to
+the worker instead of the global count. Holder services receive the count without
+mutating accepted station settings, and install only after all blocks validate.
+Manual measurement retains its global averaging setting.
+
+Focused runs exited normally: six count/format/UI cases (1.765 seconds), 19 panel
+cases (5.473 seconds), six holder-coordinator cases (16.718 seconds), 12 queue
+orchestration cases (5.123 seconds), 29 compiler/bundle cases (3.066 seconds),
+and 18 native MainWindow cases (163.300 seconds). Injected native cases cover
+multiple holder blocks, original Root count checks and invalid-count rejection
+before operator prompts/root/output/ownership. One initial holder fixture changed
+accepted settings after binding; the native identity guard correctly rejected it,
+and the corrected case preserves accepted settings and supplies count explicitly.
+Compilation/diff checks passed; full regression verification is underway.
+
+Durable per-step .UP/progress/eligibility and Up/Down publication remain required.
+The existing holder service averages positions but some quality/audit fields
+still come from the last block, requiring collection evidence/scientific acceptance.
+Scientific orientation/format acceptance, original-stage restart recovery,
+standalone provenance, chain/auxiliary functions, portable/performance and physical
+qualification remain open. The full-system goal remains active.
+
+Final AvgSteps verification: all 1,262 tests passed in 569.657 seconds and the
+owned process exited normally with code 0 after deferred Qt deletion, application
+shutdown and explicit Python watchdog stop. Six-panel source smoke, compilation
+and staged diff checks passed. This full run covers count editing/persistence,
+compiler holder maxima, frozen native handoff and repeated owned holder blocks
+with existing queue/integrity/lifecycle regressions. Tests inject instrument
+interfaces; physical/scientific station qualification remains unproven. The
+remaining .UP/progress/eligibility, holder collection evidence, recovery,
+scientific/standalone, chain/auxiliary and portable/performance gates remain open.
+The full-system goal remains active.

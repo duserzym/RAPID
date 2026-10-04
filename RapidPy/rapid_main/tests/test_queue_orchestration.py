@@ -45,7 +45,7 @@ class _QueueOnlyBackend:
         if self._with_queue:
             self.calls.append(("init_up", file_id))
 
-    def holder(self, hole: int) -> None:
+    def holder(self, hole: int, *, averaging_cycles: int | None = None) -> None:
         if self._with_queue:
             self.calls.append(("holder", hole))
 

@@ -126,18 +126,35 @@ class TestMeasurementPanelHelpers(unittest.TestCase):
         panel = MeasurementPanel(window)
         window._sequence_labels = ['IRM100']
         window.queue_measurement_labels = lambda sample: ['NRM', 'SUSC']
+        window.queue_measurement_avg_steps = lambda sample: 3
         window.measurement_backend = lambda: NoCommBackend()
         with tempfile.TemporaryDirectory() as directory:
             window.config = AppConfig()
             window.config.general.data_dir = directory
             window.config.general.sample_dir = directory
+            window.config.squid.samples_per_pos = 7
             with patch.object(MeasurementWorker, 'start', lambda worker: None):
                 self.assertTrue(panel.start_measurement_for_sample('A', queue_run=True))
             self.assertEqual(panel._worker._labels, ['NRM', 'SUSC'])
+            self.assertEqual(panel._worker._samples_per_position, 3)
             panel._on_step_started(1, 'SUSC')
             self.assertEqual(panel._meas_step.text(), '2 / 2')
             self.assertEqual(window._sequence_labels, ['IRM100'])
         window.deleteLater()
+
+    def test_invalid_queue_average_count_creates_no_worker_or_ownership(self):
+        window = QtWidgets.QMainWindow()
+        self.addCleanup(self._dispose_window, window)
+        panel = MeasurementPanel(window)
+        window.queue_measurement_labels = lambda sample: ['NRM']
+        window.queue_measurement_avg_steps = lambda sample: True
+        statuses, acquired = [], []
+        window.set_status = statuses.append
+        panel._acquire_ownerships = lambda *args, **kwargs: acquired.append(True)
+        self.assertFalse(panel.start_measurement_for_sample('A', queue_run=True))
+        self.assertIsNone(panel._worker)
+        self.assertEqual(acquired, [])
+        self.assertIn('AvgSteps', statuses[-1])
 
     def test_invalid_queue_handoff_creates_no_worker_or_device_lease(self):
         window = QtWidgets.QMainWindow()

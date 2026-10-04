@@ -10,11 +10,11 @@ from pathlib import Path
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from rapid_main.printing import print_widget_snapshot
-from rapid_main.queue_compiler import QueueOptions, QueueSample, validate_queue_samples
+from rapid_main.queue_compiler import QueueOptions, QueueSample, validate_queue_samples, validate_average_count
 
 
 # Sample table column definitions
-_COLS = ["#", "Position", "Sample Name", "Sample Set", "Treatment Steps", "Status", "Index File", "Orientation", "Both Sides"]
+_COLS = ["#", "Position", "Sample Name", "Sample Set", "Treatment Steps", "Status", "Index File", "Orientation", "Both Sides", "AvgSteps"]
 _QUEUE_FILE_SCHEMA = "rapidpy.sample_queue.v1"
 
 
@@ -133,6 +133,7 @@ class SampleQueuePanel(QtWidgets.QWidget):
         self._table.horizontalHeader().setSectionResizeMode(6, QtWidgets.QHeaderView.ResizeMode.Fixed)
         self._table.setColumnWidth(6, 220)
         self._table.horizontalHeaderItem(8).setToolTip('Adds a Down pass after Up for a one-step file. Starting Down runs only Down.')
+        self._table.horizontalHeaderItem(9).setToolTip('Complete accepted acquisition blocks per treatment. The holder uses the largest file count.')
         self._table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.setEditTriggers(QtWidgets.QAbstractItemView.DoubleClicked)
@@ -169,10 +170,10 @@ class SampleQueuePanel(QtWidgets.QWidget):
         self._set_status(row, status)
         self._set_file_settings(row)
 
-    def _set_file_settings(self, row: int, source_file: str = '', orientation: str = 'Up', both_sides: str = 'No') -> None:
-        for column, value in zip((6, 7, 8), (source_file, orientation, both_sides)):
+    def _set_file_settings(self, row: int, source_file: str = '', orientation: str = 'Up', both_sides: str = 'No', avg_steps: str = '1') -> None:
+        for column, value in zip((6, 7, 8, 9), (source_file, orientation, both_sides, str(avg_steps))):
             item = QtWidgets.QTableWidgetItem(value)
-            item.setToolTip(value if column == 6 else ('Up or Down' if column == 7 else 'Yes or No'))
+            item.setToolTip(value if column == 6 else ('Up or Down' if column == 7 else ('Yes or No' if column == 8 else 'Complete acquisition blocks: 1 to 32767')))
             self._table.setItem(row, column, item)
 
     def _insert_sample_row(
@@ -187,6 +188,7 @@ class SampleQueuePanel(QtWidgets.QWidget):
         source_file: str = '',
         do_up: bool = True,
         do_both: bool = False,
+        avg_steps: int = 1,
     ) -> None:
         row = max(0, min(int(row), self._table.rowCount()))
         self._table.insertRow(row)
@@ -197,7 +199,7 @@ class SampleQueuePanel(QtWidgets.QWidget):
                 item.setTextAlignment(QtCore.Qt.AlignCenter)
             self._table.setItem(row, col, item)
         self._set_status(row, status)
-        self._set_file_settings(row, source_file, 'Up' if do_up else 'Down', 'Yes' if do_both else 'No')
+        self._set_file_settings(row, source_file, 'Up' if do_up else 'Down', 'Yes' if do_both else 'No', str(avg_steps))
         self._renumber_rows()
 
     def _add_sample_dialog(self, *, insert_at: int | None = None) -> bool:
@@ -213,6 +215,8 @@ class SampleQueuePanel(QtWidgets.QWidget):
         orientation = QtWidgets.QComboBox()
         orientation.addItems(['Up', 'Down'])
         both_sides = QtWidgets.QCheckBox('Add a Down pass after Up (one step)')
+        averages = QtWidgets.QSpinBox()
+        averages.setRange(1, 32767)
         form.addRow("Changer position", position)
         form.addRow("Sample name", name)
         form.addRow("Sample set", sample_set)
@@ -220,6 +224,7 @@ class SampleQueuePanel(QtWidgets.QWidget):
         form.addRow('Index file (optional)', source_file)
         form.addRow('Initial orientation', orientation)
         form.addRow('', both_sides)
+        form.addRow('AvgSteps (blocks per treatment)', averages)
         buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Ok
             | QtWidgets.QDialogButtonBox.StandardButton.Cancel
@@ -246,6 +251,7 @@ class SampleQueuePanel(QtWidgets.QWidget):
             source_file=source_file.text().strip(),
             do_up=orientation.currentText() == 'Up',
             do_both=both_sides.isChecked(),
+            avg_steps=averages.value(),
         )
         return True
 
@@ -260,10 +266,12 @@ class SampleQueuePanel(QtWidgets.QWidget):
         source_file: str = '',
         do_up: bool = True,
         do_both: bool = False,
+        avg_steps: int = 1,
     ) -> int:
         """Add a validated operator-selected specimen and return its row."""
 
         clean_position = position.strip()
+        validate_average_count(avg_steps)
         clean_name = name.strip()
         if type(do_up) is not bool or type(do_both) is not bool:
             raise ValueError('Orientation settings must be explicit booleans.')
@@ -276,7 +284,7 @@ class SampleQueuePanel(QtWidgets.QWidget):
             name=clean_name,
             sample_set=sample_set.strip(),
             treatment=treatment.strip() or "NRM",
-            source_file=source_file.strip(), do_up=do_up, do_both=do_both,
+            source_file=source_file.strip(), do_up=do_up, do_both=do_both, avg_steps=avg_steps,
         )
         return max(0, min(row, self._table.rowCount() - 1))
 
@@ -400,8 +408,15 @@ class SampleQueuePanel(QtWidgets.QWidget):
         orientation.setCurrentText(self._safe_cell(row, 7) or 'Up')
         both = QtWidgets.QCheckBox('Add a Down pass after Up (one step)', dialog)
         both.setChecked(self._safe_cell(row, 8) == 'Yes')
+        averages = QtWidgets.QSpinBox(dialog)
+        averages.setRange(1, 32767)
+        try:
+            averages.setValue(_parse_avg_steps(self._safe_cell(row, 9)))
+        except ValueError:
+            averages.setValue(1)
         form.addRow('Initial orientation', orientation)
         form.addRow('', both)
+        form.addRow('AvgSteps (blocks per treatment)', averages)
         buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel, dialog)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
@@ -410,7 +425,7 @@ class SampleQueuePanel(QtWidgets.QWidget):
             return False
         for index in range(self._table.rowCount()):
             if identity(index) == key:
-                self._set_file_settings(index, self._safe_cell(index, 6), orientation.currentText(), 'Yes' if both.isChecked() else 'No')
+                self._set_file_settings(index, self._safe_cell(index, 6), orientation.currentText(), 'Yes' if both.isChecked() else 'No', str(averages.value()))
         return True
 
     def _delete_row_span(self, start: int, count: int) -> None:
@@ -616,6 +631,9 @@ class SampleQueuePanel(QtWidgets.QWidget):
             source_file, orientation, both_sides = (self._safe_cell(row, column) for column in (6, 7, 8))
             if source_file or orientation not in {'', 'Up'} or both_sides not in {'', 'No'}:
                 rows[-1].update(source_file=source_file, orientation=orientation, both_sides=both_sides)
+            averages = self._safe_cell(row, 9)
+            if averages != '1':
+                rows[-1]['avg_steps'] = averages
             number = self._table.item(row, 0)
             if number is not None and number.data(QtCore.Qt.UserRole):
                 rows[-1]['row_id'] = number.data(QtCore.Qt.UserRole)
@@ -643,7 +661,8 @@ class SampleQueuePanel(QtWidgets.QWidget):
             self._set_file_settings(self._table.rowCount() - 1,
                 self._safe_cell_from_map(row, 'source_file', ''),
                 self._safe_cell_from_map(row, 'orientation', 'Up') or 'Up',
-                self._safe_cell_from_map(row, 'both_sides', 'No') or 'No')
+                self._safe_cell_from_map(row, 'both_sides', 'No') or 'No',
+                self._safe_cell_from_map(row, 'avg_steps', '1'))
             if row.get('row_id'):
                 self._table.item(self._table.rowCount() - 1, 0).setData(QtCore.Qt.UserRole, row['row_id'])
         self._renumber_rows()
@@ -790,14 +809,14 @@ def write_queue_file(path: Path | str, rows: list[dict[str, str]]) -> Path:
         destination = destination.with_suffix(".json")
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.name + ".tmp")
-    fields = ("position", "sample_name", "sample_set", "treatment", "status", "source_file", "orientation", "both_sides", "row_id")
+    fields = ("position", "sample_name", "sample_set", "treatment", "status", "source_file", "orientation", "both_sides", "row_id", "avg_steps")
     try:
         if destination.suffix.lower() == ".csv":
             with temporary.open("w", encoding="utf-8", newline="") as handle:
                 writer = csv.DictWriter(handle, fieldnames=fields)
                 writer.writeheader()
                 for row in rows:
-                    writer.writerow({field: str(row.get(field, "")) for field in fields})
+                    writer.writerow({field: str(row.get(field, '1' if field == 'avg_steps' else "")) for field in fields})
         else:
             temporary.write_text(
                 json.dumps(
@@ -843,6 +862,10 @@ def read_queue_file(path: Path | str) -> list[dict[str, str]]:
             value = str(raw.get(field, '') or '').strip()
             if value:
                 row[field] = value
+        if 'avg_steps' in raw:
+            averages = _parse_avg_steps(raw['avg_steps'])
+            if averages != 1:
+                row['avg_steps'] = str(averages)
         rows.append(row)
     return rows
 
@@ -852,6 +875,14 @@ def _vline() -> QtWidgets.QFrame:
     f.setFrameShape(QtWidgets.QFrame.VLine)
     f.setStyleSheet("color: rgba(122,2,25,0.18); margin: 8px 2px;")
     return f
+
+
+def _parse_avg_steps(value: object) -> int:
+    if type(value) is int:
+        return validate_average_count(value)
+    if not isinstance(value, str) or not re.fullmatch(r'[1-9]\d*', value.strip()):
+        raise ValueError('AvgSteps must be an integer from 1 to 32767.')
+    return validate_average_count(int(value.strip()))
 
 
 def _parse_hole(position_text: str) -> tuple[int | None, str | None]:
@@ -927,6 +958,11 @@ def _read_queue_rows(table: QtWidgets.QTableWidget) -> tuple[list[QueueSample], 
         sample_set = _cell(3) or "SampleSet"
         treatment = _cell(4)
         source_file, orientation, both_sides = _cell(6), _cell(7) or 'Up', _cell(8) or 'No'
+        try:
+            averages = _parse_avg_steps(_cell(9) if table.columnCount() > 9 else '1')
+        except ValueError as exc:
+            errors.append(f'row {row_no}: {exc}')
+            continue
         if orientation not in {'Up', 'Down'} or both_sides not in {'Yes', 'No'}:
             errors.append(f'row {row_no}: orientation must be Up/Down and Both Sides must be Yes/No')
             continue
@@ -967,6 +1003,7 @@ def _read_queue_rows(table: QtWidgets.QTableWidget) -> tuple[list[QueueSample], 
                 measurement_labels=labels,
                 source_file=str(Path(source_file).resolve()) if source_file else '',
                 row_id=row_id,
+                avg_steps=averages,
             )
         )
 
