@@ -14,6 +14,7 @@ from rapid_main.app import (
     _QSETTINGS_QUEUE_RESUME_POS,
 )
 from rapid_main.hardware_contracts import PreflightResult
+from rapid_main.config import AppConfig
 from rapid_main.queue_compiler import QueueCommand, QueueOptions, QueueSample
 
 
@@ -193,6 +194,15 @@ class QueueOrchestrationTest(unittest.TestCase):
     def setUp(self) -> None:
         settings = QtCore.QSettings("RAPID", "RapidPy-rapid_main")
         settings.clear()
+        # Queue orchestration uses injected command/SQUID fakes. Its vacuum
+        # fixture must be explicit rather than depending on another test's
+        # persisted NoComm settings or native startup output state.
+        config = AppConfig()
+        config.general.nocomm = True
+        config.vacuum.auto_pump = True
+        loader = patch.object(AppConfig, 'load', return_value=config)
+        loader.start()
+        self.addCleanup(loader.stop)
 
     def _run_single_sample_queue(self, backend: object, *, nocomm: bool) -> tuple[MainWindow, _MeasurementStub, _QueueOnlyBackend]:
         mw = MainWindow()

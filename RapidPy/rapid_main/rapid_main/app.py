@@ -63,6 +63,7 @@ from .panels import (
     SettingsPanel,
 )
 from .queue_compiler import QueueCommand, QueueOptions, QueueSample, compile_queue
+from .queue_command_worker import QueueCommandWorker
 from .package_launch import ToolUnavailableError, resolve_tool_launch
 from .runtime_estimator import RuntimeEstimator
 from .vrm import (
@@ -438,6 +439,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._queue_last_warnings: list[str] = []
         self._queue_paused: bool = False
         self._queue_lease: object | None = None
+        self._queue_command_thread = self._queue_command_worker = None
+        self._queue_command_leases = []
+        self._queue_worker_command = None
+        self._queue_pending_finalize = None
+        self._queue_settle_timer = QtCore.QTimer(self)
+        self._queue_settle_timer.setSingleShot(True)
+        self._queue_settle_timer.timeout.connect(self._queue_command_settled)
+        self._queue_advance_timer = QtCore.QTimer(self)
+        self._queue_advance_timer.setSingleShot(True)
+        self._queue_advance_timer.timeout.connect(self._run_next_queue_command)
         self._workflow_state = "idle"
         self._current_step = "—"
         self._current_treatment = "—"
@@ -923,7 +934,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         Validation is intentionally strict for safety and queue automation.
         """
-        if self._queue_active:
+        if self._queue_active or self._queue_command_thread is not None:
             self.set_status("Queue run is already active.")
             return False
 
@@ -1040,7 +1051,27 @@ class MainWindow(QtWidgets.QMainWindow):
         clear_command: bool = True,
     ) -> None:
         """Set a stable terminal queue state and persist state/ownership."""
+        if (getattr(self._measurement_backend, 'queue_commands_require_worker', False) is True
+                and self._measurement.is_active()):
+            self._queue_pending_finalize = dict(state=state, reason=reason, return_to_safe=return_to_safe,
+                clear_plan=clear_plan, clear_current=clear_current, clear_command=clear_command)
+            self._measurement.halt_run()
+            self.set_status('Queue is waiting for acquisition cleanup before terminal recovery.')
+            return
+        if self._queue_command_thread is not None:
+            self._queue_pending_finalize = dict(state=state, reason=reason, return_to_safe=False,
+                clear_plan=clear_plan, clear_current=clear_current, clear_command=clear_command)
+            self._queue_command_worker.stop()
+            self.set_status('Queue is waiting for its active hardware command and terminal recovery.')
+            return
         if return_to_safe:
+            backend = self._measurement_backend
+            cleanup = getattr(backend, 'return_to_safe_state', None)
+            if getattr(backend, 'queue_commands_require_worker', False) is True and callable(cleanup):
+                self._queue_pending_finalize = dict(state=state, reason=reason, return_to_safe=False,
+                    clear_plan=clear_plan, clear_current=clear_current, clear_command=clear_command)
+                self._start_queue_command_worker(None, cleanup, [], recover_on_error=False)
+                return
             self._return_queue_to_safe_state()
 
         self._queue_active = False
@@ -1066,6 +1097,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def cancel_queue_run(self, reason: str = "Queue cancelled.") -> None:
         """Cancel active queue automation while leaving controls in a safe state."""
         self._queue_paused = False
+        if self._queue_command_thread is not None:
+            self._finalize_queue_run('idle', reason=reason, return_to_safe=False)
+            return
         if not self._queue_active:
             self._release_queue_lease()
             return
@@ -1074,10 +1108,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self._measurement.halt_run()
         if self._queue_current_sample:
             self._sample_queue.set_queue_sample_failed(self._queue_current_sample)
-        self._return_queue_to_safe_state()
-        self._finalize_queue_run("idle", reason=reason, return_to_safe=False)
+        self._finalize_queue_run("idle", reason=reason, return_to_safe=True)
 
     def _run_next_queue_command(self) -> None:
+        if self._queue_command_thread is not None:
+            return
         if not self._queue_active:
             return
         if self._queue_paused:
@@ -1186,6 +1221,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 arg = None
             else:
                 raise ValueError(f"Unsupported queue command '{command_type}'.")
+            if getattr(self._measurement_backend, 'queue_commands_require_worker', False) is True:
+                method = getattr(self._measurement_backend, method_name, None)
+                if not callable(method):
+                    raise AttributeError(f"Backend does not support required command '{method_name}'.")
+                self._start_queue_command_worker(command, lambda: method() if arg is None else method(arg), leases)
+                leases = []  # Ownership transfers to the live worker's terminal callback.
+                return
             self._run_device_command(
                 self._measurement_backend,
                 method_name,
@@ -1213,6 +1255,57 @@ class MainWindow(QtWidgets.QMainWindow):
                     lease.release()
                 except Exception:
                     pass
+
+    def _start_queue_command_worker(self, command, action, leases, *, recover_on_error=True):
+        if self._queue_command_thread is not None:
+            raise RuntimeError('Another queue hardware command has not settled.')
+        worker = QueueCommandWorker(self._measurement_backend, action, recover_on_error=recover_on_error)
+        thread = QtCore.QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.settled.connect(worker.deleteLater)
+        worker.settled.connect(thread.quit)
+        thread.finished.connect(self._queue_command_settled)
+        self._queue_command_worker, self._queue_command_thread = worker, thread
+        self._queue_worker_command = command
+        self._queue_command_leases = list(leases)
+        self.set_flow_state('positioning')
+        label = command.command_type if command is not None else 'terminal recovery'
+        self.set_status(f'Queue {label} running; waiting for hardware completion.')
+        thread.start()
+
+    @QtCore.Slot()
+    def _queue_command_settled(self):
+        if self._queue_command_thread is not None and self._queue_command_thread.isRunning():
+            self._queue_settle_timer.start(10)
+            return
+        self._queue_settle_timer.stop()
+        worker, command = self._queue_command_worker, self._queue_worker_command
+        if worker is None:
+            return
+        if self._queue_command_thread is not None:
+            self._queue_command_thread.deleteLater()
+        self._queue_command_thread = self._queue_command_worker = None
+        self._queue_worker_command = None
+        for lease in reversed(self._queue_command_leases):
+            lease.release()
+        self._queue_command_leases = []
+        pending, self._queue_pending_finalize = self._queue_pending_finalize, None
+        if pending is not None:
+            if worker.error:
+                pending['reason'] = (pending.get('reason') or 'Queue stopped') + ': ' + worker.error
+            if 'recovery remains unverified' in worker.error or command is None and not worker.ok:
+                pending['state'] = 'error'
+            self._finalize_queue_run(**pending)
+        elif not worker.ok:
+            self._finalize_queue_run('error', reason=f'Queue {command.command_type} failed: {worker.error}', return_to_safe=False)
+        else:
+            self._set_queue_position_status(command.command_type, command)
+            self._save_queue_state()
+            if self._queue_paused:
+                self.set_flow_state('paused')
+            else:
+                self._queue_advance_timer.start(0)
 
     def _run_device_command(
         self,
@@ -1329,13 +1422,17 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_queue_sample_finished(self, aborted: bool, sample: str) -> None:
         if not self._queue_active:
             return
+        if self._queue_pending_finalize is not None and self._queue_command_thread is None:
+            pending, self._queue_pending_finalize = self._queue_pending_finalize, None
+            self._sample_queue.set_queue_sample_failed(sample)
+            self._finalize_queue_run(**pending)
+            return
         had_error = (
             self._measurement.take_last_run_error()
             if hasattr(self._measurement, "take_last_run_error")
             else False
         )
         if aborted:
-            self._return_queue_to_safe_state()
             self._sample_queue.set_queue_sample_failed(sample)
             self._finalize_queue_run("halted", reason=f"Queue stopped after sample {sample}.")
             return
@@ -2098,7 +2195,7 @@ class MainWindow(QtWidgets.QMainWindow):
         measurement_active = bool(
             hasattr(self._measurement, "is_active") and self._measurement.is_active()
         )
-        return measurement_active or bool(self._queue_active)
+        return measurement_active or bool(self._queue_active) or self._queue_command_thread is not None
 
     def _confirm_shutdown(self, *, prompt: bool = True, on_close: bool = False) -> bool:
         """Prompt the operator to confirm shutdown and safely halt active workflow."""
@@ -2800,7 +2897,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cancel_queue_run("Queue halted by user.")
 
     def _on_header_pause(self) -> None:
-        if hasattr(self._measurement, "is_active") and self._measurement.is_active():
+        if self._queue_active or (hasattr(self._measurement, "is_active") and self._measurement.is_active()):
             self.toggle_queue_pause()
         else:
             self.set_status("No active measurement to pause.")

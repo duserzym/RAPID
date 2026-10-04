@@ -992,7 +992,7 @@ class DCMotorDialog(QtWidgets.QDialog):
     @QtCore.Slot()
     def _resume_close(self):
         if self._close_after_cleanup:
-            if ((self._command_thread is not None and self._command_thread.isRunning())
+            if (self._command_thread is not None
                     or self._telemetry_thread.isRunning() or getattr(self._backend, 'operation_active', False) is True):
                 self._close_timer.start(100)
             else:
@@ -1243,7 +1243,7 @@ class DCMotorDialog(QtWidgets.QDialog):
         self._plot_timer.stop()
         self._stop_command()
         self._telemetry_thread.stop_monitoring()
-        if ((self._command_thread is not None and self._command_thread.isRunning())
+        if (self._command_thread is not None
                 or self._telemetry_thread.isRunning() or getattr(self._backend, 'operation_active', False) is True):
             event.ignore()
             self._close_timer.start(100)

@@ -317,6 +317,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
     and every measurement path raises rather than inventing a value.
     """
 
+    queue_commands_require_worker = True
     preflight_timeout: float | None = 12.0
     # Physical multi-pass ramps and motion are bounded by their adapters.
     # An outer worker timeout cannot cancel those calls or safely interrupt
@@ -331,7 +332,10 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
     # thread timeout cannot cancel that physical I/O, so cancellation is
     # cooperative through ``set_halt_check`` instead.
     susceptibility_timeout: float | None = None
-    return_timeout: float | None = 20.0
+    # Run bounded native cleanup directly in the measurement worker. An outer
+    # timeout/halt wrapper cannot cancel recovery and can report a failed return
+    # solely because Halt was requested, even after the native cleanup succeeds.
+    return_timeout: float | None = None
 
     def __init__(
         self,
@@ -499,6 +503,10 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         """Install the operator-halt probe used between acquisition phases."""
 
         self._halt_check = check
+        if getattr(self, '_client', None) is not None:
+            self._client._motion_cancel_check = check
+        if getattr(self, '_bracketed', None) is not None:
+            self._bracketed._service.set_cancel_check(check)
 
     @property
     def af_treatment_records(self):
@@ -1247,6 +1255,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                     measurement_position=positions.measurement_position(),
                 ),
                 clock=self._acquisition_clock,
+                cancel_check=self._halt_check,
             )
         except Exception as exc:
             self._acquisition_error = str(exc)

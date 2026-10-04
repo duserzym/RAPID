@@ -149,6 +149,10 @@ class MeasurementPanel(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._worker: Optional[MeasurementWorker] = None
+        self._pending_run_finished: bool | None = None
+        self._worker_settle_timer = QtCore.QTimer(self)
+        self._worker_settle_timer.setSingleShot(True)
+        self._worker_settle_timer.timeout.connect(self._settle_measurement_worker)
         self._leases: list[object] = []
         self._current_sample = "UNKNOWN"
         self._current_depth = "—"
@@ -631,6 +635,7 @@ class MeasurementPanel(QtWidgets.QWidget):
         self._worker.step_started.connect(self._on_step_started)
         self._worker.step_complete.connect(self._on_step_complete)
         self._worker.run_finished.connect(self._on_run_finished)
+        self._worker.finished.connect(self._settle_measurement_worker)
         self._worker.preflight_warning.connect(self._on_preflight_warning)
         self._worker.error_occurred.connect(self._on_error)
         self._worker.phase_changed.connect(self._on_phase_changed)
@@ -652,7 +657,7 @@ class MeasurementPanel(QtWidgets.QWidget):
 
     def is_active(self) -> bool:
         """Whether a worker exists and is currently running or paused."""
-        return self._worker is not None and self._worker.isRunning()
+        return self._worker is not None
 
     def _on_pause(self) -> None:
         if self._worker is not None:
@@ -925,7 +930,21 @@ class MeasurementPanel(QtWidgets.QWidget):
 
     @QtCore.Slot(bool)
     def _on_run_finished(self, aborted: bool) -> None:
+        self._pending_run_finished = aborted
+        self._settle_measurement_worker()
+
+    @QtCore.Slot()
+    def _settle_measurement_worker(self) -> None:
+        if self._pending_run_finished is None:
+            return
+        if self._worker is not None and self._worker.isRunning():
+            self._worker_settle_timer.start(10)
+            return
+        self._worker_settle_timer.stop()
+        aborted, self._pending_run_finished = self._pending_run_finished, None
         sample_name = self._current_sample
+        if self._worker is not None:
+            self._worker.deleteLater()
         self._worker = None
         self._pause_btn.setText("⏸  Pause Run")
         self._release_measurement_ownership()
@@ -948,7 +967,6 @@ class MeasurementPanel(QtWidgets.QWidget):
     @QtCore.Slot(str)
     def _on_error(self, msg: str) -> None:
         self._last_run_error = True
-        self._release_measurement_ownership()
         QtWidgets.QMessageBox.critical(self, "Measurement Error", msg)
 
     def take_last_run_error(self) -> bool:

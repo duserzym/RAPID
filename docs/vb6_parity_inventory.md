@@ -317,3 +317,15 @@ replay, premature cancellation, short targets, asynchronous settling, child clos
 and parent-window shutdown. Compact safety actions stay outside Controls and Feedback
 and Plots tabs. See `docs/motor-diagnostic-safety.md`. Physical direction, clearance,
 limits, torque, timing and transfer acceptance remain open.
+
+### Main queue worker lifecycle evidence — 3 October 2026
+
+Native Init-Up, Holder, Goto and Flip dispatch and terminal recovery run outside
+the GUI thread. Halt retains device ownership until native cleanup and thread
+termination; Pause/Resume cannot advance an in-flight command. Measurement ownership
+also persists beyond early completion/error signals until actual worker exit.
+Bracketed settling and final-read cancellation reject incomplete blocks without
+transport retry. `test_queue_command_worker.py` and `test_acquisition.py` cover these
+boundaries with injected interfaces. See `docs/queue-worker-lifecycle.md`. Queue
+vacuum coordination, durable ordinary acquisition/motion recovery and physical
+station acceptance remain open.

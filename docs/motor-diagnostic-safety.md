@@ -81,3 +81,8 @@ The Up/Down helper and integrated main vacuum panel have vacuum/gripper lifetime
 ownership. Other motor/direct diagnostics, durable main-app non-treatment motion
 and acquisition recovery, calibration/probe tooling, the portable rebuild and
 physical/scientific station acceptance remain required full-system work.
+
+Native main queue commands and terminal recovery now run in workers with ownership
+retained through actual thread termination. Acquisition completion and errors cannot
+release leases early or overlap queue recovery. See `queue-worker-lifecycle.md` for
+cancellation checks, regression evidence and the remaining queue vacuum coordinator.

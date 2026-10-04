@@ -1,6 +1,7 @@
 """Run the main-app suite without changing operator settings or registry state."""
 from pathlib import Path
 import argparse
+import faulthandler
 import os
 import sys
 import tempfile
@@ -15,7 +16,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--pattern', default='test*.py', help='Unittest discovery filename pattern')
+    parser.add_argument('--verbose', action='store_true', help='Print each test name for diagnosing stalled runs')
+    parser.add_argument('--stall-trace', action='store_true', help='Dump thread stacks after a minute without suite completion')
     args = parser.parse_args()
+    if args.stall_trace:
+        faulthandler.dump_traceback_later(60, repeat=True)
     from PySide6 import QtCore
     with tempfile.TemporaryDirectory(prefix="rapidpy-tests-") as directory:
         os.environ["RAPID_CONFIG"] = str(Path(directory) / "config.json")
@@ -31,7 +36,7 @@ def main() -> int:
                     super().__init__(*args, **kwargs)
         QtCore.QSettings = IsolatedSettings
         suite = unittest.defaultTestLoader.discover(str(ROOT / "RapidPy" / "rapid_main" / "tests"), pattern=args.pattern)
-        return 0 if unittest.TextTestRunner(verbosity=1).run(suite).wasSuccessful() else 1
+        return 0 if unittest.TextTestRunner(verbosity=2 if args.verbose else 1).run(suite).wasSuccessful() else 1
 
 if __name__ == "__main__":
     raise SystemExit(main())

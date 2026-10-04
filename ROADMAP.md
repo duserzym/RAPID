@@ -1055,3 +1055,30 @@ shared vacuum/transport tests pass (18 tests), and six-panel/six-helper source s
 passes. The actual native dialog was rendered with an injected transport at 360x520
 inside a 1280x720 work area; unverified and commanded-held views were inspected.
 No physical instruments were actuated. The portable pilot still requires rebuilding.
+
+### 3 October 2026 — Native queue worker and acquisition ownership checkpoint
+
+Native Init-Up, Holder, Goto and Flip commands and terminal queue recovery now run
+in Qt workers. Halt retains both command and queue ownership until native cleanup
+and actual thread exit. Pause/Resume cannot advance a live command, and parent
+shutdown waits for automation cleanup. Measurement completion/error signals retain
+ownership until the acquisition worker exits, so queue recovery cannot overlap it.
+Native bracketed settling checks cancellation every 50 ms and a cancelled final
+SQUID read cannot return a completed block or become a retryable transport error.
+Native measurement recovery runs directly rather than through an outer halt/timeout
+wrapper. DC Motors closure also waits for its terminal callback to clear ownership,
+including the stopped-thread/queued-callback interval.
+
+Verification: 855 isolated tests pass in 126.241 seconds. Seven queue worker and
+acquisition handoff regressions, 27 bracketed acquisition tests and 16 integrated
+DC motor safety tests pass. Six-panel/six-helper source smoke passes. Queue fixture
+configuration is now explicit and the test harness has optional per-test output and
+stall stack tracing. See docs/queue-worker-lifecycle.md. No physical instruments
+were actuated.
+
+The full-system goal remains active. Live queue vacuum coordination is a required
+integration gap: an existing diagnostic vacuum hold blocks native queue preflight,
+while disconnected/released vacuum blocks queue startup. Durable ordinary acquisition
+and non-treatment motion recovery, other retained tools, portable rebuilding and
+physical/scientific acceptance remain open; this checkpoint does not qualify a live
+station queue.

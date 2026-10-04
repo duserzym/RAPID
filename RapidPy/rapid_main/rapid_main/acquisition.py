@@ -333,6 +333,7 @@ class BracketedAcquisitionService:
         config: AcquisitionConfig,
         clock: AcquisitionClock | None = None,
         id_factory: Callable[[str], str] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> None:
         self._transport = transport
         self._vertical = vertical
@@ -340,6 +341,14 @@ class BracketedAcquisitionService:
         self._config = config
         self._clock = clock or SystemAcquisitionClock()
         self._make_id = id_factory or _default_id_factory()
+        self._cancel_check = cancel_check
+
+    def set_cancel_check(self, check):
+        self._cancel_check = check
+
+    def _check_cancel(self):
+        if self._cancel_check is not None and self._cancel_check():
+            raise InterruptedError('Bracketed acquisition cancelled; no completed block is available.')
 
     @property
     def config(self) -> AcquisitionConfig:
@@ -421,6 +430,7 @@ class BracketedAcquisitionService:
         self._lift_to(cfg.zero_position, cfg.measure_speed_index, log, "zero")
         self._turn_to(BLOCK_CLOSING_ANGLE_DEG, log)
         with log.record("turning.set_reference", "angle=0"):
+            self._check_cancel()
             self._turning.set_reference_angle(0.0)
 
         # 8) Zero-after.
@@ -433,6 +443,7 @@ class BracketedAcquisitionService:
             log=log,
         )
 
+        self._check_cancel()
         completed_iso = self._clock.now().isoformat()
         observations = (zero_before, *positions, zero_after)
         audit = BlockAudit(
@@ -575,11 +586,20 @@ class BracketedAcquisitionService:
         if seconds <= 0:
             return
         with log.record("delay", f"{detail} ({seconds:.3f}s)"):
-            self._clock.sleep(float(seconds))
+            if self._cancel_check is None:
+                self._clock.sleep(float(seconds))
+            else:
+                remaining = float(seconds)
+                while remaining > 0:
+                    self._check_cancel()
+                    interval = min(.05, remaining)
+                    self._clock.sleep(interval)
+                    remaining = max(0., remaining - interval)
+                self._check_cancel()
 
     def _transport_call(self, detail: str, call: Callable[[], object]) -> object:
         """Normalize adapter failures into a retry-classifiable error."""
-
+        self._check_cancel()
         try:
             return call()
         except TransportReadError:
@@ -588,6 +608,7 @@ class BracketedAcquisitionService:
             raise TransportReadError(f"{detail}: {exc}") from exc
 
     def _lift_to(self, position: int, speed_index: int, log: _CommandLog, name: str) -> None:
+        self._check_cancel()
         with log.record("vertical.move", f"{name} target={position} speed_index={speed_index}") as event:
             outcome = self._vertical.move_to(int(position), speed_index=int(speed_index))
             event.set_reply(f"actual={getattr(outcome, 'actual', '?')}")
@@ -599,6 +620,7 @@ class BracketedAcquisitionService:
                 )
 
     def _turn_to(self, angle_deg: float, log: _CommandLog) -> None:
+        self._check_cancel()
         with log.record("turning.rotate", f"target_deg={angle_deg:g}") as event:
             outcome = self._turning.rotate_to(float(angle_deg))
             event.set_reply(f"actual_deg={getattr(outcome, 'actual', '?')}")

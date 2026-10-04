@@ -84,6 +84,40 @@ def _build_service(
     return service, transport, vertical, turning, clock
 
 
+class BracketedCancellationTests(unittest.TestCase):
+    def test_pre_cancel_prevents_motion_and_counter_reset(self):
+        service, transport, vertical, turning, clock = _build_service()
+        service.set_cancel_check(lambda: True)
+        with self.assertRaises(InterruptedError):
+            service.acquire()
+        self.assertEqual(transport.commands, [])
+        self.assertEqual(vertical.moves, [])
+        self.assertEqual(turning.angles, [])
+
+    def test_cancel_during_settle_stops_before_next_observation(self):
+        service, transport, vertical, turning, clock = _build_service()
+        service.set_cancel_check(lambda: sum(clock.slept) >= .1)
+        with self.assertRaises(InterruptedError):
+            service.acquire()
+        self.assertLessEqual(sum(clock.slept), .15)
+        self.assertEqual(transport.latch_count, 0)
+
+    def test_cancel_during_last_axis_read_cannot_publish_a_completed_block(self):
+        service, transport, vertical, turning, clock = _build_service()
+        original = transport.read_axis
+        cancelled = []
+        def read(axis):
+            reply = original(axis)
+            if transport.latch_count == 6 and axis == 'Z':
+                cancelled.append(True)
+            return reply
+        transport.read_axis = read
+        service.set_cancel_check(lambda: bool(cancelled))
+        with self.assertRaises(InterruptedError):
+            service.acquire()
+        self.assertEqual(transport.latch_count, 6)
+
+
 class BracketedAcquisitionSequenceTests(unittest.TestCase):
     def test_executes_the_vb6_command_order(self) -> None:
         service, transport, vertical, turning, clock = _build_service()
