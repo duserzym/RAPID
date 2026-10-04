@@ -1446,6 +1446,8 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         store = getattr(self, "_safety_store", None)
         pending = store.pending() if store is not None and not self._config.general.nocomm else None
         if pending:
+            if pending['family'] == 'queue':
+                raise HardwareError('An unfinished queue owns its vacuum and participating outputs. Recover it through the original queue coordinator; treatment-only recovery cannot clear this lifetime.')
             with store.operation_lease():
                 pending = store.pending()
                 if pending:
@@ -1521,6 +1523,8 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
 
     def _recover_durable_treatment(self, pending):
         """Recover only the persisted station; never replay its treatment."""
+        if pending['family'] in {'queue', 'motion', 'acquisition', 'vacuum'}:
+            raise HardwareError('This unfinished queue stage requires coordinated original-station stop/output recovery; no treatment or specimen motion will be replayed.')
         if pending["family"] == "af_diagnostic":
             raise HardwareError("An unfinished ADwin helper diagnostic requires recovery in its original helper using its original board settings.")
         if pending["family"] == "motion_diagnostic":

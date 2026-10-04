@@ -85,7 +85,7 @@ class HardwareSafetyStore:
             if envelope["sha256"] != hashlib.sha256(_canonical(state)).hexdigest():
                 raise ValueError("checksum mismatch")
             if (state["schema"] != self.schema or state["status"] not in {"pending", "verified"}
-                    or state["family"] not in {"pulse", "rrm", "af", "arm", "af_diagnostic", "motion_diagnostic", "station_diagnostic"}
+                    or state["family"] not in {"pulse", "rrm", "af", "arm", "af_diagnostic", "motion_diagnostic", "station_diagnostic", "queue"}
                     or not isinstance(state["token"], str) or len(state["token"]) != 32
                     or not isinstance(state["profile"], dict) or not isinstance(state["plan"], dict)):
                 raise ValueError("unsupported or incomplete state")
@@ -93,6 +93,9 @@ class HardwareSafetyStore:
             if not isinstance(state["sample_id"], str) or not isinstance(state["run_id"], str):
                 raise ValueError("invalid specimen/run identity")
             datetime.fromisoformat(state["started_at"])
+            if state['family'] == 'queue':
+                from .queue_safety import validate_queue_state
+                validate_queue_state(state)
             if state["status"] == "verified" and (not isinstance(state["record"], dict)
                     or state["record"].get("safe_state_confirmed") is not True
                     or state["record"].get("simulated") is not False):
@@ -146,6 +149,8 @@ class HardwareSafetyStore:
             state = self.read()
             if not state or state["status"] != "pending" or state["token"] != token:
                 raise HardwareSafetyError("Stale hardware safety operation token.")
+            if state['family'] == 'queue':
+                raise HardwareSafetyError('Queue ownership must be completed through its coordinator after all participating outputs are verified.')
             if _canonical(state["profile"]) != _canonical(profile):
                 raise HardwareSafetyError("Station wiring/calibration changed; the original station must be recovered.")
             state["record"] = snapshot

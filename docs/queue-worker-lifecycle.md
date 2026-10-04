@@ -39,3 +39,7 @@ startup. Durable ordinary acquisition and non-treatment motion recovery also
 remain required. Preserve the legacy sample-transfer order when implementing that
 coordinator; physical gripper, pressure, clearance and scientific acceptance remain
 open. The portable pilot must be rebuilt after the remaining software work.
+
+The durable parent/stage primitive is now implemented in the shared
+`queue_safety` module; see `queue-safety-journal.md`. Operator workflow wiring and
+native motion/acquisition/output verification still remain required.

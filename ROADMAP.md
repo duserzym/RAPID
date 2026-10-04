@@ -1082,3 +1082,34 @@ while disconnected/released vacuum blocks queue startup. Durable ordinary acquis
 and non-treatment motion recovery, other retained tools, portable rebuilding and
 physical/scientific acceptance remain open; this checkpoint does not qualify a live
 station queue.
+
+### 3 October 2026 — Durable parent queue and subordinate stage checkpoint
+
+The shared queue_safety module now provides one queue OS lifetime lease with
+exclusive worker claims and subordinate AF, ARM, pulse IRM, RRM, motion,
+acquisition and vacuum stages. Original plans, identities and calibration/wiring
+bindings persist before stage I/O. Native treatment journal hooks borrow this
+owner without reacquiring the OS lease or clearing the parent latch. Native
+acknowledged vacuum enable can continue as a held stage, explicitly without
+claiming outputs off; failed release remains pending.
+
+Separate immutable stage events are flushed and linked by SHA-256 before the
+journal is updated. Latest evidence is checked before starting another stage;
+full linked history is checked on recovery and queue completion. Queue release
+requires its own evidence schema with independent vacuum-off, motor-stop and
+field-output-off verification, false simulation and no cleanup errors. Ordinary
+treatment success cannot clear a queue. Recovery preserves the exact interrupted
+stage and original station; treatment-only recovery refuses the outer lifetime.
+A child-process crash test confirms automatic OS lease release with a retained
+pending stage, not replay.
+
+Verification: all 883 isolated tests pass in 123.283 seconds, including 28 queue
+journal regressions and the native treatment-hook borrowing test. Six-panel/six-
+helper source smoke passes. No physical instruments were actuated. See
+docs/queue-safety-journal.md for the interfaces and verification boundaries.
+
+This checkpoint supplies the coordinator primitive. Worker-owned native queue
+vacuum start/release, ordinary motion/acquisition stage records and original-panel
+coordinated recovery still need operator workflow wiring. Preserve the original
+sample-transfer sequence. Auxiliary tool completion, portable rebuilding and
+physical/scientific station acceptance remain open; the full-system goal is active.

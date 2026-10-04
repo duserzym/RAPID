@@ -329,3 +329,15 @@ transport retry. `test_queue_command_worker.py` and `test_acquisition.py` cover 
 boundaries with injected interfaces. See `docs/queue-worker-lifecycle.md`. Queue
 vacuum coordination, durable ordinary acquisition/motion recovery and physical
 station acceptance remain open.
+
+### Queue lifetime journal evidence — 3 October 2026
+
+The shared `queue_safety` module persists a parent queue across subordinate native
+treatments, acquisition, motion and acknowledged vacuum holds. Stage completion
+leaves the parent pending; independent vacuum-off/motor-stop/field-output-off
+evidence is required for queue release. Immutable linked events and exact station
+bindings survive restart and a child-process crash. Existing main treatment safety
+hooks borrow the exclusive worker claim. `test_queue_safety.py` covers 28 journal
+regressions. See `docs/queue-safety-journal.md`. This is the durable coordinator
+primitive; native queue vacuum/motion/acquisition wiring and coordinated original-
+panel recovery, portable rebuilding and physical/scientific acceptance remain open.
