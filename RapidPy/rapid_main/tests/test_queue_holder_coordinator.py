@@ -1,5 +1,6 @@
 """Compose empty-hole pose, owned blank measurement and verified rod return."""
 import unittest
+import json
 from unittest.mock import patch
 
 from rapid_main.holder_state import HolderStateStore
@@ -15,6 +16,11 @@ class QueueHolderCoordinatorTests(backend_fixture.QueueBackendCoordinatorFixture
         self.assertTrue(worker.ok, worker.error)
         self.assertEqual(len(self.backend._last_holder_outcome.blocks), 2)
         self.assertEqual(len(self.backend._last_holder_outcome.results), 2)
+        packet = json.loads(self.backend._holder_store.current.collection_evidence_json)
+        self.assertEqual(len(packet['blocks']), 2)
+        self.assertEqual([len(block['observations']) for block in packet['blocks']], [6, 6])
+        self.assertEqual(len({block['audit']['block_id'] for block in packet['blocks']}), 2)
+        self.backend._holder_store.current.verify_collection()
         self.assertEqual(self.backend._config.squid.samples_per_pos, original_count)
         self.assertEqual(self.store.latest_holder_context(self.session.token)['phase'], 'clear')
 

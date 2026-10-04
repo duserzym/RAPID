@@ -1,6 +1,7 @@
 """Native blank rod poses, zero-height acquisition and immutable queue ownership."""
 from dataclasses import replace
 import unittest
+from itertools import count
 from unittest.mock import patch
 
 from rapid_main.acquisition import BlockContext
@@ -44,6 +45,8 @@ class QueueHolderGeometryTests(QueueLiftFixture, unittest.TestCase):
 
     def injected_squid(self):
         service, transport, vertical, turning, clock = _build_service()
+        identities = count(1)
+        service._make_id = lambda prefix: f'{prefix}-holder-{next(identities)}'
         service._config = replace(service.config, zero_position=-50000, measurement_position=-97500)
         service._vertical = MotorVerticalController(self.motor, self.axes['updown'])
         service._turning = MotorTurningController(self.motor, self.axes['turning'])

@@ -20,7 +20,7 @@ persisted, auditable measurement:
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 import json
 import math
@@ -105,12 +105,15 @@ class HolderCorrection:
     susceptibility_evidence_id: str = ""
     simulated: bool = False
     schema: str = HOLDER_SCHEMA
+    collection_evidence_json: str = ""
+    collection_sha256: str = ""
 
     @property
     def record_version(self) -> str:
         """Stable identity written next to every corrected sample result."""
 
-        return f"{self.holder_id}@{self.measured_at_iso or 'unknown'}"
+        suffix = '#' + self.collection_sha256 if self.collection_sha256 else ''
+        return f"{self.holder_id}@{self.measured_at_iso or 'unknown'}{suffix}"
 
     def age_seconds(self, now: datetime | None = None) -> float | None:
         measured = _parse_iso(self.measured_at_iso)
@@ -122,12 +125,42 @@ class HolderCorrection:
         return max(0.0, (reference - measured).total_seconds())
 
     def is_finite(self) -> bool:
+        try:
+            self.verify_collection()
+        except HolderStateError:
+            return False
+        if (type(self.averaging_cycles) is not int or not 1 <= self.averaging_cycles <= 32767
+                or not math.isfinite(self.range_factor) or self.range_factor <= 0):
+            return False
         values: list[float] = []
         for vector in self.positions:
             values.extend(float(axis) for axis in vector)
+        for vectors in (self.raw_positions, self.holder_frame_positions):
+            for vector in vectors:
+                values.extend(float(axis) for axis in vector)
+        for vector in (self.zero_before, self.zero_after, self.axis_calibration, self.validation_deltas):
+            values.extend(float(axis) for axis in vector)
+        values.extend(self.metrics.to_dict().values())
         if not values or not all(math.isfinite(value) for value in values):
             return False
         return self.susceptibility_raw is None or math.isfinite(float(self.susceptibility_raw))
+
+    def verify_collection(self) -> None:
+        """Reproduce aggregates and verify their binding to the retained sources."""
+        from .holder_collection import canonical, verified_top_fields
+        if not self.collection_evidence_json and not self.collection_sha256:
+            if self.averaging_cycles != 1:
+                raise HolderStateError('Legacy multi-block holder has no collection evidence; remeasure it.')
+            return
+        try:
+            expected = verified_top_fields(self.collection_evidence_json, self.collection_sha256)
+            keys = json.loads(expected).keys()
+            actual = {key: getattr(self, key) for key in keys}
+            actual['metrics'] = self.metrics.to_dict()
+            if canonical(actual) != expected:
+                raise ValueError('holder correction disagrees with its acquisition collection')
+        except (ValueError, TypeError, KeyError, OverflowError) as exc:
+            raise HolderStateError(str(exc)) from exc
 
     def require_susceptibility(self) -> float:
         """Return the accepted scaled bridge value or fail before sample motion."""
@@ -192,7 +225,23 @@ class HolderCorrection:
             susceptibility_evidence_id=str(payload.get("susceptibility_evidence_id", "")),
             simulated=bool(payload.get("simulated", False)),
             schema=str(payload.get("schema", HOLDER_SCHEMA)),
+            collection_evidence_json=payload.get('collection_evidence_json', ''),
+            collection_sha256=payload.get('collection_sha256', ''),
         )
+
+    @classmethod
+    def from_collection(cls, blocks, *, holder_id: str, hole: int = 0, measured_at_iso: str):
+        from .holder_collection import make_collection
+        text, digest, positions, metrics, results = make_collection(
+            blocks, holder_id=holder_id, hole=hole, measured_at_iso=measured_at_iso)
+        last = results[-1].block
+        base = cls.from_result(results[-1], holder_id=holder_id, hole=hole,
+            measured_at_iso=measured_at_iso, averaging_cycles=len(results), positions_override=positions)
+        correction = replace(base, metrics=HolderMetrics(**metrics),
+            axis_calibration=(last.audit.axis_calibration_applied if last.audit else last.axis_calibration),
+            collection_evidence_json=text, collection_sha256=digest)
+        correction.verify_collection()
+        return correction
 
     @classmethod
     def from_result(
@@ -393,6 +442,10 @@ class HolderStateStore:
     def _invalid_reason(self, correction: HolderCorrection, *, is_up: bool | None) -> str:
         if not correction.holder_id:
             return "Holder correction has no holder identity."
+        try:
+            correction.verify_collection()
+        except HolderStateError as exc:
+            return str(exc)
         if not correction.is_finite():
             return "Holder correction contains non-finite values."
         if correction.simulated and not self._allow_simulated:
@@ -428,6 +481,7 @@ class HolderStateStore:
             raise HolderStateError("holder correction requires a holder identity")
         if not correction.measured_at_iso:
             raise HolderStateError("holder correction requires a measurement timestamp")
+        correction.verify_collection()
         if not correction.is_finite():
             raise HolderStateError("holder correction contains non-finite values")
 

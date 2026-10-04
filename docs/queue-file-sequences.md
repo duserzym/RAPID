@@ -187,8 +187,21 @@ averaging. Native/legacy holder backends accept the explicit queue count and
 reuse the atomic multi-block holder replacement service without changing accepted
 station settings. Manual measurement retains its configured global count.
 
-This migrates count configuration/handoff, not the remaining durable per-step
-.UP/eligibility/Up-Down publication workflow. Holder collection metadata/quality
-still needs complete scientific acceptance: the existing service averages holder
-positions but derives several quality/audit fields from its last constituent
-block. The complete source/artifact/orientation/format and physical gates remain.
+Holder replacement now freezes every accepted constituent block into a canonical
+`rapidpy.holder_collection.v1` evidence packet. It retains all six coherent
+observations and complete audit/command evidence for each acquisition, plus raw
+baselines, position vectors and calibration. Averaged positions and collection
+quality are rederived from every block when loading or accepting the correction;
+changed aggregates, context, direction or repeated acquisition IDs are rejected.
+The full packet SHA-256 is part of the correction version associated with sample
+results. It provides integrity/reproducibility, not physical authenticity.
+
+Compatibility fields such as raw positions and block ID describe the last source
+block; the packet retains every source. Collection CSD uses all 4N positions,
+drift uses mean block magnitudes, and induced quality uses the mean induced vector.
+Invalid evidence leaves the previous holder active. Older single-block records
+remain supported; older multi-block records without source evidence require
+remeasurement. Susceptibility remains separately linked to its acquisition.
+
+Durable per-step .UP/eligibility/Up-Down publication, complete scientific
+orientation/format acceptance and physical qualification remain required.

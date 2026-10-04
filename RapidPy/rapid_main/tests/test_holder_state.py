@@ -385,7 +385,8 @@ class HolderMeasurementServiceTests(unittest.TestCase):
                     (0.30, 0.0, 0.0),
                     (0.30, 0.0, 0.0),
                     (0.30, 0.0, 0.0),
-                )
+                ),
+                block_id='block-holder-2',
             ),
         ]
         service = HolderMeasurementService(

@@ -25,7 +25,6 @@ from rapid_main.magnetometer import (
     BracketedMeasurementResult,
     FluxCountDiscontinuityError,
     ObservationIntegrityError,
-    Position4,
     reduce_bracketed_measurement,
 )
 
@@ -146,15 +145,13 @@ class HolderMeasurementService:
                 results.append(result)
                 break
 
-        averaged = _average_positions(tuple(result.baseline_adjusted_raw for result in results))
-        correction = HolderCorrection.from_result(
-            results[-1],
-            holder_id=holder_id,
-            hole=hole,
-            measured_at_iso=self._clock().isoformat(),
-            averaging_cycles=len(results),
-            positions_override=averaged,
-        )
+        try:
+            correction = HolderCorrection.from_collection(blocks, holder_id=holder_id,
+                hole=hole, measured_at_iso=self._clock().isoformat())
+        except (HolderStateError, ValueError, TypeError, KeyError, OverflowError) as exc:
+            return HolderMeasurementOutcome(installed=False, correction=None, previous=previous,
+                blocks=tuple(blocks), results=tuple(results), recovery_attempts=recovery_attempts,
+                rejection_reason=f'Holder collection was not accepted: {exc}')
         if susceptibility is not None:
             try:
                 correction = _with_susceptibility(correction, susceptibility)
@@ -216,18 +213,3 @@ def _with_susceptibility(correction: HolderCorrection, record: object) -> Holder
         susceptibility_measured_at_iso=measured_at,
         susceptibility_evidence_id=evidence_id,
     )
-
-
-def _average_positions(position_sets: tuple[Position4, ...]) -> Position4:
-    """VB6 ``MeasurementBlocks.AverageBlock`` over baseline-adjusted vectors."""
-
-    if not position_sets:
-        raise HolderStateError("cannot average an empty set of holder blocks")
-    count = float(len(position_sets))
-    averaged = []
-    for index in range(4):
-        axes = []
-        for axis in range(3):
-            axes.append(sum(float(item[index][axis]) for item in position_sets) / count)
-        averaged.append((axes[0], axes[1], axes[2]))
-    return (averaged[0], averaged[1], averaged[2], averaged[3])

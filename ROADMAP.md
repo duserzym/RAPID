@@ -2015,3 +2015,35 @@ interfaces; physical/scientific station qualification remains unproven. The
 remaining .UP/progress/eligibility, holder collection evidence, recovery,
 scientific/standalone, chain/auxiliary and portable/performance gates remain open.
 The full-system goal remains active.
+
+Holder collection evidence checkpoint (2026-10-04): the atomic holder service
+now retains every complete raw acquisition, coherent counter/DVM observation and
+audit/command record in a frozen canonical packet. Loading and installation check
+its SHA-256 and reproduce positions/quality from all constituent blocks. Holder
+CSD uses all 4N positions, drift uses mean magnitudes, induced quality uses the
+mean vector, and calibrated magnitude respects axis gains. The full digest joins
+the holder record version carried by sample results. Compatibility last-block
+fields remain available alongside the complete collection. This supersedes the
+last-block holder quality/evidence gap above; scientific/physical acceptance is
+still required. A digest establishes reproducibility/integrity, not authenticity.
+
+Changed aggregates/context/direction/calibration, reused acquisition IDs and
+specimen/nonblank corrections are rejected without replacing the previous holder.
+Old single-block records remain usable; old multi-block records lacking complete
+source evidence require remeasurement. Focused checks exited normally: 11 new
+collection cases (0.041 seconds), 20 holder-state cases (0.343 seconds), six native
+holder-coordinator cases (22.681 seconds), and 21 holder geometry cases (19.785
+seconds). Fixtures now assign distinct IDs per real acquisition, preserving the
+production duplicate-ID rejection. Full regression verification is underway.
+
+Durable .UP/progress/eligibility/Up-Down publication, original-stage recovery,
+scientific orientation/format and standalone provenance, chain/auxiliary functions,
+portable/performance and physical station qualification remain open. The complete
+full-system goal remains active.
+
+Final holder-collection verification: all 1,273 tests passed in 571.278 seconds;
+the owned process exited normally with code 0 after deferred Qt deletion,
+application shutdown and explicit Python watchdog stop. Six-panel source smoke,
+compilation and diff checks passed. These checks use injected instruments and do
+not establish physical/scientific qualification. The holder collection software
+evidence gap is implemented; all remaining full-system gates above stay open.
