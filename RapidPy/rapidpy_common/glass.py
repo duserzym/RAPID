@@ -136,6 +136,11 @@ QWidget#glassBackdrop QLabel#title {{
     font-size: 21px;
     font-weight: 760;
 }}
+QWidget#glassBackdrop QLabel#cardTitle {{
+    color: {GLASS.maroon};
+    font-size: 15px;
+    font-weight: 760;
+}}
 QWidget#glassBackdrop QLabel#subtitle {{
     color: {GLASS.muted};
 }}

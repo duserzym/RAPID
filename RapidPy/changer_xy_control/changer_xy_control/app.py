@@ -41,9 +41,13 @@ def _bootstrap_common_imports() -> None:
 
 _bootstrap_common_imports()
 from rapidpy_common.hardware import HardwareError, MotorAxisConfig, MotorControllerConfig, MotorSerialClient, MoveResult  # noqa: E402
+from rapidpy_common.glass import (  # noqa: E402
+    apply_glass_shadow,
+    apply_glassmorphism_theme,
+    fit_workspace_window,
+    install_glass_shell,
+)
 from rapidpy_common.ui import (  # noqa: E402
-    apply_card_shadow,
-    apply_liquid_glass_theme,
     apply_window_bounds_guard,
     set_app_icon,
 )
@@ -646,7 +650,7 @@ class StageScene(QtWidgets.QWidget):
         self._special_target: str | None = None
         self._logical_positions = tray_logical_hole_positions(slot_min, slot_max)
         self._min_x, self._max_x, self._min_y, self._max_y = tray_logical_bounds(slot_min, slot_max)
-        self.setMinimumSize(520, 520)
+        self.setMinimumSize(400, 400)
         self.setMouseTracking(True)
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
@@ -967,8 +971,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_ui()
         self._apply_compact_font()
         self._apply_module_style_overrides()
-        self.setMinimumSize(1420, 860)
-        self.resize(1620, 940)
+        self._preferred_size = (1640, 960)
+        self.setMinimumSize(1180, 660)
+        self.resize(*self._preferred_size)
         self._load_config_into_widgets()
         self._poll_timer = QtCore.QTimer(self)
         self._poll_timer.setInterval(900)
@@ -1016,14 +1021,14 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
         title = QtWidgets.QLabel(title_text)
-        title.setObjectName("title")
+        title.setObjectName("cardTitle")
         layout.addWidget(title)
         if subtitle_text:
             subtitle = QtWidgets.QLabel(subtitle_text)
-            subtitle.setObjectName("subtitle")
+            subtitle.setObjectName("hint")
             subtitle.setWordWrap(True)
             layout.addWidget(subtitle)
-        apply_card_shadow(card)
+        apply_glass_shadow(card, blur=30, offset_y=8, alpha=34)
         return card, layout
 
     def _apply_compact_font(self) -> None:
@@ -1077,7 +1082,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 border: 1px solid rgba(122, 2, 25, 0.82);
             }
             QWidget#renderViewport {
-                background: #e8e0d3;
+                background: rgba(232, 224, 211, 0.55);
                 border-radius: 18px;
             }
             QTableWidget#cupTable {
@@ -1089,15 +1094,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 border: 1px solid rgba(122, 2, 25, 0.14);
                 border-radius: 12px;
                 padding: 6px 9px;
-            }
-            QPlainTextEdit#console {
-                background: rgba(255, 255, 255, 0.94);
-                color: #2f2827;
-                border-radius: 16px;
-                border: 1px solid rgba(122, 2, 25, 0.16);
-                padding: 8px;
-                selection-background-color: rgba(122, 2, 25, 0.18);
-                selection-color: #2f2827;
             }
             QCheckBox#updownModeCheckBox {
                 color: #4d302c;
@@ -1131,6 +1127,18 @@ class MainWindow(QtWidgets.QMainWindow):
             }
             """
         )
+
+    def _update_header_status(self) -> None:
+        axes = ("x", "y") if self._xy_only_mode_enabled() else ("x", "y", "updown")
+        connected = [key for key in axes if self.controller.axis_connected(key)]
+        if len(connected) == len(axes):
+            mode = "XY only" if self._xy_only_mode_enabled() else "XYZ"
+            self.header.set_status(f"{mode} connected", "ready")
+        elif connected:
+            names = {"x": "X", "y": "Y", "updown": "Z"}
+            self.header.set_status("Partial: " + "/".join(names[key] for key in connected), "warning")
+        else:
+            self.header.set_status("Motors offline", "neutral")
 
     def _stage_limit_instructions(self) -> str:
         return (
@@ -1746,12 +1754,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self._save_config()
         self._poll_stage_state()
 
+    def _fit_to_screen(self, screen: QtGui.QScreen | None = None) -> None:
+        """Bounds-guard hook: size to the working area instead of the compact default."""
+        self._preferred_size = fit_workspace_window(self, self._preferred_size, screen=screen)
+
     def _build_ui(self) -> None:
         root = QtWidgets.QWidget(self)
-        self.setCentralWidget(root)
         shell = QtWidgets.QHBoxLayout(root)
-        shell.setContentsMargins(12, 12, 12, 12)
-        shell.setSpacing(10)
+        shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSpacing(12)
+        self.header = install_glass_shell(
+            self,
+            root,
+            title="Changer XY Control",
+            subtitle="Stage-first sample changer: pick a cup on the tray, home Z before XY moves, and calibrate cup counts in place.",
+        )
 
         left_scroll = QtWidgets.QScrollArea()
         left_scroll.setObjectName("panelScroll")
@@ -1759,18 +1776,18 @@ class MainWindow(QtWidgets.QMainWindow):
         left_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         left_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         left_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        left_scroll.setMinimumWidth(320)
+        left_scroll.setMinimumWidth(300)
         left_scroll.setMaximumWidth(370)
         left_host = QtWidgets.QWidget()
         left_scroll.setWidget(left_host)
         left = QtWidgets.QVBoxLayout(left_host)
-        left.setContentsMargins(0, 0, 0, 0)
-        left.setSpacing(10)
+        left.setContentsMargins(2, 0, 8, 12)
+        left.setSpacing(12)
 
         center_host = QtWidgets.QWidget()
-        center_host.setMinimumWidth(650)
+        center_host.setMinimumWidth(460)
         center_layout = QtWidgets.QVBoxLayout(center_host)
-        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setContentsMargins(0, 0, 0, 12)
         center_layout.setSpacing(12)
 
         right_scroll = QtWidgets.QScrollArea()
@@ -1779,13 +1796,13 @@ class MainWindow(QtWidgets.QMainWindow):
         right_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         right_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         right_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        right_scroll.setMinimumWidth(360)
-        right_scroll.setMaximumWidth(420)
+        right_scroll.setMinimumWidth(330)
+        right_scroll.setMaximumWidth(410)
         right_host = QtWidgets.QWidget()
         right_scroll.setWidget(right_host)
         right = QtWidgets.QVBoxLayout(right_host)
-        right.setContentsMargins(0, 0, 0, 0)
-        right.setSpacing(10)
+        right.setContentsMargins(2, 0, 8, 12)
+        right.setSpacing(12)
 
         connections_card, connections_layout = self._build_card(
             "Connections",
@@ -1973,10 +1990,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.console = QtWidgets.QPlainTextEdit()
         self.console.setReadOnly(True)
         self.console.setObjectName("console")
-        self.console.setMinimumHeight(96)
-        self.console.setMaximumHeight(132)
+        self.console.setMinimumHeight(140)
         console_layout.addWidget(self.console)
-        center_layout.addWidget(console_card)
 
         tuning_card, tuning_layout = self._build_card(
             "Velocity And Jog",
@@ -2063,6 +2078,7 @@ class MainWindow(QtWidgets.QMainWindow):
         right.addWidget(calibration_card)
 
         right.addWidget(connections_card)
+        right.addWidget(console_card)
         right.addStretch(1)
 
         shell.addWidget(left_scroll)
@@ -2335,6 +2351,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._port_status[key].setText(f"On {self.controller.axis_port(key)}" if connected else "Off")
         self._set_port_toggle_state("sensor", self.controller.sensor_connected)
         self._port_status["sensor"].setText(f"On {self.controller.sensor_port}" if self.controller.sensor_connected else "Off")
+        self._update_header_status()
         try:
             x_pos, y_pos = self.controller.read_xy_position()
             switches = self.controller.reference_switch_states()
@@ -2566,7 +2583,7 @@ class MainWindow(QtWidgets.QMainWindow):
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     apply_window_bounds_guard(app)
-    apply_liquid_glass_theme(app)
+    apply_glassmorphism_theme(app)
     assets_dir = Path(__file__).resolve().parent.parent / "assets"
     set_app_icon(app, "changer_xy_control_icon.png", assets_dir)
     window = MainWindow()
