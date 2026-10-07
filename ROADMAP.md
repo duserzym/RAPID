@@ -2047,3 +2047,149 @@ application shutdown and explicit Python watchdog stop. Six-panel source smoke,
 compilation and diff checks passed. These checks use injected instruments and do
 not establish physical/scientific qualification. The holder collection software
 evidence gap is implemented; all remaining full-system gates above stay open.
+
+
+## Checkpoint — 7 October 2026: catch-up, standalone module readiness, SQUID streaming
+
+### Catch-up on the integrated app (2–4 October work)
+
+About 100 commits since 25 September moved `rapid_main` from a prototype toward
+native, owned queue execution. The main themes:
+
+* The glass/semantic-status dialog system now covers every reachable dialog.
+* Fail-closed hardware services, plus guarded diagnostic ownership for the AF
+  tuner, clipping/comms, lift, vacuum and DC motors.
+* Native queue ownership through worker recovery, covering vacuum borrowing, XY
+  station calibration, claimed transfers, verified specimen height and
+  blank-holder geometry, the field-cutoff check, terminal settlement and the
+  staged SQUID connection.
+* Queue provenance and path containment.
+* The strict VB6 `.UP` codec, `MeasurementBlocks` collection statistics, and
+  per-file AvgSteps.
+* SHA-256-verified holder collection evidence.
+* A Python-managed test watchdog. The last recorded full run passed 1,273 tests
+  with a clean exit.
+
+The open gates from the 4 October checkpoints remain open:
+
+* Durable per-step `.UP`/progress/eligibility and Up/Down publication.
+* Original-stage restart recovery.
+* Scientific orientation/format and standalone provenance acceptance.
+* Chain/auxiliary functions.
+* Portable/performance qualification.
+* Physical station qualification.
+
+`RapidPy/rapid_main/PRODUCTION_READINESS_ASSESSMENT.md` was last updated on
+2 October and is stale. It should be refreshed before the next release decision.
+
+### Standalone control modules: Gaussmeter, Changer XY, ADwin
+
+All three were previously tested on hardware. This checkpoint changes only their
+layout and styling, plus the window-sizing defects found along the way. No
+instrument logic changed.
+
+* A new shared module, `rapidpy_common/glass.py`, provides the glassmorphism
+  layer:
+  * a painted colour-field backdrop with translucent frosted cards and bright
+    hairline borders;
+  * a header with the app name, purpose line and a semantic status chip (words
+    plus colour);
+  * frosted pyqtgraph plots and a dark-glass console;
+  * `fit_workspace_window`, which sizes the window to the working area.
+* **Defect fixed.** The shared bounds guard caps generic windows at 35% of the
+  screen width (672 px on 1920 px), and sets that cap as the window *maximum*.
+  The Gaussmeter (1040 px minimum) and Changer XY (1420 px minimum) panels
+  therefore opened permanently clipped. Both now provide a `_fit_to_screen`
+  hook. The ADwin window's maximum was likewise raised to the working area.
+  The 35% default itself is pinned by `test_window_layout.py` and was left
+  unchanged.
+* **Gaussmeter.** Glass header with a connection chip, sectioned controls, the
+  console moved into a tab beside Instrument Details, and a scrolling right pane
+  so nothing clips at 1280×680.
+* **Changer XY.** Header chip summarising X/Y/Z motor connection, lighter card
+  titles, and the console moved to the right column so the tray model stays
+  dominant. The minimum size is now 1180×660 (was 1420×860) and the stage scene
+  minimum is 400 px, so it fits the 1280×720 minimum workspace.
+* **ADwin.** Inline colours replaced by semantic chips. The header mirrors the
+  board state. The relay ON state is driven by the stylesheet. DAC/ADC traces
+  are maroon/teal on a frosted plot. The BTL path, *Read State* and *Recover
+  Outputs Off* no longer clip.
+* **Verification.** Offscreen-native renders at 1280×680 and 1600×960 for all
+  three; py_compile; PyInstaller specs list `rapidpy_common.glass`. A short
+  hardware smoke of each app is still recommended before redistributing the
+  executables.
+
+### SQUID read-rate control (new)
+
+* The operator now sets the SQUID sample interval, the axes to read, the
+  flux-counter refresh (every N samples) and the latch holds. The UI shows the
+  link-limited rate before streaming and the achieved rate during it.
+* `RawSquidClient` gains per-call latch holds, a DVM-only read and a
+  configurable reply timeout.
+* **Bracketed static reads keep the VB6 0.10/0.12 s holds.** The new settings
+  affect only streams.
+* UI: *SQUID → Communication Settings → Continuous read → Live Stream…*. It runs
+  inside the exclusive `squid` lease and shows live X/Y/Z, a zero-phase
+  low-pass/notch overlay, a Welch PSD with noise density and spectral lines,
+  CSV save, and opening of capture files.
+
+### Continuous capture during descent and 90° turns (new, opt-in)
+
+* With `SquidConfig.motion_capture_enabled`, each bracketed block streams the
+  SQUID during:
+  * the borehole descent;
+  * the three 90° turns;
+  * the ascent.
+* Lift counts and turn angles come from a new in-motion motor position-observer
+  hook on the same `perf_counter` time base. `time.monotonic` ticks only every
+  ~15.6 ms on Windows, so it was not used.
+* Each capture is joined before the next SQUID command. A link that cannot be
+  released fails the block, while stream errors are only recorded.
+* Traces ride on `BracketedAcquisition.motion_traces`, plus per-block CSV and
+  `analysis.json` sidecars written outside the run bundle. They never enter the
+  observations, the reduction, holder correction or published results.
+* Analysis (`rapidpy_common/signal_analysis.py`, NumPy only):
+  * uniform resampling, Welch PSD, noise floor and spectral lines;
+  * zero-phase low-pass and notch filters;
+  * a rigid-rotation harmonic fit (amplitude, phase, handedness, X/Y
+    consistency);
+  * a pass-through peak/template fit (amplitude, height of maximum coupling,
+    SNR).
+* On synthetic data, a continuous fit along a full turn gives less than half
+  the amplitude uncertainty of a 10-point subsample (unit-tested).
+* Operator/developer guide and bench validation plan:
+  [docs/squid-stream-and-motion-capture.md](docs/squid-stream-and-motion-capture.md).
+
+### Evidence for this checkpoint
+
+* New tests (45, all passing):
+  * `test_squid_stream.py` (14): timing validation, pacing, counter reuse,
+    failure isolation, CSV round trip, join guarantee, VB6 latch defaults.
+  * `test_signal_analysis.py` (13): PSD/variance, lines, notch, zero-phase
+    low-pass, rotation and pass-through fits.
+  * `test_motion_capture.py` (13): acquisition integration with simulated
+    motion — five segments; reduction unchanged; stream failure isolated;
+    unreleased link fails the block; motion failure closes the capture;
+    sidecar fits; observer routing; config mapping.
+  * `test_squid_stream_dialog.py` (5): settings applied only on save, simulated
+    rate, client requirement, release on close, rotation fit from a file.
+* Neighbouring suites re-run and passing: acquisition (27), SQUID transport
+  (31), hardware dialog glass (7), diagnostic services (36), config (5) and
+  window layout (30).
+* Full suite: all 1,318 tests passed in 589.9 seconds, after the native layout changes. The owned process exited normally with code 0 after "Test teardown: traceback watchdog stopped". These are software checks with injected or simulated instruments; physical qualification of the stream and capture is pending.
+
+### Next steps
+
+1. Bench validation of the stream and capture (validation plan steps 1–5):
+   achievable rate at the station baud, safe minimum latch holds, empty-holder
+   noise spectrum, coil-response template, and rotation fit compared with the
+   bracketed reduction on standards.
+2. Resolve the SQUID baud default mismatch: `SquidConfig.baud` is 9600 while
+   the transport and `updown_control` default to 1200. Confirm the station value
+   and align the defaults.
+3. Review the 35% compact-window cap for the other data-dense standalone apps
+   (AF Tuner, DC Motors, Up/Down). Apply the same `_fit_to_screen` opt-in where
+   they clip.
+4. Refresh `PRODUCTION_READINESS_ASSESSMENT.md` against the October checkpoints.
+5. Continue the open full-system gates listed above. The full-system goal
+   remains active.

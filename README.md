@@ -43,6 +43,8 @@ RapidPy is now beyond the initial three-app milestone. The repository currently 
 
 ### Recent Highlights
 
+- **SQUID read rate, live stream and motion capture:** the operator sets the SQUID sample rate. A live stream window shows the filtered signal and its spectrum. Opt-in continuous capture records the SQUID while the specimen descends the borehole and turns 90°, then fits the coil-pass and rotation models. The capture is auxiliary and is never used for published results. See the [guide and bench validation plan](docs/squid-stream-and-motion-capture.md).
+- **Glassmorphism instrument panels:** Gaussmeter, Changer XY and ADwin share a new frosted-glass theme (`rapidpy_common/glass.py`) with status-chip headers. They also fit the 1280×720 minimum workspace instead of opening clipped.
 - **COM Port Mapper:** released Windows utility for serial-role discovery and saved machine-local COM assignments before launching hardware apps.
 - **XY Sample Changer:** released stage-centric operator panel with XY-only mode, in-app cup calibration editing, and VB6-compatible `HomeToCenter` / `MoveToCorner` behavior.
 - **Up/Down Control:** released Z-axis panel combining raw motion, top-switch readback, vacuum control, and SQUID-guided MeasPos optimisation in one window.

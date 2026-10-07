@@ -49,6 +49,7 @@ a = Analysis(
         "rapidpy_common",
         "rapidpy_common.gaussmeter",
         "rapidpy_common.ui",
+        "rapidpy_common.glass",
         "rapidpy_common.palette",
     ],
     hookspath=[],
