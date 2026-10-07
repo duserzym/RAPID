@@ -34,7 +34,15 @@ from rapidpy_common.gaussmeter import (  # noqa: E402
     gaussmeter_driver_status,
     serial_port_name_to_number,
 )
-from rapidpy_common.ui import apply_card_shadow, apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon  # noqa: E402
+from rapidpy_common.glass import (  # noqa: E402
+    GLASS,
+    apply_glass_shadow,
+    apply_glassmorphism_theme,
+    fit_workspace_window,
+    install_glass_shell,
+    style_glass_plot,
+)
+from rapidpy_common.ui import apply_window_bounds_guard, set_app_icon  # noqa: E402
 from rapidpy_common.resources import asset_directory  # noqa: E402
 
 
@@ -99,8 +107,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("RapidPy Gaussmeter Control")
-        self.resize(1360, 860)
-        self.setMinimumSize(1040, 720)
+        self._preferred_size = (1440, 900)
+        self.setMinimumSize(1040, 680)
+        self.resize(*self._preferred_size)
         compact_font = QtGui.QFont(self.font())
         compact_size = compact_font.pointSizeF()
         if compact_size > 0:
@@ -125,12 +134,28 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_driver_status()
         self._set_connected_state(False)
 
+    def _fit_to_screen(self, screen: QtGui.QScreen | None = None) -> None:
+        """Bounds-guard hook: size to the working area instead of the compact default."""
+        self._preferred_size = fit_workspace_window(self, self._preferred_size, screen=screen)
+
+    @staticmethod
+    def _section_label(text: str) -> QtWidgets.QLabel:
+        label = QtWidgets.QLabel(text)
+        label.setObjectName("sectionHeader")
+        return label
+
     def _build_ui(self) -> None:
         root = QtWidgets.QWidget(self)
-        self.setCentralWidget(root)
         layout = QtWidgets.QHBoxLayout(root)
-        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
+        self.header = install_glass_shell(
+            self,
+            root,
+            title="Gaussmeter Control",
+            subtitle="Live field readout, sampling sessions and instrument commands. USB auto uses the gm0 or FW Bell driver.",
+            badge="RapidPy",
+        )
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
@@ -150,8 +175,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         left_host = QtWidgets.QWidget()
         left_host_layout = QtWidgets.QVBoxLayout(left_host)
-        left_host_layout.setContentsMargins(6, 6, 12, 6)
-        left_host_layout.addStretch(0)
+        left_host_layout.setContentsMargins(4, 0, 10, 12)
 
         left_card = QtWidgets.QFrame()
         left_card.setObjectName("card")
@@ -164,16 +188,7 @@ class MainWindow(QtWidgets.QMainWindow):
         left.setContentsMargins(18, 18, 18, 18)
         left.setSpacing(10)
 
-        title = QtWidgets.QLabel("Gaussmeter")
-        title.setObjectName("title")
-        subtitle = QtWidgets.QLabel(
-            "Driver-backed control panel for RapidPy gaussmeters. USB auto mode will use the available gm0 or FW Bell backend."
-        )
-        subtitle.setObjectName("subtitle")
-        subtitle.setWordWrap(True)
-        left.addWidget(title)
-        left.addWidget(subtitle)
-
+        left.addWidget(self._section_label("DRIVER"))
         self.driver_status = QtWidgets.QPlainTextEdit()
         self.driver_status.setObjectName("valuePill")
         self.driver_status.setReadOnly(True)
@@ -198,6 +213,7 @@ class MainWindow(QtWidgets.QMainWindow):
         dll_row.addWidget(self.browse_dll_btn)
         left.addLayout(dll_row)
 
+        left.addWidget(self._section_label("CONNECTION"))
         mode_group = QtWidgets.QGroupBox("Connection Mode")
         mode_layout = QtWidgets.QHBoxLayout(mode_group)
         self.manual_port_radio = QtWidgets.QRadioButton("RS232 / COM port")
@@ -216,7 +232,11 @@ class MainWindow(QtWidgets.QMainWindow):
         port_row.addWidget(self.refresh_ports_btn)
         left.addLayout(port_row)
 
+        left.addWidget(self._section_label("INSTRUMENT SETTINGS"))
         grid = QtWidgets.QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(6)
+        grid.setColumnStretch(1, 1)
         grid.addWidget(QtWidgets.QLabel("Poll interval (ms)"), 0, 0)
         self.poll_spin = QtWidgets.QSpinBox()
         self.poll_spin.setRange(100, 5000)
@@ -251,7 +271,9 @@ class MainWindow(QtWidgets.QMainWindow):
         button_row.addWidget(self.refresh_btn)
         left.addLayout(button_row)
 
+        left.addWidget(self._section_label("INSTRUMENT COMMANDS"))
         command_grid = QtWidgets.QGridLayout()
+        command_grid.setSpacing(6)
         self.auto_range_btn = QtWidgets.QPushButton("Auto Range")
         self.null_btn = QtWidgets.QPushButton("Auto Null")
         self.auto_zero_btn = QtWidgets.QPushButton("Auto Zero")
@@ -270,9 +292,7 @@ class MainWindow(QtWidgets.QMainWindow):
             command_grid.addWidget(button, index // 2, index % 2)
         left.addLayout(command_grid)
 
-        console_title = QtWidgets.QLabel("Console")
-        console_title.setObjectName("subtitle")
-        left.addWidget(console_title)
+        left.addStretch(1)
         self.console = QtWidgets.QPlainTextEdit()
         self.console.setObjectName("console")
         self.console.setReadOnly(True)
@@ -286,8 +306,7 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Preferred,
             QtWidgets.QSizePolicy.Policy.Expanding,
         )
-        self.console.setMinimumHeight(120)
-        left.addWidget(self.console, stretch=1)
+        self.console.setMinimumHeight(80)
         left_host_layout.addWidget(left_card)
         left_scroll.setWidget(left_host)
 
@@ -490,7 +509,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.session_plot = pg.PlotWidget()
         self.session_plot.setMinimumHeight(200)
-        self.session_plot.showGrid(x=True, y=True, alpha=0.25)
+        style_glass_plot(self.session_plot)
         self.session_plot.setMenuEnabled(False)
         self.session_plot.setLabel("bottom", "Elapsed (s)")
         self.session_plot.setLabel("left", _PLOT_UNIT_CONFIGS[0][1])
@@ -498,11 +517,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.session_curve = self.session_plot.plot(
             [],
             [],
-            pen=pg.mkPen("#0f766e", width=2),
+            pen=pg.mkPen(GLASS.maroon, width=2),
             symbol="o",
             symbolSize=5,
-            symbolBrush="#0f766e",
-            symbolPen="#0f766e",
+            symbolBrush=GLASS.gold,
+            symbolPen=GLASS.maroon,
         )
 
         # Snap-to-point tooltip on hover
@@ -514,36 +533,43 @@ class MainWindow(QtWidgets.QMainWindow):
 
         plot_layout.addWidget(self.session_plot, stretch=1)
 
-        details_section = QtWidgets.QWidget()
-        details_layout = QtWidgets.QVBoxLayout(details_section)
-        details_layout.setContentsMargins(0, 0, 0, 0)
-        details_layout.setSpacing(8)
-        details_title = QtWidgets.QLabel("Instrument Details")
-        details_title.setObjectName("subtitle")
-        details_layout.addWidget(details_title)
-
         self.details = QtWidgets.QPlainTextEdit()
-        self.details.setObjectName("console")
         self.details.setReadOnly(True)
         self.details.setMinimumHeight(80)
-        details_layout.addWidget(self.details)
+        details_section = QtWidgets.QTabWidget()
+        details_section.setDocumentMode(True)
+        details_section.addTab(self.console, "Console")
+        details_section.addTab(self.details, "Instrument Details")
+        self.details_tabs = details_section
 
         content_splitter.addWidget(plot_section)
         content_splitter.addWidget(details_section)
         content_splitter.setStretchFactor(0, 3)
         content_splitter.setStretchFactor(1, 1)
-        content_splitter.setSizes([360, 120])
+        content_splitter.setSizes([380, 170])
         right.addWidget(content_splitter, stretch=1)
 
+        right_card.setMinimumHeight(720)
+        right_scroll = QtWidgets.QScrollArea()
+        right_scroll.setObjectName("panelScroll")
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right_host = QtWidgets.QWidget()
+        right_host_layout = QtWidgets.QVBoxLayout(right_host)
+        right_host_layout.setContentsMargins(4, 0, 4, 12)
+        right_host_layout.addWidget(right_card)
+        right_scroll.setWidget(right_host)
+
         splitter.addWidget(left_scroll)
-        splitter.addWidget(right_card)
+        splitter.addWidget(right_scroll)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([440, 900])
 
-        apply_card_shadow(left_card)
-        apply_card_shadow(right_card)
-        apply_card_shadow(status_panel)
+        apply_glass_shadow(left_card)
+        apply_glass_shadow(right_card)
+        apply_glass_shadow(status_panel, blur=22, offset_y=5, alpha=28)
 
     def _wire_events(self) -> None:
         self.browse_dll_btn.clicked.connect(self._browse_for_dll)
@@ -684,6 +710,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _set_connected_state(self, connected: bool) -> None:
         self.connect_btn.setText("Disconnect" if connected else "Connect")
+        self.header.set_status("Connected" if connected else "Disconnected", "ready" if connected else "neutral")
         for button in (
             self.refresh_btn,
             self.auto_range_btn,
@@ -1056,7 +1083,7 @@ def main() -> int:
     pg.setConfigOptions(antialias=True)
     app = QtWidgets.QApplication(sys.argv)
     apply_window_bounds_guard(app)
-    apply_liquid_glass_theme(app)
+    apply_glassmorphism_theme(app)
     assets_dir = asset_directory(
         "gaussmeter_control_assets",
         Path(__file__).resolve().parent.parent / "assets",
