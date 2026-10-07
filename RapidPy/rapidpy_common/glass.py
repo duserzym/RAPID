@@ -241,6 +241,14 @@ QWidget#glassBackdrop QPushButton#accent:disabled {{
     color: rgba(255, 255, 255, 0.70);
     background: rgba(122, 2, 25, 0.35);
 }}
+QWidget#glassBackdrop QPushButton#relayToggle {{
+    font-weight: 700;
+}}
+QWidget#glassBackdrop QPushButton#relayToggle:checked {{
+    color: white;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2F9E66, stop:1 #1E6B45);
+    border: 1px solid rgba(255, 255, 255, 0.60);
+}}
 QWidget#glassBackdrop QPushButton#danger {{
     color: #7f1d1d;
     background: rgba(254, 226, 226, 0.78);

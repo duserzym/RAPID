@@ -36,9 +36,15 @@ from rapidpy_common.adwin_af import (  # noqa: E402
     _find_adwin_dll,
     find_btl_files,
 )
+from rapidpy_common.glass import (  # noqa: E402
+    GLASS,
+    apply_glass_shadow,
+    apply_glassmorphism_theme,
+    install_glass_shell,
+    set_status_chip,
+    style_glass_plot,
+)
 from rapidpy_common.ui import (  # noqa: E402
-    apply_card_shadow,
-    apply_liquid_glass_theme,
     clamp_window_geometry,
     apply_window_bounds_guard,
     set_app_icon,
@@ -587,8 +593,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
 
     def _try_init_dll(self) -> None:
         """Auto-connect at startup in a background thread — never blocks the UI."""
-        self._lbl_boot_status.setText("\u25cf Connecting\u2026")
-        self._lbl_boot_status.setStyleSheet("color: #b45309; font-weight: bold;")
+        self._set_boot_status("Connecting\u2026", "active")
         self._log("Auto-connecting to ADwin board\u2026")
         self._start_connect_worker(force_reboot=False, startup=True)
 
@@ -633,10 +638,9 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
             self._ctrl = self._connect_worker.ctrl
         self._booted = True
         if ver != 0:
-            self._lbl_boot_status.setText(f"\u25cf Connected  (v{ver})")
+            self._set_boot_status(f"Connected (v{ver})", "ready")
         else:
-            self._lbl_boot_status.setText("\u25cf Connected  (I/O ready)")
-        self._lbl_boot_status.setStyleSheet("color: #2e8b57; font-weight: bold;")
+            self._set_boot_status("Connected (I/O ready)", "ready")
         if btl_path:
             self._edit_btl.setText(btl_path)
             self._cfg.btl_file = btl_path
@@ -649,8 +653,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         """Slot \u2014 called from worker when all connection attempts failed."""
         self._ctrl = self._connect_worker.ctrl if self._connect_worker is not None else None
         self._booted = False
-        self._lbl_boot_status.setText("\u25cf Not connected")
-        self._lbl_boot_status.setStyleSheet("color: #cc0000;")
+        self._set_boot_status("Not connected", "error")
         first_line = reason.splitlines()[0] if reason else "Unknown error"
         self._log(f"[ERROR] {first_line}")
         self._update_hw_enabled()
@@ -664,6 +667,10 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
             title = "ADwin Connection Failed"
         if not self._close_after_cleanup:
             self._show_adwin_error_dialog(title, reason, suggestions)
+
+    def _set_boot_status(self, text: str, level: str) -> None:
+        set_status_chip(self._lbl_boot_status, text, level)
+        self.header.set_status(f"ADwin {text}", level)
 
     def _on_connect_settled(self):
         self._set_manual_binding_controls()
@@ -759,7 +766,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         area = screen.availableGeometry()
         width, height = max(1, min(1680, int(area.width() * .92))), max(1, min(940, int(area.height() * .90)))
         self.setMinimumSize(min(800, width), min(620, height))
-        self.setMaximumSize(width, height)
+        self.setMaximumSize(area.width(), area.height())
         self.resize(width, height)
         frame = self.frameGeometry()
         self.move(max(area.left(), min(frame.left(), area.right() - frame.width() + 1)),
@@ -796,10 +803,15 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
 
         # ── Root ────────────────────────────────────────────────────────────
         root = QtWidgets.QWidget()
-        self.setCentralWidget(root)
         root_layout = QtWidgets.QHBoxLayout(root)
-        root_layout.setContentsMargins(10, 10, 10, 10)
+        root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(8)
+        self.header = install_glass_shell(
+            self,
+            root,
+            title="ADwin Communication Tester",
+            subtitle="Board boot, relay outputs, direct DAC/ADC and board-timed sine loopback for the AF waveform controller.",
+        )
 
         # Lists populated by card builders, used in _update_hw_enabled
         self._hw_widgets: list[QtWidgets.QWidget] = []
@@ -818,14 +830,15 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
 
         # ── LEFT: vertical splitter — 2×3 card grid (top) + console (bottom) ──
         left_scroll = QtWidgets.QScrollArea()
+        left_scroll.setObjectName("panelScroll")
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
         left_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         left_scroll.setMinimumHeight(100)
         left_container = QtWidgets.QWidget()
         ctrl_grid = QtWidgets.QGridLayout(left_container)
-        ctrl_grid.setContentsMargins(4, 4, 4, 4)
-        ctrl_grid.setSpacing(6)
+        ctrl_grid.setContentsMargins(4, 2, 10, 12)
+        ctrl_grid.setSpacing(10)
         ctrl_grid.setColumnStretch(0, 1)
         ctrl_grid.setColumnStretch(1, 1)
         left_container.setMaximumWidth(630)  # prevent grid from exceeding panel width
@@ -882,11 +895,12 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
     def _card(title: str) -> tuple[QtWidgets.QFrame, QtWidgets.QVBoxLayout]:
         frame = QtWidgets.QFrame()
         frame.setObjectName("card")
-        apply_card_shadow(frame)
+        apply_glass_shadow(frame, blur=28, offset_y=7, alpha=32)
         layout = QtWidgets.QVBoxLayout(frame)
-        layout.setContentsMargins(8, 6, 8, 8)
-        layout.setSpacing(5)
-        lbl = QtWidgets.QLabel(f"<b>{title}</b>")
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(7)
+        lbl = QtWidgets.QLabel(title)
+        lbl.setObjectName("cardTitle")
         layout.addWidget(lbl)
         return frame, layout
 
@@ -923,11 +937,10 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
             str(Path(self._cfg.bin_folder) / self._cfg.boot_file)
             if self._cfg.bin_folder else default_btl
         )
+        layout.addWidget(QtWidgets.QLabel("BTL firmware file:"))
         row_btl = QtWidgets.QHBoxLayout()
-        row_btl.addWidget(QtWidgets.QLabel("BTL file:"))
         self._edit_btl = QtWidgets.QLineEdit(stored)
-        self._edit_btl.setMinimumWidth(170)
-        self._edit_btl.setMaximumWidth(245)
+        self._edit_btl.setMinimumWidth(120)
         self._edit_btl.setPlaceholderText(
             default_btl if default_btl else "e.g. C:\\ADwin\\BTL\\ADwin9.btl"
         )
@@ -937,8 +950,6 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         )
         row_btl.addWidget(self._edit_btl, 1)
         btn_browse_btl = QtWidgets.QPushButton("Browse…")
-        btn_browse_btl.setMinimumWidth(92)
-        btn_browse_btl.setMaximumWidth(92)
         btn_browse_btl.clicked.connect(self._browse_btl)
         row_btl.addWidget(btn_browse_btl)
         layout.addLayout(row_btl)
@@ -952,8 +963,9 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         )
         self._btn_boot.clicked.connect(self._boot_board)
         row_boot.addWidget(self._btn_boot)
-        self._lbl_boot_status = QtWidgets.QLabel("● Not connected")
-        self._lbl_boot_status.setStyleSheet("color: #888;")
+        self._lbl_boot_status = QtWidgets.QLabel()
+        self._lbl_boot_status.setSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Fixed)
+        set_status_chip(self._lbl_boot_status, "Not connected")
         row_boot.addWidget(self._lbl_boot_status)
         row_boot.addStretch()
         layout.addLayout(row_boot)
@@ -963,7 +975,6 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
             "Always call ADboot even if the board is already running.\n"
             "Only needed after a firmware upgrade or a hardware reset."
         )
-        self._chk_force_reboot.setStyleSheet("font-size: 10px; color: #666;")
         layout.addWidget(self._chk_force_reboot)
 
         # Self-test button
@@ -975,6 +986,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         self._btn_selftest.clicked.connect(self._run_selftest)
         self._booted_widgets.append(self._btn_selftest)
         layout.addWidget(self._btn_selftest)
+        layout.addStretch(1)
 
         return frame
 
@@ -987,7 +999,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
             "Verify physically by watching the relay box LEDs."
         )
         info.setWordWrap(True)
-        info.setStyleSheet("font-size: 10px; color: #666;")
+        info.setObjectName("hint")
         layout.addWidget(info)
 
         # 6 toggle buttons (bits 0–5)
@@ -1000,6 +1012,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
             btn.setChecked(False)
             btn.setToolTip(f"Toggle digital output bit {bit}")
             btn.setMinimumHeight(42)
+            btn.setObjectName("relayToggle")
             btn.toggled.connect(lambda checked, b=bit: self._relay_toggled(b, checked))
             self._relay_btns.append(btn)
             self._booted_widgets.append(btn)
@@ -1007,22 +1020,18 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
             self._update_relay_button(bit)
         layout.addLayout(grid)
 
-        # Raw word + buttons
-        row = QtWidgets.QHBoxLayout()
+        # Raw word, then the read/recover actions on their own row so they never clip
         self._lbl_digout = QtWidgets.QLabel("Digout: 0x00")
-        self._lbl_digout.setStyleSheet("font-family: monospace;")
-        row.addWidget(self._lbl_digout)
-        row.addStretch()
+        self._lbl_digout.setObjectName("mono")
+        layout.addWidget(self._lbl_digout)
+        row = QtWidgets.QHBoxLayout()
         btn_read_dig = QtWidgets.QPushButton("Read State")
-        btn_read_dig.setMinimumWidth(82)
-        btn_read_dig.setStyleSheet("font-size: 10px;")
         btn_read_dig.clicked.connect(self._read_digout)
         self._booted_widgets.append(btn_read_dig)
         row.addWidget(btn_read_dig)
         btn_all_off = QtWidgets.QPushButton("Recover Outputs Off")
         self._btn_recover_outputs = btn_all_off
-        btn_all_off.setMinimumWidth(70)
-        btn_all_off.setStyleSheet("font-size: 10px;")
+        btn_all_off.setObjectName("danger")
         btn_all_off.clicked.connect(self._all_relays_off)
         self._booted_widgets.append(btn_all_off)
         row.addWidget(btn_all_off)
@@ -1041,7 +1050,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
             "still says the device number is unknown."
         )
         info.setWordWrap(True)
-        info.setStyleSheet("font-size: 10px; color: #666;")
+        info.setObjectName("hint")
         layout.addWidget(info)
 
         row = QtWidgets.QHBoxLayout()
@@ -1056,7 +1065,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         row.addStretch()
 
         self._lbl_diag_summary = QtWidgets.QLabel("No scan run yet.")
-        self._lbl_diag_summary.setStyleSheet("font-size: 10px; color: #666;")
+        self._lbl_diag_summary.setObjectName("hint")
         row.addWidget(self._lbl_diag_summary)
         layout.addLayout(row)
 
@@ -1089,7 +1098,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
             "ADC = analog-to-digital input. Read channel 1–16 within roughly -10 V to +10 V. "
             "Manual outputs remain owned until Recover Outputs Off verifies cleanup."
         )
-        note.setStyleSheet("font-size: 10px; color: #666;")
+        note.setObjectName("hint")
         note.setWordWrap(True)
         layout.addWidget(note)
 
@@ -1129,7 +1138,8 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         self._booted_widgets.append(btn_read_adc)
         adc_row.addWidget(btn_read_adc)
         self._lbl_adc_result = QtWidgets.QLabel("—  V")
-        self._lbl_adc_result.setStyleSheet("font-family: monospace; min-width: 68px;")
+        self._lbl_adc_result.setObjectName("valuePill")
+        self._lbl_adc_result.setMinimumWidth(90)
         adc_row.addWidget(self._lbl_adc_result)
         adc_row.addStretch()
         layout.addLayout(adc_row)
@@ -1147,7 +1157,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
             "Connect DAC output → ADC input with a short BNC cable only."
         )
         warn.setWordWrap(True)
-        warn.setStyleSheet("color: #8B4513; font-size: 10px;")
+        set_status_chip(warn, warn.text(), "warning")
         layout.addWidget(warn)
 
         # Horizontal split: waveform parameters on the left, channels+run on the right
@@ -1193,7 +1203,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
 
         self._lbl_sig_hint = QtWidgets.QLabel()
         self._lbl_sig_hint.setWordWrap(True)
-        self._lbl_sig_hint.setStyleSheet("font-size: 10px; color: #666;")
+        self._lbl_sig_hint.setObjectName("hint")
         left_form.addRow("Sampling:", self._lbl_sig_hint)
 
         self._spin_freq.valueChanged.connect(self._update_sig_hint)
@@ -1225,6 +1235,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         right_vlay.addLayout(ch_row)
 
         self._btn_run_sig = QtWidgets.QPushButton("▶  Run Sine Loopback")
+        self._btn_run_sig.setObjectName("accent")
         self._btn_run_sig.clicked.connect(self._run_sig)
         self._booted_widgets.append(self._btn_run_sig)
         right_vlay.addWidget(self._btn_run_sig)
@@ -1235,7 +1246,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         right_vlay.addWidget(self._btn_stop_sig)
 
         self._lbl_sig_status = QtWidgets.QLabel("Idle")
-        self._lbl_sig_status.setStyleSheet("font-size: 10px; color: #555;")
+        self._lbl_sig_status.setObjectName("hint")
         right_vlay.addWidget(self._lbl_sig_status)
         right_vlay.addStretch()
 
@@ -1253,7 +1264,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
             "Not run yet — click 'Run Self-Test' in Board Config after booting."
         )
         self._lbl_selftest_summary.setWordWrap(True)
-        self._lbl_selftest_summary.setStyleSheet("font-size: 11px; color: #666;")
+        set_status_chip(self._lbl_selftest_summary, self._lbl_selftest_summary.text())
         layout.addWidget(self._lbl_selftest_summary)
 
         # Per-step result list
@@ -1262,10 +1273,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         self._selftest_list.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
         )
-        self._selftest_list.setStyleSheet(
-            "QListWidget { background: #111820; font-family: Consolas, monospace; font-size: 11px; }"
-            "QListWidget::item { padding: 1px 4px; }"
-        )
+        self._selftest_list.setFont(QtGui.QFont("Consolas", 9))
         layout.addWidget(self._selftest_list, 1)
         return frame
 
@@ -1278,10 +1286,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         self._console.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
         )
-        self._console.setStyleSheet(
-            "QPlainTextEdit { background: #1a1a2e; color: #a8d8a8; "
-            "font-family: Consolas, monospace; font-size: 11px; }"
-        )
+        self._console.setObjectName("console")
         layout.addWidget(self._console, 1)
         btn_clear = QtWidgets.QPushButton("Clear Console")
         btn_clear.clicked.connect(self._console.clear)
@@ -1292,13 +1297,15 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
     def _build_plot_panel(self) -> QtWidgets.QWidget:
         frame = QtWidgets.QFrame()
         frame.setObjectName("card")
-        apply_card_shadow(frame)
+        apply_glass_shadow(frame, blur=28, offset_y=7, alpha=32)
         vlay = QtWidgets.QVBoxLayout(frame)
-        vlay.setContentsMargins(8, 8, 8, 8)
+        vlay.setContentsMargins(14, 12, 14, 12)
         vlay.setSpacing(6)
 
         title_row = QtWidgets.QHBoxLayout()
-        title_row.addWidget(QtWidgets.QLabel("<b>Loopback Signal Plot</b>"))
+        plot_title = QtWidgets.QLabel("Loopback Signal Plot")
+        plot_title.setObjectName("cardTitle")
+        title_row.addWidget(plot_title)
         title_row.addStretch()
         btn_save_plot = QtWidgets.QPushButton("Save Plot")
         btn_save_plot.setMinimumWidth(90)
@@ -1320,21 +1327,21 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
             "Clear Plot resets the view to the default time/voltage window."
         )
         help_lbl.setWordWrap(True)
-        help_lbl.setStyleSheet("font-size: 10px; color: #666;")
+        help_lbl.setObjectName("hint")
         vlay.addWidget(help_lbl)
 
-        pg.setConfigOptions(antialias=True, background="#1a1a2e", foreground="#cccccc")
+        pg.setConfigOptions(antialias=True)
         self._plot = pg.PlotWidget()
+        style_glass_plot(self._plot)
         self._plot.setLabel("bottom", "Time", units="s")
         self._plot.setLabel("left", "Voltage", units="V")
         self._plot.addLegend(offset=(10, 10))
-        self._plot.showGrid(x=True, y=True, alpha=0.2)
         self._plot.setMouseEnabled(x=True, y=True)
         self._plot.getViewBox().setMouseMode(pg.ViewBox.RectMode)
         self._plot.scene().sigMouseClicked.connect(self._on_plot_mouse_clicked)
 
-        self._curve_dac = self._plot.plot(pen=pg.mkPen("#4DFF91", width=2), name="DAC out")
-        self._curve_adc = self._plot.plot(pen=pg.mkPen("#FFCD34", width=2), name="ADC in")
+        self._curve_dac = self._plot.plot(pen=pg.mkPen(GLASS.maroon, width=2), name="DAC out")
+        self._curve_adc = self._plot.plot(pen=pg.mkPen(GLASS.teal, width=2), name="ADC in")
 
         vlay.addWidget(self._plot)
         self._reset_plot_view()
@@ -1430,16 +1437,6 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         label = self._cfg.bit_labels.get(str(bit), f"Bit {bit}")
         is_on = btn.isChecked()
         btn.setText(f"{label}\n{'ON' if is_on else 'OFF'}")
-        if is_on:
-            btn.setStyleSheet(
-                "QPushButton { background: #2e8b57; color: white; font-weight: bold; "
-                "border: 1px solid #245f44; border-radius: 8px; padding: 6px; }"
-            )
-        else:
-            btn.setStyleSheet(
-                "QPushButton { background: #f3f4f6; color: #374151; font-weight: bold; "
-                "border: 1px solid #c7ccd4; border-radius: 8px; padding: 6px; }"
-            )
 
     def _refresh_relay_buttons(self) -> None:
         for bit in range(len(self._relay_btns)):
@@ -1458,9 +1455,9 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         else:
             quality = "jagged"
             color = "#b91c1c"
-        self._lbl_sig_hint.setStyleSheet(f"font-size: 10px; color: {color};")
+        self._lbl_sig_hint.setStyleSheet(f"color: {color};")
         self._lbl_sig_hint.setText(
-            f"{points_per_cycle:.1f} samples/cycle. This uses the ADwin-side process, "
+            f"{points_per_cycle:.1f} samples/cycle ({quality}). This uses the ADwin-side process, "
             f"so the requested IO rate is board-timed rather than host-polled. Aim for at least 20, "
             f"preferably 40+, for a smooth plotted sine."
         )
@@ -1486,8 +1483,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         if not self._apply_board_cfg():
             return
         force = self._chk_force_reboot.isChecked()
-        self._lbl_boot_status.setText("● Connecting…")
-        self._lbl_boot_status.setStyleSheet("color: #b45309; font-weight: bold;")
+        self._set_boot_status("Connecting…", "active")
         self._log(f"{'Force-rebooting' if force else 'Connecting to'} ADwin board…")
         self._start_connect_worker(force_reboot=force, startup=False)
 
@@ -1722,8 +1718,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         adc_ch = self._spin_adc_direct.value()
 
         self._selftest_list.clear()
-        self._lbl_selftest_summary.setText("Self-test running…")
-        self._lbl_selftest_summary.setStyleSheet("font-size: 11px; color: #888;")
+        set_status_chip(self._lbl_selftest_summary, "Self-test running…", "active")
         self._btn_selftest.setEnabled(False)
         self._log(f"[SELFTEST] Starting — DAC ch{dac_ch} → ADC ch{adc_ch} (loopback cable needed)")
 
@@ -1743,13 +1738,13 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
     @QtCore.Slot(str, bool)
     def _on_selftest_step(self, text: str, passed: bool) -> None:
         item = QtWidgets.QListWidgetItem(text)
-        color = QtGui.QColor("#4DFF91") if passed else QtGui.QColor("#FF6B6B")
+        color = QtGui.QColor("#15803D") if passed else QtGui.QColor("#B91C1C")
         item.setForeground(color)
         self._selftest_list.addItem(item)
         self._selftest_list.scrollToBottom()
 
     def _on_selftest_failed(self, message: str) -> None:
-        self._lbl_selftest_summary.setText("Self-test stopped or failed; cleanup checked.")
+        set_status_chip(self._lbl_selftest_summary, "Self-test stopped or failed; cleanup checked.", "warning")
         self._log(f"[SELFTEST] {message}")
 
     def _cleanup_selftest(self) -> None:
@@ -1766,9 +1761,11 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
 
     @QtCore.Slot(int, int)
     def _on_selftest_done(self, passed: int, total: int) -> None:
-        summary_color = "#2e8b57" if passed == total else "#b91c1c"
-        self._lbl_selftest_summary.setStyleSheet(f"font-size: 11px; color: {summary_color};")
-        self._lbl_selftest_summary.setText(f"Self-test complete: {passed}/{total} passed.")
+        set_status_chip(
+            self._lbl_selftest_summary,
+            f"Self-test complete: {passed}/{total} passed.",
+            "ready" if passed == total else "error",
+        )
         self._log(f"[SELFTEST] Complete — {passed}/{total} passed.")
 
     # -----------------------------------------------------------------------
@@ -1934,7 +1931,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
 def main() -> int:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     apply_window_bounds_guard(app)
-    apply_liquid_glass_theme(app)
+    apply_glassmorphism_theme(app)
     assets_dir = Path(__file__).resolve().parent.parent / "assets"
     set_app_icon(app, "adwin_icon.png", assets_dir)
 
