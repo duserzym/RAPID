@@ -905,9 +905,14 @@ class SquidAxisSample:
 
 
 class RawSquidClient:
+    #: VB6 ``LatchCount`` / ``LatchData`` holds; streams may override per call.
+    LATCH_COUNT_HOLD_S = 0.10
+    LATCH_DATA_HOLD_S = 0.12
+
     def __init__(self) -> None:
         self._serial: serial.Serial | None = None
         self._connection_failed = False
+        self.reply_timeout_s = 1.0
 
     @property
     def is_connected(self) -> bool:
@@ -994,7 +999,7 @@ class RawSquidClient:
         # be accepted as the current counter/DVM observation.
         self._require_serial().reset_input_buffer()
         self._send(command)
-        response = self._read_response()
+        response = self._read_response(self.reply_timeout_s)
         match = FLOAT_RE.search(response)
         if not match:
             raise SquidCommunicationError(f"No numeric value in SQUID response for {command!r}: {response!r}")
@@ -1036,18 +1041,31 @@ class RawSquidClient:
             self._send(command)
         return commands
 
-    def latch(self, axis: str = "A", *, settle_s: float = 0.0) -> tuple[str, ...]:
+    def latch(
+        self,
+        axis: str = "A",
+        *,
+        settle_s: float = 0.0,
+        count_hold_s: float | None = None,
+        data_hold_s: float | None = None,
+    ) -> tuple[str, ...]:
         """VB6 ``frmSQUID.latchVal``: ``LatchCount`` then ``LatchData``.
 
-        The 0.10 s / 0.12 s pauses match ``LatchCount``/``LatchData`` in the
-        legacy form; ``settle_s`` maps to the optional ``ReadDelay`` settle.
+        The default 0.10 s / 0.12 s pauses match ``LatchCount``/``LatchData``
+        in the legacy form; ``settle_s`` maps to the optional ``ReadDelay``
+        settle.  Bracketed acquisition always uses the defaults; continuous
+        streams may pass shorter holds to raise their sample rate.
         """
+        count_hold = self.LATCH_COUNT_HOLD_S if count_hold_s is None else float(count_hold_s)
+        data_hold = self.LATCH_DATA_HOLD_S if data_hold_s is None else float(data_hold_s)
+        if not (0.0 <= count_hold <= 60.0 and 0.0 <= data_hold <= 60.0):
+            raise SquidCommunicationError("Latch hold delays must be within 0..60 s.")
         if settle_s and settle_s > 0:
             time.sleep(float(settle_s))
         self._send(f"{axis}LC")
-        time.sleep(0.10)
+        time.sleep(count_hold)
         self._send(f"{axis}LD")
-        time.sleep(0.12)
+        time.sleep(data_hold)
         return (f"{axis}LC", f"{axis}LD")
 
     def read_axis(self, axis: str, *, range_value: float = 1.0) -> "SquidAxisSample":
@@ -1073,6 +1091,13 @@ class RawSquidClient:
             data_command=data_command,
             data_reply=data_reply,
         )
+
+    def read_axis_data(self, axis: str) -> float:
+        """Read only the latched DVM (``<axis>SD``) for fast continuous streams."""
+        name = str(axis).strip().upper()
+        if name not in ("X", "Y", "Z"):
+            raise SquidCommunicationError(f"Invalid SQUID axis: {axis!r}")
+        return self._query_value(f"{name}SD")[0]
 
     def read_xyz_raw(self) -> tuple[float, float, float]:
         """Latch once and return the three combined raw axis values."""

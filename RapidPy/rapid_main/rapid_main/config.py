@@ -83,6 +83,20 @@ class SquidConfig:
     range_label:      str   = "1×"
     samples_per_pos:  int   = 4
     settle_time:      float = 1.5
+    # Continuous read rate (live stream and motion capture).  The latch holds
+    # default to the VB6 LatchCount/LatchData pauses; bracketed static reads
+    # always keep the VB6 values regardless of these settings.
+    stream_interval_ms:         int  = 500
+    stream_axes:                str  = "XYZ"
+    stream_counts_every:        int  = 1
+    stream_latch_count_hold_ms: int  = 100
+    stream_latch_data_hold_ms:  int  = 120
+    # Opt-in continuous capture while the specimen descends, turns and ascends.
+    motion_capture_enabled:     bool = False
+    motion_capture_descent:     bool = True
+    motion_capture_turns:       bool = True
+    motion_capture_ascent:      bool = True
+    motion_capture_dir:         str  = ""
 
 
 @dataclass

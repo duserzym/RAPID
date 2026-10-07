@@ -1669,13 +1669,19 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             )
             return
         try:
-            transport = RawSquidTransport(
-                raw_client,
-                config=SquidTransportConfig(
-                    port=str(self._config.squid.port),
-                    baud=int(self._config.squid.baud or 1200),
-                    settle_delay_s=float(self._config.squid.settle_time),
-                ),
+            transport_config = SquidTransportConfig(
+                port=str(self._config.squid.port),
+                baud=int(self._config.squid.baud or 1200),
+                settle_delay_s=float(self._config.squid.settle_time),
+            )
+            transport = RawSquidTransport(raw_client, config=transport_config)
+            from .motion_capture import MotionCaptureRecorder, motion_capture_config_from_app_config
+
+            capture_config = motion_capture_config_from_app_config(self._config)
+            motion_capture = (
+                MotionCaptureRecorder(raw_client, capture_config, range_value=transport_config.range_value)
+                if capture_config is not None
+                else None
             )
             service = BracketedAcquisitionService(
                 transport,
@@ -1688,6 +1694,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                 ),
                 clock=self._acquisition_clock,
                 cancel_check=self._halt_check,
+                motion_capture=motion_capture,
             )
         except Exception as exc:
             self._acquisition_error = str(exc)

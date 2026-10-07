@@ -437,6 +437,24 @@ class MotorSerialClient:
                 self.halt(axis)
             raise HardwareError('Motor motion cancelled or its operation deadline expired.')
 
+    def set_position_observer(self, observer: "Callable[[MotorAxisConfig, float, int], None] | None") -> None:
+        """Receive ``(axis, perf_counter_s, position)`` for each in-motion position poll.
+
+        Used to timestamp lift height / turn angle while a SQUID stream records
+        the specimen in motion.  The observer runs on the motion thread and any
+        exception it raises is swallowed so it can never disturb motion.
+        """
+        self._position_observer = observer
+
+    def _notify_position(self, axis: MotorAxisConfig, pos: int) -> None:
+        observer = getattr(self, "_position_observer", None)
+        if observer is None:
+            return
+        try:
+            observer(axis, time.perf_counter(), pos)
+        except Exception:
+            pass
+
     def wait_for_motor_stop(self, axis: MotorAxisConfig, timeout_s: float = 120.0) -> None:
         start = time.monotonic()
         old1 = 2**7
@@ -445,6 +463,7 @@ class MotorSerialClient:
             self._check_motion_cancel(axis)
             time.sleep(0.05)
             pos = self.read_position(axis)
+            self._notify_position(axis, pos)
             if old1 == old0 == pos:
                 break
             if abs(old1 - old0) < 5 and abs(old0 - pos) < 5:

@@ -32,12 +32,13 @@ Design notes that matter for parity and safety
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import itertools
 import math
 import time
-from typing import Callable, Iterable, Protocol, runtime_checkable
+from typing import Any, Callable, Iterable, Protocol, runtime_checkable
 
 from rapid_main.magnetometer import (
     AXIS_NAMES,
@@ -305,6 +306,10 @@ class BracketedAcquisition:
     commands: tuple[CommandEvent, ...]
     started_iso: str
     completed_iso: str
+    #: Optional continuous SQUID traces recorded during the descent, turns and
+    #: ascent (:mod:`rapid_main.motion_capture`).  Auxiliary evidence only:
+    #: they never enter ``block.observations`` or the reduction.
+    motion_traces: tuple[Any, ...] = ()
 
 
 def _default_id_factory() -> Callable[[str], str]:
@@ -334,6 +339,7 @@ class BracketedAcquisitionService:
         clock: AcquisitionClock | None = None,
         id_factory: Callable[[str], str] | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        motion_capture: Any | None = None,
     ) -> None:
         self._transport = transport
         self._vertical = vertical
@@ -342,6 +348,8 @@ class BracketedAcquisitionService:
         self._clock = clock or SystemAcquisitionClock()
         self._make_id = id_factory or _default_id_factory()
         self._cancel_check = cancel_check
+        self._motion_capture = motion_capture
+        self._capturing = False
 
     def set_cancel_check(self, check):
         self._cancel_check = check
@@ -353,6 +361,10 @@ class BracketedAcquisitionService:
     @property
     def config(self) -> AcquisitionConfig:
         return self._config
+
+    @property
+    def motion_capture(self) -> Any | None:
+        return self._motion_capture
 
     def acquire(
         self,
@@ -373,6 +385,29 @@ class BracketedAcquisitionService:
         log = _CommandLog(self._clock)
         started_iso = self._clock.now().isoformat()
         block_id = self._make_id("block")
+        if self._motion_capture is None:
+            return self._acquire_block(cfg, ctx, log, started_iso, block_id, is_up, holder_positions)
+        self._motion_capture.begin_block(block_id)
+        self._capturing = True
+        completed = False
+        try:
+            acquisition = self._acquire_block(cfg, ctx, log, started_iso, block_id, is_up, holder_positions)
+            completed = True
+        finally:
+            self._capturing = False
+            traces = self._motion_capture.end_block(completed=completed)
+        return replace(acquisition, motion_traces=tuple(traces))
+
+    def _acquire_block(
+        self,
+        cfg: AcquisitionConfig,
+        ctx: BlockContext,
+        log: _CommandLog,
+        started_iso: str,
+        block_id: str,
+        is_up: bool,
+        holder_positions: Position4 | None,
+    ) -> BracketedAcquisition:
         range_label = cfg.holder_range_label if ctx.is_holder_block else cfg.range_label
 
         # 1) Reference orientation, then lift to the verified zero position.
@@ -406,7 +441,7 @@ class BracketedAcquisitionService:
         )
 
         # 5) Lower to the measurement position and re-assert the 0-degree turn.
-        self._lift_to(cfg.measurement_position, cfg.measure_speed_index, log, "measurement")
+        self._lift_to(cfg.measurement_position, cfg.measure_speed_index, log, "measurement", capture="descent")
         self._turn_to(POSITION_ANGLES_DEG[0], log)
         self._delay(cfg.arc_delay_s, log, "pre-measurement settle")
 
@@ -414,7 +449,7 @@ class BracketedAcquisitionService:
         positions: list[SquidObservation] = []
         for index, angle in enumerate(POSITION_ANGLES_DEG):
             if index > 0:
-                self._turn_to(angle, log)
+                self._turn_to(angle, log, capture="turn")
             positions.append(
                 self._observe(
                     role=f"position-{index + 1}",
@@ -427,7 +462,7 @@ class BracketedAcquisitionService:
             )
 
         # 7) Return to zero, close the rotation at 360 degrees, re-label as 0.
-        self._lift_to(cfg.zero_position, cfg.measure_speed_index, log, "zero")
+        self._lift_to(cfg.zero_position, cfg.measure_speed_index, log, "zero", capture="ascent")
         self._turn_to(BLOCK_CLOSING_ANGLE_DEG, log)
         with log.record("turning.set_reference", "angle=0"):
             self._check_cancel()
@@ -607,10 +642,21 @@ class BracketedAcquisitionService:
         except Exception as exc:
             raise TransportReadError(f"{detail}: {exc}") from exc
 
-    def _lift_to(self, position: int, speed_index: int, log: _CommandLog, name: str) -> None:
+    def _capture_segment(self, capture: str | None, name: str, target: object, mover: object):
+        """Record the SQUID during this motion when a capture plan wants it."""
+        if capture is None or not self._capturing or self._motion_capture is None:
+            return nullcontext(None)
+        return self._motion_capture.segment(capture, name, target=target, mover=mover)
+
+    def _lift_to(
+        self, position: int, speed_index: int, log: _CommandLog, name: str, *, capture: str | None = None
+    ) -> None:
         self._check_cancel()
         with log.record("vertical.move", f"{name} target={position} speed_index={speed_index}") as event:
-            outcome = self._vertical.move_to(int(position), speed_index=int(speed_index))
+            with self._capture_segment(capture, name, int(position), self._vertical) as segment:
+                outcome = self._vertical.move_to(int(position), speed_index=int(speed_index))
+                if segment is not None:
+                    segment.set_outcome(getattr(outcome, "actual", None), bool(getattr(outcome, "ok", False)))
             event.set_reply(f"actual={getattr(outcome, 'actual', '?')}")
             if not getattr(outcome, "ok", False):
                 raise MotionVerificationError(
@@ -619,10 +665,13 @@ class BracketedAcquisitionService:
                     f"{getattr(outcome, 'detail', '')}".strip()
                 )
 
-    def _turn_to(self, angle_deg: float, log: _CommandLog) -> None:
+    def _turn_to(self, angle_deg: float, log: _CommandLog, *, capture: str | None = None) -> None:
         self._check_cancel()
         with log.record("turning.rotate", f"target_deg={angle_deg:g}") as event:
-            outcome = self._turning.rotate_to(float(angle_deg))
+            with self._capture_segment(capture, f"{angle_deg:g}deg", float(angle_deg), self._turning) as segment:
+                outcome = self._turning.rotate_to(float(angle_deg))
+                if segment is not None:
+                    segment.set_outcome(getattr(outcome, "actual", None), bool(getattr(outcome, "ok", False)))
             event.set_reply(f"actual_deg={getattr(outcome, 'actual', '?')}")
             if not getattr(outcome, "ok", False):
                 raise MotionVerificationError(

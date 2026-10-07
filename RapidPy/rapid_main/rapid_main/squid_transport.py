@@ -19,9 +19,10 @@ producing synthetic numbers.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import math
-from typing import Callable
+from typing import Callable, Iterator
 
 from rapid_main.acquisition import (
     AcquisitionConfig,
@@ -189,12 +190,42 @@ class RawSquidTransport:
             raise error
 
 
+@contextmanager
+def _observe_axis_positions(
+    client: object,
+    axis: MotorAxisConfig,
+    callback: Callable[..., None],
+    transform: Callable[[int], float],
+) -> Iterator[None]:
+    """Forward in-motion position polls for ``axis`` to ``callback(value, t_monotonic=...)``."""
+
+    setter = getattr(client, "set_position_observer", None)
+    if not callable(setter):
+        yield
+        return
+
+    def observer(polled_axis: MotorAxisConfig, t_monotonic: float, position: int) -> None:
+        if getattr(polled_axis, "motor_id", None) == getattr(axis, "motor_id", None):
+            callback(transform(position), t_monotonic=t_monotonic)
+
+    setter(observer)
+    try:
+        yield
+    finally:
+        setter(None)
+
+
 class MotorVerticalController:
     """Verified lift motion for the up/down axis."""
 
     def __init__(self, client: MotorSerialClient, axis: MotorAxisConfig) -> None:
         self._client = client
         self._axis = axis
+
+    def observe_positions(self, callback: Callable[..., None]):
+        """Report lift counts polled during a move (for SQUID motion capture)."""
+
+        return _observe_axis_positions(self._client, self._axis, callback, float)
 
     def move_to(self, position: int, *, speed_index: int = 0) -> MotionOutcome:
         try:
@@ -236,6 +267,17 @@ class MotorTurningController:
     @property
     def _full_rotation(self) -> int:
         return int(self._client.config.turning_motor_full_rotation)
+
+    def observe_positions(self, callback: Callable[..., None]):
+        """Report turn angle (degrees) polled during a rotation."""
+
+        full_rotation = self._full_rotation
+        return _observe_axis_positions(
+            self._client,
+            self._axis,
+            callback,
+            lambda position: float(convert_pos_to_angle(position, full_rotation)),
+        )
 
     def rotate_to(self, angle_deg: float) -> MotionOutcome:
         try:

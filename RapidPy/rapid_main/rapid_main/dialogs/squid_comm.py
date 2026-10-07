@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from PySide6 import QtCore, QtWidgets
 
 from rapid_main.diagnostic_services import SquidBackend, SquidNoCommBackend
 from rapid_main.glass_theme import set_semantic_status
+
+#: Read-rate / motion-capture fields edited here and applied on Save Settings.
+STREAM_FIELDS = (
+    ("stream_interval_ms", 500),
+    ("stream_axes", "XYZ"),
+    ("stream_counts_every", 1),
+    ("stream_latch_count_hold_ms", 100),
+    ("stream_latch_data_hold_ms", 120),
+)
 
 
 class SquidCommDialog(QtWidgets.QDialog):
@@ -99,6 +110,45 @@ class SquidCommDialog(QtWidgets.QDialog):
         fl2.addRow("Settle time:", self._settle)
 
         settings_layout.addWidget(grp_meas)
+
+        grp_stream = QtWidgets.QGroupBox("Continuous read")
+        stream_layout = QtWidgets.QVBoxLayout(grp_stream)
+        stream_layout.setSpacing(8)
+        self._stream_settings = SimpleNamespace(baud=9600, **dict(STREAM_FIELDS))
+        self._stream_summary = QtWidgets.QLabel()
+        self._stream_summary.setObjectName("guidanceText")
+        self._stream_summary.setWordWrap(True)
+        stream_layout.addWidget(self._stream_summary)
+        self._stream_btn = QtWidgets.QPushButton("Live Stream…")
+        self._stream_btn.setAccessibleName("Open live SQUID stream with read-rate control")
+        self._stream_btn.setToolTip("Set the SQUID read rate, watch the live signal, filter it and view its spectrum.")
+        self._stream_btn.clicked.connect(self._open_stream)
+        stream_layout.addWidget(self._stream_btn)
+        self._capture_enabled = QtWidgets.QCheckBox("Capture while moving")
+        self._capture_enabled.setToolTip(
+            "Opt-in. Streams the SQUID at the read rate above during the borehole descent,\n"
+            "the 90° turns and the ascent of every measurement block. Saved as auxiliary\n"
+            "CSV + analysis files; never used for the published measurement."
+        )
+        self._capture_enabled.setAccessibleName("Enable SQUID motion capture")
+        stream_layout.addWidget(self._capture_enabled)
+        segment_row = QtWidgets.QHBoxLayout()
+        self._capture_descent = QtWidgets.QCheckBox("Descent")
+        self._capture_turns = QtWidgets.QCheckBox("Turns")
+        self._capture_ascent = QtWidgets.QCheckBox("Ascent")
+        for box in (self._capture_descent, self._capture_turns, self._capture_ascent):
+            box.setChecked(True)
+            segment_row.addWidget(box)
+        segment_row.addStretch(1)
+        stream_layout.addLayout(segment_row)
+        self._capture_dir = QtWidgets.QLineEdit()
+        self._capture_dir.setPlaceholderText("Default: <data folder>/squid_motion_capture")
+        self._capture_dir.setAccessibleName("Motion capture output folder")
+        stream_layout.addWidget(self._capture_dir)
+        self._capture_enabled.toggled.connect(self._update_capture_controls)
+        self._update_stream_summary()
+        self._update_capture_controls()
+        settings_layout.addWidget(grp_stream)
         settings_layout.addStretch()
         self._settings_scroll.setWidget(settings_host)
         vl.addWidget(self._settings_scroll, 1)
@@ -161,6 +211,15 @@ class SquidCommDialog(QtWidgets.QDialog):
         self._range.setCurrentText(str(getattr(cfg, "range_label", self._range.currentText())))
         self._samples.setValue(int(getattr(cfg, "samples_per_pos", self._samples.value())))
         self._settle.setValue(float(getattr(cfg, "settle_time", self._settle.value())))
+        for name, default in STREAM_FIELDS:
+            setattr(self._stream_settings, name, getattr(cfg, name, default))
+        self._capture_enabled.setChecked(bool(getattr(cfg, "motion_capture_enabled", False)))
+        self._capture_descent.setChecked(bool(getattr(cfg, "motion_capture_descent", True)))
+        self._capture_turns.setChecked(bool(getattr(cfg, "motion_capture_turns", True)))
+        self._capture_ascent.setChecked(bool(getattr(cfg, "motion_capture_ascent", True)))
+        self._capture_dir.setText(str(getattr(cfg, "motion_capture_dir", "") or ""))
+        self._update_stream_summary()
+        self._update_capture_controls()
 
     def _accept_settings(self) -> None:
         cfg = self._settings_config()
@@ -170,6 +229,13 @@ class SquidCommDialog(QtWidgets.QDialog):
             cfg.range_label = self._range.currentText()
             cfg.samples_per_pos = int(self._samples.value())
             cfg.settle_time = float(self._settle.value())
+            for name, _default in STREAM_FIELDS:
+                setattr(cfg, name, getattr(self._stream_settings, name))
+            cfg.motion_capture_enabled = bool(self._capture_enabled.isChecked())
+            cfg.motion_capture_descent = bool(self._capture_descent.isChecked())
+            cfg.motion_capture_turns = bool(self._capture_turns.isChecked())
+            cfg.motion_capture_ascent = bool(self._capture_ascent.isChecked())
+            cfg.motion_capture_dir = self._capture_dir.text().strip()
 
         parent = self.parentWidget()
         app_config = getattr(parent, "config", None)
@@ -180,6 +246,42 @@ class SquidCommDialog(QtWidgets.QDialog):
                 self._set_status(f"Unable to save SQUID settings: {exc}", "error")
                 return
         self.accept()
+
+    def _update_capture_controls(self) -> None:
+        enabled = self._capture_enabled.isChecked()
+        for widget in (self._capture_descent, self._capture_turns, self._capture_ascent, self._capture_dir):
+            widget.setEnabled(enabled)
+
+    def _update_stream_summary(self) -> None:
+        settings = self._stream_settings
+        interval = int(settings.stream_interval_ms)
+        rate = "as fast as the link allows" if interval <= 0 else f"every {interval} ms"
+        self._stream_summary.setText(
+            f"Read rate: {rate}, axes {settings.stream_axes}, flux counter every "
+            f"{settings.stream_counts_every} sample(s). Static bracketed reads keep the VB6 timing."
+        )
+
+    def _raw_client(self):
+        connect = getattr(self._backend, "connect_for_acquisition", None)
+        if callable(connect):
+            connect()
+        return getattr(self._backend, "raw_client", None)
+
+    def _open_stream(self) -> None:
+        from rapid_main.dialogs.squid_stream import SquidStreamDialog
+
+        try:
+            self._stream_settings.baud = int(self._baud.currentText())
+        except ValueError:
+            self._stream_settings.baud = 1200
+        dialog = SquidStreamDialog(
+            self,
+            client_provider=self._raw_client,
+            squid_config=self._stream_settings,
+            simulated=bool(self._backend.simulated),
+        )
+        dialog.exec()
+        self._update_stream_summary()
 
     def _annotate_status(self, text: str) -> str:
         status = text.strip()
