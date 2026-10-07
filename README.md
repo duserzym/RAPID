@@ -1,3 +1,5 @@
+<p><img src="RapidPy/rapid_main/assets/rapid_main_icon.png" alt="RapidPy automated sample-handling system" width="128"></p>
+
 # RAPID — RapidPy Paleomagnetic System
 
 > **VB6 → Python 64-bit modernisation** of the UC Berkeley RAPID paleomagnetic magnetometer controller.
