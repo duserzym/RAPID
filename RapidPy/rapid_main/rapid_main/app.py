@@ -87,6 +87,13 @@ from .glass_theme import (
     apply_main_glass_theme,
     install_glass_elevation,
 )
+from rapidpy_common.tiling import (
+    DEFAULT_MODIFIER as _TILING_MODIFIER,
+    TilingCanvas,
+    WorkspaceBar,
+    apply_tiling_theme,
+    install_tiling_shortcuts,
+)
 from .startup import main_assets_dir, select_main_icon
 
 
@@ -321,6 +328,26 @@ _QSETTINGS_QUEUE_RESUME_POS = "ui/queue_resume_pos"
 _QSETTINGS_QUEUE_CURRENT_SAMPLE = "ui/queue_current_sample"
 _QSETTINGS_QUEUE_ACTIVE = "ui/queue_active"
 _QSETTINGS_SHOW_STARTUP_GUIDE = "ui/show_startup_guide"
+_QSETTINGS_TILING_STATE = "ui/tiling_state"
+_QSETTINGS_TILE_TOOLS = "ui/tile_tool_windows"
+
+#: Tile keys for the six main panels, in ``_NAV_ITEMS`` order.  They match the
+#: public ``navigate_to`` names so links, menus and tiles share one vocabulary.
+_PANEL_KEYS = ("dashboard", "queue", "sequence", "measure", "settings", "calibration")
+
+#: First-start / Reset Layout arrangement (Omarchy-style workspaces).  Wide,
+#: table-heavy panels get a workspace of their own; tile them as you like.
+#:   1 Run       Dashboard | Live Measure
+#:   2 Queue     Sample Queue
+#:   3 Program   Sequence
+#:   4 Setup     Settings | Calibration
+_DEFAULT_TILING = {
+    1: {"split": "h", "ratios": [0.38, 0.62], "children": [{"leaf": "dashboard"}, {"leaf": "measure"}]},
+    2: {"leaf": "queue"},
+    3: {"leaf": "sequence"},
+    4: {"split": "h", "ratios": [0.5, 0.5], "children": [{"leaf": "settings"}, {"leaf": "calibration"}]},
+}
+_DEFAULT_TILING_FOCUS = {1: "dashboard", 2: "queue", 3: "sequence", 4: "settings"}
 
 
 def clamp_window_size_for_screen(available: QtCore.QRect, requested: tuple[int, int]) -> tuple[int, int]:
@@ -381,6 +408,15 @@ def _allow_horizontal_compression(widget: QtWidgets.QWidget) -> None:
         QtWidgets.QSizePolicy.Policy.Ignored,
         widget.sizePolicy().verticalPolicy(),
     )
+
+
+def _header_label_fit(label: QtWidgets.QLabel, minimum: int) -> None:
+    """Header text keeps its natural width but may shrink to ``minimum``.
+
+    ``Ignored`` let the stretch squeeze run state and sample text to nothing.
+    """
+    label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, label.sizePolicy().verticalPolicy())
+    label.setMinimumWidth(minimum)
 
 
 class _AdaptivePanelStack(QtWidgets.QStackedWidget):
@@ -520,27 +556,28 @@ class MainWindow(QtWidgets.QMainWindow):
         title = QtWidgets.QLabel("⚗  RAPID v4")
         title.setObjectName("headerTitle")
         title.setToolTip("RAPID v4")
-        _allow_horizontal_compression(title)
+        _header_label_fit(title, 0)
         hl.addWidget(title)
         hl.addWidget(_vline())
 
         self._flow_lbl = QtWidgets.QLabel("◎  Idle")
         self._flow_lbl.setObjectName("flowIdle")
         self._flow_lbl.setToolTip("Run state")
-        _allow_horizontal_compression(self._flow_lbl)
+        # The run state must stay readable at every window width.
+        _header_label_fit(self._flow_lbl, 96)
         hl.addWidget(self._flow_lbl)
         hl.addWidget(_vline())
 
         self._sample_hdr = QtWidgets.QLabel("Sample: —")
         self._sample_hdr.setStyleSheet("color: #4d3a39; font-size: 13px;")
         self._sample_hdr.setToolTip("Current sample")
-        _allow_horizontal_compression(self._sample_hdr)
+        _header_label_fit(self._sample_hdr, 40)
         hl.addWidget(self._sample_hdr)
 
         self._step_hdr = QtWidgets.QLabel("Step: —")
         self._step_hdr.setStyleSheet("color: #7a6f6e; font-size: 12px;")
         self._step_hdr.setToolTip("Current step")
-        _allow_horizontal_compression(self._step_hdr)
+        _header_label_fit(self._step_hdr, 40)
         hl.addWidget(self._step_hdr)
 
         hl.addStretch()
@@ -560,16 +597,23 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._pause_btn.clicked.connect(self._on_header_pause)
         self._halt_btn.clicked.connect(self._on_header_halt)
-        for btn, tip, width in (
-            (self._pause_btn, "Pause the active queue or measurement", 68),
-            (self._halt_btn, "Halt the active queue or measurement", 58),
-            (self._nocomm_btn, "Toggle no-communication simulation mode", 76),
-            (quit_btn, "Exit RAPID", 54),
+        for btn, tip in (
+            (self._pause_btn, "Pause the active queue or measurement"),
+            (self._halt_btn, "Halt the active queue or measurement"),
+            (self._nocomm_btn, "Toggle no-communication simulation mode"),
+            (quit_btn, "Exit RAPID"),
         ):
+            # Safety controls are never truncated: they keep their full label.
             btn.setToolTip(tip)
-            btn.setMinimumWidth(0)
-            btn.setMaximumWidth(width)
+            btn.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
             hl.addWidget(btn)
+
+        self._header_frame = header
+        self._header_layout = hl
+        self._header_title = title
+        self._nocomm_text = self._nocomm_btn.text()
+        self._exit_btn = quit_btn
+        header.installEventFilter(self)
 
         tb = QtWidgets.QToolBar()
         tb.setMovable(False)
@@ -578,6 +622,34 @@ class MainWindow(QtWidgets.QMainWindow):
         tb.setMinimumWidth(0)
         tb.addWidget(header)
         self.addToolBar(QtCore.Qt.TopToolBarArea, tb)
+
+    def _fit_header(self) -> None:
+        """Degrade the header in stages so Pause/Halt/run state never truncate."""
+        header = getattr(self, "_header_frame", None)
+        if header is None:
+            return
+        layout = self._header_layout
+        stages = (
+            lambda: self._step_hdr.setVisible(False),
+            lambda: (self._sample_hdr.setVisible(False), self._header_title.setText("⚗")),
+            lambda: (self._nocomm_btn.setText("⊘"), self._exit_btn.setText("✕")),
+        )
+        self._step_hdr.setVisible(True)
+        self._sample_hdr.setVisible(True)
+        self._header_title.setText("⚗  RAPID v4")
+        self._nocomm_btn.setText(self._nocomm_text)
+        self._exit_btn.setText("✕  Exit")
+        for stage in stages:
+            layout.invalidate()
+            if layout.minimumSize().width() <= header.width():
+                return
+            stage()
+        layout.invalidate()
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+        if obj is getattr(self, "_header_frame", None) and event.type() == QtCore.QEvent.Type.Resize:
+            self._fit_header()
+        return super().eventFilter(obj, event)
 
     # ── Central widget: sidebar + stacked panels ──────────────────────────────
     def _build_central(self) -> None:
@@ -599,7 +671,25 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Expanding,
         )
         self._sidebar = sidebar
-        sl = QtWidgets.QVBoxLayout(sidebar)
+        # Sidebar content scrolls on short screens instead of being squeezed.
+        sidebar_outer = QtWidgets.QVBoxLayout(sidebar)
+        sidebar_outer.setContentsMargins(0, 0, 0, 0)
+        sidebar_scroll = QtWidgets.QScrollArea()
+        sidebar_scroll.setObjectName("sidebarScroll")
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        sidebar_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Thin overlay-style scrollbar: it must not steal width from the nav labels.
+        sidebar_scroll.setStyleSheet(
+            "QScrollArea#sidebarScroll, QScrollArea#sidebarScroll > QWidget > QWidget { background: transparent; }"
+            "QScrollArea#sidebarScroll QScrollBar:vertical { width: 6px; margin: 2px 0; background: transparent; }"
+            "QScrollArea#sidebarScroll QScrollBar::handle:vertical { background: rgba(0,0,0,70); border-radius: 3px; min-height: 30px; }"
+            "QScrollArea#sidebarScroll QScrollBar::add-line:vertical, QScrollArea#sidebarScroll QScrollBar::sub-line:vertical { height: 0; }"
+        )
+        sidebar_content = QtWidgets.QWidget()
+        sidebar_scroll.setWidget(sidebar_content)
+        sidebar_outer.addWidget(sidebar_scroll)
+        sl = QtWidgets.QVBoxLayout(sidebar_content)
         sl.setContentsMargins(2, 6, 2, 6)
         sl.setSpacing(3)
 
@@ -608,6 +698,17 @@ class MainWindow(QtWidgets.QMainWindow):
             lbl.setObjectName("sectionHdr")
             lbl.setContentsMargins(8, 0, 0, 4)
             return lbl
+
+        # ── Tiling canvas (Omarchy-style workspaces) ──
+        self._stack = TilingCanvas(workspaces=5)
+        sl.addWidget(_sec_hdr("WORKSPACES"))
+        self._workspace_bar = WorkspaceBar(self._stack)
+        self._workspace_bar.setToolTip(
+            f"Workspaces · {_TILING_MODIFIER}+1…5 to switch, {_TILING_MODIFIER}+Space to open a panel, "
+            f"{_TILING_MODIFIER}+K for all key bindings"
+        )
+        sl.addWidget(self._workspace_bar)
+        sl.addSpacing(8)
 
         sl.addWidget(_sec_hdr("MAIN"))
         self._btn_group = QtWidgets.QButtonGroup(self)
@@ -681,9 +782,9 @@ class MainWindow(QtWidgets.QMainWindow):
         ver.setStyleSheet("color: #c4b7b3; font-size: 10px; padding: 0 8px;")
         sl.addWidget(ver)
 
-        # ── Stacked panels ──
-        self._stack = _AdaptivePanelStack()
+        # ── Panels live in tiles on the canvas created above ──
         self._stack.currentChanged.connect(self._stack.updateGeometry)
+        self._stack.currentChanged.connect(self._sync_nav_from_canvas)
         self._stack.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -704,14 +805,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self, backend_provider=lambda: self.measurement_backend()
         )
         self._calibration_panel.thermal_plan_recorded.connect(self._install_thermal_plan)
-        for panel in (
+        for (icon, label, _idx), key, panel in zip(_NAV_ITEMS, _PANEL_KEYS, (
             self._dashboard,
             self._sample_queue,
             self._sequence,
             self._measurement,
             self._settings_panel,
             self._calibration_panel,
-        ):
+        )):
             panel.setMinimumWidth(0)
             panel.setMinimumHeight(0)
             panel.setSizePolicy(
@@ -719,7 +820,19 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtWidgets.QSizePolicy.Policy.Expanding,
             )
             panel.setMinimumSize(0, 0)
-            self._stack.addWidget(panel)
+            self._stack.register(key, panel, label, icon=icon)
+        self._stack.set_layout(_DEFAULT_TILING, focus=_DEFAULT_TILING_FOCUS)
+        for title, slot in (
+            ("🔌  DC Motors", self._launch_dc_motors),
+            ("💧  Vacuum", self._launch_vacuum),
+            ("🔭  SQUID Comm", self._launch_squid),
+            ("📟  Step Monitor", self._launch_step_monitor),
+            ("🐞  Debug Console", self._launch_debug_console),
+            ("📷  Webcam Monitor", self._launch_webcam),
+            ("📈  Data Review (separate app)", self._launch_data_viewer),
+        ):
+            self._stack.add_launcher_action(title, slot)
+        self._tiling_shortcuts = install_tiling_shortcuts(self, self._stack)
         self._sync_dashboard_run_state()
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
@@ -1969,6 +2082,29 @@ class MainWindow(QtWidgets.QMainWindow):
         vm.addAction("&Reset Layout", self._reset_layout)
         vm.addSeparator()
         vm.addAction("&Webcam Monitor", self._launch_webcam)
+        vm.addSeparator()
+        tm = vm.addMenu("&Tiling")
+        tm.addAction(f"&Launcher…\t{_TILING_MODIFIER}+Space", self._stack.show_launcher)
+        tm.addAction(f"&Monocle (fill canvas)\t{_TILING_MODIFIER}+F", self._stack.toggle_monocle)
+        tm.addAction(f"Toggle &split direction\t{_TILING_MODIFIER}+J", self._stack.toggle_split)
+        tm.addAction(f"&Balance tiles\t{_TILING_MODIFIER}+B", self._stack.balance)
+        tm.addAction(f"&Float / tile tool window\t{_TILING_MODIFIER}+T", self._stack.float_tile)
+        tm.addSeparator()
+        self._classic_action = tm.addAction(f"&Classic pages (one panel at a time)\t{_TILING_MODIFIER}+C")
+        self._classic_action.setCheckable(True)
+        self._classic_action.toggled.connect(self._stack.set_classic)
+        self._stack.layoutChanged.connect(
+            lambda: self._classic_action.setChecked(self._stack.classic)
+            if self._classic_action.isChecked() != self._stack.classic else None
+        )
+        self._tile_tools_action = tm.addAction("Tile &tool windows into the canvas")
+        self._tile_tools_action.setCheckable(True)
+        self._tile_tools_action.setChecked(self._tile_tools_enabled())
+        self._tile_tools_action.toggled.connect(
+            lambda on: self._settings.setValue(_QSETTINGS_TILE_TOOLS, bool(on))
+        )
+        tm.addSeparator()
+        tm.addAction(f"&Key bindings…\t{_TILING_MODIFIER}+K", self._stack.show_keybindings)
 
         flm = mb.addMenu("F&low")
         self._flow_running_action = flm.addAction("&Running / Resume", self._flow_resume_requested)
@@ -2035,9 +2171,43 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ── Navigation ────────────────────────────────────────────────────────────
     def _nav_select(self, index: int) -> None:
+        """Open or focus the panel's tile (jumping to its workspace)."""
         self._stack.setCurrentIndex(index)
         if 0 <= index < len(self._nav_btns):
             self._nav_btns[index].setChecked(True)
+
+    def _sync_nav_from_canvas(self, index: int) -> None:
+        """Keep the sidebar highlight on the focused tile's panel."""
+        if not hasattr(self, "_btn_group"):
+            return
+        if 0 <= index < len(self._nav_btns):
+            self._nav_btns[index].setChecked(True)
+            return
+        self._btn_group.setExclusive(False)
+        for button in self._nav_btns:
+            button.setChecked(False)
+        self._btn_group.setExclusive(True)
+
+    def _tile_tools_enabled(self) -> bool:
+        settings = getattr(self, "_settings", None)
+        if settings is None:
+            return True
+        value = settings.value(_QSETTINGS_TILE_TOOLS, True)
+        return value not in (False, "false", "0", 0)
+
+    def _present_tool(self, dialog: QtWidgets.QWidget, key: str, title: str, *, icon: str = "") -> None:
+        """Show a non-modal tool window as a tile (Omarchy-style) or float it."""
+        canvas = self._stack
+        if self._tile_tools_enabled() and not canvas.classic:
+            if canvas.spec(key) is not None and canvas.spec(key).widget is dialog:
+                canvas.open(key)
+                return
+            canvas.dock_window(dialog, key, title, icon=icon)
+            return
+        if not dialog.isWindow():
+            dialog.setParent(self, QtCore.Qt.WindowType.Dialog)
+        dialog.show()
+        dialog.raise_()
 
     # ── Clock ─────────────────────────────────────────────────────────────────
     def _tick_clock(self) -> None:
@@ -2552,8 +2722,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         held_lease.release()
 
                 dlg.destroyed.connect(_release_owner)
-                dlg.show()
-                dlg.raise_()
+                self._present_tool(dlg, f"tool:{resource}", dlg.windowTitle() or owner)
         except Exception as exc:
             if lease is not None:
                 lease.release()
@@ -2695,8 +2864,10 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 self.resize(*_DEFAULT_WINDOW_SIZE)
 
-        panel_index = self._settings.value("ui/active_panel", 0, type=int)
-        self._nav_select(panel_index or 0)
+        tiling_state = self._settings.value(_QSETTINGS_TILING_STATE)
+        if not (tiling_state and self._stack.restore_state(str(tiling_state))):
+            panel_index = self._settings.value("ui/active_panel", 0, type=int)
+            self._nav_select(panel_index or 0)
 
         sidebar_width = self._settings.value("ui/sidebar_width", self._sidebar_default_width, type=int)
         splitter_state = self._settings.value("ui/main_splitter_state")
@@ -2758,6 +2929,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._clamp_window_to_work_area()
         self._settings.setValue("ui/window_geometry", self.saveGeometry())
         self._settings.setValue("ui/active_panel", self._stack.currentIndex())
+        self._settings.setValue(_QSETTINGS_TILING_STATE, json.dumps(self._stack.save_state()))
         self._settings.setValue("ui/main_splitter_state", self._main_splitter.saveState())
         self._settings.setValue(
             "ui/sidebar_width",
@@ -2833,6 +3005,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _reset_layout(self) -> None:
         self._settings.remove("ui/window_geometry")
         self._settings.remove("ui/active_panel")
+        self._settings.remove(_QSETTINGS_TILING_STATE)
         self._settings.remove("ui/sidebar_width")
         self._settings.remove("ui/main_splitter_state")
         self._settings.remove(_QSETTINGS_QUEUE_ROWS)
@@ -2847,6 +3020,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._main_splitter.setSizes(
             [self._sidebar_default_width, max(1, self.width() - self._sidebar_default_width)]
         )
+        self._stack.set_layout(_DEFAULT_TILING, focus=_DEFAULT_TILING_FOCUS)
         self._nav_select(0)
         QtWidgets.QMessageBox.information(self, "Reset Layout", "Layout reset to defaults.")
 
@@ -2972,14 +3146,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self._startup_guide_dialog.hide()
 
     def _launch_debug_console(self) -> None:
+        docked = self._stack.spec("tool:debug")
+        if docked is not None:
+            self._stack.open("tool:debug")
+            return
         if not hasattr(self, "_debug_dlg") or not self._debug_dlg.isVisible():
             self._debug_dlg = DebugConsoleDialog(
                 self,
                 snapshot_provider=self._diagnostic_status_lines,
             )
             self._debug_dlg.setModal(False)
-        self._debug_dlg.show()
-        self._debug_dlg.raise_()
+        self._present_tool(self._debug_dlg, "tool:debug", "Debug Console", icon="🐞")
 
     def _diagnostic_status_lines(self):
         return collect_diagnostic_status(
@@ -3002,11 +3179,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._dashboard.update_diagnostics(lines)
 
     def _launch_step_monitor(self) -> None:
+        docked = self._stack.spec("tool:step")
+        if docked is not None:
+            self._stack.open("tool:step")
+            return
         if not hasattr(self, "_step_dlg") or not self._step_dlg.isVisible():
             self._step_dlg = StepMonitorDialog(self)
             self._step_dlg.setModal(False)
-        self._step_dlg.show()
-        self._step_dlg.raise_()
+        self._present_tool(self._step_dlg, "tool:step", "Step Monitor", icon="📟")
 
     def _launch_data_viewer(self) -> None:
         try:
@@ -3054,8 +3234,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _launch_webcam(self) -> None:
         if not hasattr(self, "_webcam_dlg"):
             self._webcam_dlg = WebcamDialog(self)
-        self._webcam_dlg.show()
-        self._webcam_dlg.raise_()
+        self._present_tool(self._webcam_dlg, "tool:webcam", "Webcam Monitor", icon="📷")
 
     def _launch_transition_help(self) -> None:
         if not hasattr(self, "_transition_help_dlg"):
@@ -3366,6 +3545,7 @@ def main() -> int:
     apply_liquid_glass_theme(app)
     app.setStyleSheet(app.styleSheet() + _EXTRA_CSS)
     apply_main_glass_theme(app)
+    apply_tiling_theme(app)
     assets_dir = main_assets_dir()
     icon_name, _icon_path = select_main_icon(assets_dir)
     if not icon_name:
