@@ -26,6 +26,7 @@ from rapidpy_common.ui import (
     MIN_WINDOW_WIDTH,
     MIN_WINDOW_HEIGHT,
     _fit_window_to_screen,
+    workspace_window_size,
     _refit_top_level_windows,
     _screen_area_for_widget,
     clamp_window_geometry,
@@ -377,7 +378,8 @@ class TestWindowLayoutHelpers(unittest.TestCase):
 
     def test_shared_window_guard_reduces_oversized_minimums(self) -> None:
         available = QtCore.QRect(80, 40, 1024, 640)
-        max_w, max_h = clamp_window_geometry(available, (1800, 1200))
+        max_w, max_h = workspace_window_size(available, (1800, 1200))
+        self.assertEqual((max_w, max_h), (962, 601))
         window = QtWidgets.QMainWindow()
         try:
             window.setMinimumSize(1600, 900)
@@ -400,7 +402,7 @@ class TestWindowLayoutHelpers(unittest.TestCase):
 
     def test_topology_refit_reclamps_all_top_level_windows(self) -> None:
         available = QtCore.QRect(-1600, 40, 1024, 640)
-        max_w, max_h = clamp_window_geometry(available, (2200, 1600))
+        max_w, max_h = workspace_window_size(available, (2200, 1600))
         window = QtWidgets.QMainWindow()
         try:
             window.setMinimumSize(2200, 1600)
@@ -418,6 +420,41 @@ class TestWindowLayoutHelpers(unittest.TestCase):
             self.assertLessEqual(window.y() + window.height(), available.bottom() + 1)
         finally:
             window.deleteLater()
+
+    def test_shared_window_guard_lets_windows_grow_to_the_work_area(self) -> None:
+        available = QtCore.QRect(0, 0, 1920, 1040)
+        window = QtWidgets.QMainWindow()
+        try:
+            window.resize(1440, 900)
+            with patch("rapidpy_common.ui._screen_area_for_widget", return_value=available):
+                _fit_window_to_screen(window)
+            # The requested size is honoured instead of a 35% compact cap, and
+            # the maximum is the work area so the window can be maximised/tiled.
+            self.assertEqual((window.width(), window.height()), (1440, 900))
+            self.assertEqual((window.maximumWidth(), window.maximumHeight()), (1920, 1040))
+        finally:
+            window.deleteLater()
+
+    def test_shared_window_guard_never_clips_content_minimum(self) -> None:
+        available = QtCore.QRect(0, 0, 1280, 680)
+        window = QtWidgets.QMainWindow()
+        content = QtWidgets.QWidget()
+        content.setMinimumSize(1100, 500)
+        window.setCentralWidget(content)
+        try:
+            window.resize(400, 300)
+            with patch("rapidpy_common.ui._screen_area_for_widget", return_value=available):
+                _fit_window_to_screen(window)
+            self.assertGreaterEqual(window.width(), 1100)
+            self.assertGreaterEqual(window.height(), 500)
+            self.assertLessEqual(window.width(), available.width())
+        finally:
+            window.deleteLater()
+
+    def test_workspace_size_is_bounded_by_the_work_area(self) -> None:
+        tiny = QtCore.QRect(0, 0, 280, 160)
+        self.assertEqual(workspace_window_size(tiny, (2000, 1600), (900, 900)), (280, 160))
+        self.assertEqual(workspace_window_size(QtCore.QRect(0, 0, 1920, 1080), (800, 600)), (800, 600))
 
     def test_main_window_fit_reduces_oversized_restore_and_sidebar(self) -> None:
         available = QtCore.QRect(80, 40, 1024, 640)

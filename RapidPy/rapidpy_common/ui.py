@@ -102,30 +102,60 @@ def _screen_area_for_widget(window: QtWidgets.QWidget) -> QtCore.QRect | None:
     return app.screens()[0].availableGeometry()
 
 
+#: Largest share of the work area a window takes when it is (re)fitted.
+WORKSPACE_FRACTION = 0.94
+
+
+def workspace_window_size(
+    available: QtCore.QRect,
+    requested: tuple[int, int],
+    minimum_hint: tuple[int, int] = (0, 0),
+    *,
+    fraction: float = WORKSPACE_FRACTION,
+) -> tuple[int, int]:
+    """Size for a top-level window on ``available``.
+
+    Honour the requested size up to ``fraction`` of the work area, never go
+    below what the content layout needs (so controls are not clipped), and
+    never exceed the work area itself.
+    """
+
+    area_w = max(1, available.width())
+    area_h = max(1, available.height())
+    cap_w = max(1, int(area_w * fraction))
+    cap_h = max(1, int(area_h * fraction))
+    width = min(max(1, int(requested[0])), cap_w)
+    height = min(max(1, int(requested[1])), cap_h)
+    width = min(area_w, max(width, int(minimum_hint[0]), min(MIN_WINDOW_WIDTH, area_w)))
+    height = min(area_h, max(height, int(minimum_hint[1]), min(MIN_WINDOW_HEIGHT, area_h)))
+    return width, height
+
+
 def _fit_window_to_screen(window: QtWidgets.QWidget) -> None:
-    """Clamp and re-center a top-level window into the current work area."""
+    """Fit a top-level window to its current work area without clipping it.
+
+    The window may always grow to the full work area (maximise, drag, tile);
+    its minimum never exceeds the work area; and when it is larger than the
+    work-area share it is brought back inside and re-centred.
+    """
     available = _screen_area_for_widget(window)
     if available is None:
         return
 
-    max_w, max_h = clamp_window_geometry(available, (window.width(), window.height()))
-
     if window.isMaximized():
         window.showNormal()
 
+    hint = window.minimumSizeHint()
+    hint_size = (hint.width(), hint.height()) if hint.isValid() else (0, 0)
+    target_w, target_h = workspace_window_size(available, (window.width(), window.height()), hint_size)
+
     min_size = window.minimumSize()
     if min_size.isValid() and not min_size.isNull():
-        window.setMinimumSize(min(min_size.width(), max_w), min(min_size.height(), max_h))
-
-    # Keep explicit runtime caps so window manager restore/maximize actions cannot
-    # temporarily bypass our intended safe-boot envelope on this screen.
-    window.setMaximumWidth(max_w)
-    window.setMaximumHeight(max_h)
+        window.setMinimumSize(min(min_size.width(), target_w), min(min_size.height(), target_h))
+    window.setMaximumSize(available.width(), available.height())
 
     frame = window.frameGeometry()
-    if frame.width() > max_w or frame.height() > max_h:
-        frame.setSize(QtCore.QSize(max_w, max_h))
-
+    frame.setSize(QtCore.QSize(target_w, target_h))
     if frame.width() > available.width() or frame.height() > available.height():
         frame.moveCenter(available.center())
     else:
@@ -134,10 +164,7 @@ def _fit_window_to_screen(window: QtWidgets.QWidget) -> None:
         frame.moveTopLeft(QtCore.QPoint(new_x, new_y))
 
     window.setGeometry(frame)
-    window.resize(
-        min(window.width(), frame.width()),
-        min(window.height(), frame.height()),
-    )
+    window.resize(target_w, target_h)
 
 
 def _fit_window_with_widget_handler(window: QtWidgets.QWidget, screen: QtGui.QScreen | None = None) -> bool:

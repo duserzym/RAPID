@@ -34,7 +34,7 @@ from .config import AppConfig, _auto_find_ini, load_config, read_calibration_fro
 from .models import MeasurementSample
 from .session_manifest import load_handoff_context, write_vrm_output_manifest
 from .squid_serial import SquidCommunicationError, SquidSerialClient
-from rapidpy_common.ui import apply_liquid_glass_theme, apply_window_bounds_guard, clamp_window_geometry, set_app_icon
+from rapidpy_common.ui import apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon, workspace_window_size
 from rapidpy_common.resources import asset_directory
 
 
@@ -493,7 +493,7 @@ class MainWindow(QtWidgets.QMainWindow):
         screen = QtWidgets.QApplication.primaryScreen()
         if screen is not None:
             avail = screen.availableGeometry()
-            max_w, max_h = clamp_window_geometry(avail, (self.width(), self.height()))
+            max_w, max_h = workspace_window_size(avail, (self.width(), self.height()))
             if self.width() > max_w or self.height() > max_h:
                 self.resize(max_w, max_h)
 

@@ -45,7 +45,7 @@ from rapidpy_common.glass import (  # noqa: E402
     style_glass_plot,
 )
 from rapidpy_common.ui import (  # noqa: E402
-    clamp_window_geometry,
+    workspace_window_size,
     apply_window_bounds_guard,
     set_app_icon,
 )
@@ -1899,7 +1899,7 @@ class AdwinCommsApp(QtWidgets.QMainWindow):
         screen = QtWidgets.QApplication.primaryScreen()
         if screen is not None:
             avail = screen.availableGeometry()
-            max_w, max_h = clamp_window_geometry(avail, (self.width(), self.height()))
+            max_w, max_h = workspace_window_size(avail, (self.width(), self.height()))
             if self.width() > max_w or self.height() > max_h:
                 self.resize(max_w, max_h)
 

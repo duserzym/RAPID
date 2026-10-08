@@ -33,7 +33,7 @@ from rapidpy_common.hardware import (  # noqa: E402
 from rapidpy_common.ui import (  # noqa: E402
     apply_card_shadow,
     apply_liquid_glass_theme,
-    clamp_window_geometry,
+    workspace_window_size,
     apply_window_bounds_guard,
     set_app_icon,
 )
@@ -177,9 +177,9 @@ class MainWindow(QtWidgets.QMainWindow):
     _COMPACT_SPLIT_WIDTH = 1200
     _COMPACT_SPLIT_HEIGHT = 700
     _NARROW_SPLIT_WIDTH = 560
-    _DEFAULT_WINDOW_SIZE = (680, 500)
+    _DEFAULT_WINDOW_SIZE = (1100, 760)
     _SPLIT_LEFT_WIDTH_MIN = 160
-    _SPLIT_LEFT_WIDTH_MAX = 230
+    _SPLIT_LEFT_WIDTH_MAX = 340
 
     def __init__(self) -> None:
         super().__init__()
@@ -545,7 +545,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         graph = pg.GraphicsLayoutWidget()
         graph.setBackground("#fffdf8")
-        graph.setMinimumHeight(280)
+        # Five stacked traces need ~130 px each to stay readable; on short
+        # screens the graph scrolls instead of collapsing the plots together.
+        graph.setMinimumHeight(5 * 130)
 
         position_plot = graph.addPlot(row=0, col=0, title="Command input vs encoder output")
         error_plot = graph.addPlot(row=1, col=0, title="Position error")
@@ -592,8 +594,15 @@ class MainWindow(QtWidgets.QMainWindow):
             pen=pg.mkPen("#8f4ba8", width=2), name="Actual - Command"
         )
         self._curves["torque"] = torque_plot.plot(pen=pg.mkPen("#28755f", width=2))
-        layout.addWidget(graph, 1)
+        graph_scroll = QtWidgets.QScrollArea()
+        graph_scroll.setObjectName("panelScroll")
+        graph_scroll.setWidgetResizable(True)
+        graph_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        graph_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        graph_scroll.setWidget(graph)
+        layout.addWidget(graph_scroll, 1)
         self._graph = graph
+        self._graph_scroll = graph_scroll
 
     def _extract_torque(self, sample: object) -> float | None:
         for attr in self._TORQUE_FIELD_ALIASES:
@@ -947,17 +956,19 @@ class MainWindow(QtWidgets.QMainWindow):
         if active_screen is None:
             return
         available = active_screen.availableGeometry()
-        fitted_w, fitted_h = clamp_window_geometry(available, (self.width(), self.height()))
+        fitted_w, fitted_h = workspace_window_size(available, (self.width(), self.height()))
         if self.isMaximized():
             self.showNormal()
-        self.setMaximumWidth(fitted_w)
-        self.setMaximumHeight(fitted_h)
+        # The window may grow to the work area; only the startup size is fitted.
+        self.setMaximumSize(available.width(), available.height())
 
         min_size = self.minimumSize()
         if min_size.isValid() and not min_size.isNull():
             self.setMinimumSize(min(min_size.width(), fitted_w), min(min_size.height(), fitted_h))
 
-        compact = available.width() < self._COMPACT_SPLIT_WIDTH or available.height() < self._COMPACT_SPLIT_HEIGHT
+        # Stack the panels only when the screen is narrow; a short but wide
+        # screen keeps them side by side so the traces keep their height.
+        compact = available.width() < self._COMPACT_SPLIT_WIDTH
         if available.width() < self._NARROW_SPLIT_WIDTH:
             wanted_columns = self._VALUE_GRID_NARROW_COLUMNS
         elif compact:

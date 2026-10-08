@@ -397,7 +397,7 @@ class MainWindow(QtWidgets.QMainWindow):
         area = screen.availableGeometry()
         width, height = max(1, min(1680, int(area.width() * .92))), max(1, min(940, int(area.height() * .90)))
         self.setMinimumSize(min(800, width), min(620, height))
-        self.setMaximumSize(width, height)
+        self.setMaximumSize(area.width(), area.height())  # may grow to the work area
         self.resize(width, height)
         frame = self.frameGeometry()
         self.move(max(area.left(), min(frame.left(), area.right() - frame.width() + 1)),
