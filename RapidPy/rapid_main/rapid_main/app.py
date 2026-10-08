@@ -84,6 +84,7 @@ from .vrm import (
 )
 from .glass_theme import (
     GlassBackdrop,
+    apply_macos_glass_theme,
     apply_main_glass_theme,
     install_glass_elevation,
 )
@@ -565,7 +566,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._flow_lbl.setToolTip("Run state")
         # The run state must stay readable at every window width.
         _header_label_fit(self._flow_lbl, 96)
-        hl.addWidget(self._flow_lbl)
+        self._flow_lbl.setMaximumHeight(28)  # capsule, not a full-height block
+        hl.addWidget(self._flow_lbl, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
         hl.addWidget(_vline())
 
         self._sample_hdr = QtWidgets.QLabel("Sample: —")
@@ -690,7 +692,9 @@ class MainWindow(QtWidgets.QMainWindow):
         sidebar_scroll.setWidget(sidebar_content)
         sidebar_outer.addWidget(sidebar_scroll)
         sl = QtWidgets.QVBoxLayout(sidebar_content)
-        sl.setContentsMargins(2, 6, 2, 6)
+        # No side margins: when the thin scrollbar shows at the 240 px minimum
+        # sidebar width the nav labels still get their full width.
+        sl.setContentsMargins(0, 6, 0, 6)
         sl.setSpacing(3)
 
         def _sec_hdr(text: str) -> QtWidgets.QLabel:
@@ -700,7 +704,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return lbl
 
         # ── Tiling canvas (Omarchy-style workspaces) ──
-        self._stack = TilingCanvas(workspaces=5)
+        self._stack = TilingCanvas(workspaces=5, chrome="mac")
         sl.addWidget(_sec_hdr("WORKSPACES"))
         self._workspace_bar = WorkspaceBar(self._stack)
         self._workspace_bar.setToolTip(
@@ -3546,6 +3550,7 @@ def main() -> int:
     app.setStyleSheet(app.styleSheet() + _EXTRA_CSS)
     apply_main_glass_theme(app)
     apply_tiling_theme(app)
+    apply_macos_glass_theme(app)  # last: the macOS glass layer wins
     assets_dir = main_assets_dir()
     icon_name, _icon_path = select_main_icon(assets_dir)
     if not icon_name:

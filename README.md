@@ -43,6 +43,9 @@ RapidPy is now beyond the initial three-app milestone. The repository currently 
 
 ### Recent Highlights
 
+- **Tiling, macOS-glass main app:** `rapid_main` panels and tool windows now tile like Omarchy/Hyprland. You get workspaces 1–5, drag-to-dock, monocle, Ctrl+Alt key bindings, a launcher, and a classic single-page mode. The window has a macOS-style glass look with traffic-light tiles. See the [tiling canvas guide](docs/tiling-canvas.md).
+- **Windows fit the screen:** standalone apps open at their requested size up to 94% of the screen, never clip their content, and can be maximised. The old shared guard capped them at 35% of the screen width.
+- **SQUID settings follow VB6:** 1200,N,8,1, a 1 s read delay and one block per position. Import `Paleomag_v3.INI` on the lab PC before hardware runs.
 - **SQUID read rate, live stream and motion capture:** the operator sets the SQUID sample rate. A live stream window shows the filtered signal and its spectrum. Opt-in continuous capture records the SQUID while the specimen descends the borehole and turns 90°, then fits the coil-pass and rotation models. The capture is auxiliary and is never used for published results. See the [guide and bench validation plan](docs/squid-stream-and-motion-capture.md).
 - **Glassmorphism instrument panels:** Gaussmeter, Changer XY and ADwin share a new frosted-glass theme (`rapidpy_common/glass.py`) with status-chip headers. They also fit the 1280×720 minimum workspace instead of opening clipped.
 - **COM Port Mapper:** released Windows utility for serial-role discovery and saved machine-local COM assignments before launching hardware apps.

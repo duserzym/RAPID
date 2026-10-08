@@ -2193,3 +2193,163 @@ instrument logic changed.
 4. Refresh `PRODUCTION_READINESS_ASSESSMENT.md` against the October checkpoints.
 5. Continue the open full-system gates listed above. The full-system goal
    remains active.
+
+
+## Checkpoint — 8 October 2026: VB6 SQUID settings, window fitting, tiling canvas
+
+### SQUID link settings checked against VB6
+
+The VB6 source of truth for the SQUID link:
+
+* `frmSQUID.Connect` hardcodes `MSCommSquid.Settings = "1200,N,8,1"` and
+  asserts RTS before each command.
+* `COMPortSquids= 1`, `ReadDelay= 1` (whole seconds).
+* `LatchCount` 0.10 s and `LatchData` 0.12 s; `GetResponse` times out after 1 s.
+* `Measure_ARCDelay = 2.5`.
+* Holder blocks use `ChangeRange "A","1"`. Specimens use flux counting with
+  `rangeval = 1`.
+* `XCal= 2.2792`, `YCal=-2.294`, `ZCal= 1.6717`, `RangeFact= .00001`.
+* Averaging is per-file `AvgSteps` (default 1).
+
+RapidPy diverged in its defaults:
+
+* baud **9600**, which is wrong because the transport used the configured value;
+* settle 1.5 s;
+* 4 samples per position.
+
+The lab PC's saved `~/.rapid/config.json` has the same values, plus:
+
+* axis calibration 1.0/1.0/1.0, because the INI was never imported;
+* a range label corrupted by an older encoding (`"1�"`).
+
+Changes:
+
+* Defaults now follow VB6: 1200 baud, 1.0 s settle, 1 block per position.
+* The VB6 INI import sets the hardcoded 1200 baud.
+* Damaged range labels are repaired on load.
+
+The saved lab configuration was **not** edited. Run *Settings → Import VB6
+INI…* on `VB6/settings/Paleomag_v3.INI` before any hardware run. The full table
+is in [docs/squid-stream-and-motion-capture.md](docs/squid-stream-and-motion-capture.md).
+
+### Window clipping fixed across all standalone apps
+
+**Root cause.** The shared bounds guard turned a compact 35%-of-screen
+*startup* size (672 px on 1920 px) into each window's *maximum*, and lowered
+its minimum to match. Wider layouts therefore opened clipped and could not be
+enlarged.
+
+**New policy** (`workspace_window_size`):
+
+* honour the requested size up to 94% of the work area;
+* never shrink below the content's layout minimum;
+* let every window grow to the whole work area.
+
+`clamp_window_geometry` stays as a tested helper. App-specific changes:
+
+* VRM, ADwin and DC Motors restore through the new sizing.
+* AF Tuner, AF Clip Test and Up/Down may now be maximised.
+* **DC Motors** stacks its panels only on *narrow* screens (it used to do so on
+  short ones). It opens at 1100×760, its control column is wider, and its five
+  traces scroll instead of collapsing at 720p.
+
+**Audit.** All 15 standalone windows were opened at startup and on a simulated
+1280×680 work area:
+
+* none extends off-screen;
+* the remaining squeeze is only in content that already scrolls.
+
+### rapid_main: Omarchy-style tiling canvas
+
+The main window now uses a tiling canvas (`rapidpy_common/tiling.py`) in place
+of the page stack:
+
+* **Tiles.** Every panel is a tile. Opening one splits the focused tile
+  (dwindle), closing one returns its space, and splits drag to any ratio.
+* **Workspaces 1–5.** A switcher sits in the sidebar.
+* **Monocle.** One tile can fill the canvas.
+* **Drag-dock.** Drop a tile on another tile's edges to dock it there, or on
+  its centre to swap.
+* **Keyboard.** Ctrl+Alt bindings, because Windows reserves Super. There is a
+  launcher (Ctrl+Alt+Space) and a key-binding sheet.
+* **Tool windows.** Step Monitor, Debug Console, Webcam, Vacuum and DC Motors
+  tile into the canvas and can float back out.
+  * Owned windows keep their device leases.
+  * A window that refuses to close keeps its tile.
+* **Classic pages** keeps the VB6-style single-panel view, as Phase 3 requires
+  for operator transition.
+* **Persistence.** The layout is saved in `ui/tiling_state`; View → Reset
+  Layout restores the default workspaces.
+* **Compatibility.** The canvas implements the old stack API, so existing
+  navigation (`_nav_select`, `navigate_to`, startup-guide links) opens and
+  focuses tiles unchanged.
+
+Fixes found while doing this:
+
+* **Header (pre-existing).** Pause and Halt were capped below their text width
+  ("Paus", "Ha"), and the run state could be squeezed to nothing. The header
+  now degrades in stages instead: step, then sample/title, then icon-only
+  No-Comm/Exit. Pause, Halt and the run state are never truncated.
+* **Sidebar.** It now scrolls on short screens.
+
+Guide: [docs/tiling-canvas.md](docs/tiling-canvas.md).
+
+### rapid_main: macOS-style glassmorphism
+
+`apply_macos_glass_theme` is applied last in `main()`. It provides:
+
+* **Backdrop.** A soft wallpaper-like colour field: maroon, gold, lavender
+  and teal over a warm gradient.
+* **Vibrancy.** A translucent sidebar and a unified toolbar, both with
+  hairline separators.
+* **Sidebar.** macOS source-list rows with an accent selection pill.
+* **Controls.** 7 px rounded controls with an accent focus ring, capsule
+  run-state and status pills, overlay scrollbars, and rounded menus and
+  tooltips.
+* **Tiles.** Tiles look like macOS windows: red/yellow/green traffic lights
+  for close, float and monocle. Glyphs appear on hover. Inactive tiles show
+  grey lights, the title is centred, and a quiet accent ring marks the
+  focused tile.
+
+The shared base theme painted every widget opaque beige. The macOS layer
+resets that to transparent and re-declares every opaque surface: windows,
+dialogs, message boxes, popups, item views, text areas, group boxes and tabs.
+This lets the backdrop read through while semantic status pills keep their
+colours.
+
+Found and fixed: opening a tile let Qt's focus churn during the rebuild
+re-focus the previous tile. Rebuilds now suppress that, and keyboard focus
+moves into the newly focused tile.
+
+### Evidence
+
+* **New tests.** 21 tiling tests, including macOS chrome and theme layering:
+  * tree operations, the stack facade, dwindle and close;
+  * directional focus and swap, workspaces, monocle and classic;
+  * resize, toggle and balance; drag-dock zones; state round trip;
+  * tool-window dock, float and close; a busy window refusing to close;
+  * the workspace bar, shortcuts and launcher;
+  * MainWindow defaults, navigation sync, persistence, classic mode and header
+    truncation.
+* **Additional tests.**
+  * 3 VB6 SQUID-default tests.
+  * 3 window-guard policy tests; 2 existing guard tests updated from the 35%
+    startup to the new policy.
+* **Existing suites, all passing.** Sequence smoke (10), startup guide (2),
+  window layout (33), dashboard shell (7), vacuum (15) and DC motor (16)
+  ownership, UI actions (7), bootstrap contracts (12), DC Motors (12) and Data
+  Viewer standalone tests.
+* **Full suite.** 1,345 tests ran. Three failures appeared only under full-suite load and are now fixed and re-run green:
+  * nav buttons were 2 px short at the 240 px sidebar minimum while its scrollbar showed;
+  * one motion-capture integration check depended on how many samples the fake descent produced.
+
+  The run exited normally after the watchdog stopped. All these are software checks with injected or simulated instruments.
+
+### Next steps
+
+1. Operator review of the tiling canvas and default workspaces on the lab
+   displays, including 1280×720 and the mixed-DPI matrix.
+2. Import the VB6 INI on the lab PC, then bench-validate the SQUID link at
+   1200 baud. After that, run the stream/capture validation plan.
+3. Consider adopting `TilingCanvas` in the multi-panel standalone apps
+   (Changer XY, Up/Down).

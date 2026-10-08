@@ -15,6 +15,23 @@ manager such as Omarchy/Hyprland:
 
 The VB6-style one-panel-at-a-time view is still available as **Classic pages**.
 
+## Look
+
+The main app uses a macOS-style glass theme:
+
+* translucent sidebar and toolbar over a soft colour field;
+* macOS-style controls and menus;
+* tiles drawn as macOS windows.
+
+Each tile has **traffic lights**:
+
+* 🔴 close;
+* 🟡 float (tool windows only; grey for panels);
+* 🟢 monocle.
+
+The glyphs appear when the pointer is over the title bar. As on macOS, only
+the focused tile shows coloured lights.
+
 ## Default workspaces (View → Reset Layout restores them)
 
 | Workspace | Tiles |
@@ -35,11 +52,11 @@ in the current workspace.
 * **Move / dock:** drag a tile by its title bar onto another tile. The
   highlighted half shows where it lands. The left, right, top or bottom band
   docks it on that side; the centre swaps the two tiles.
-* **Monocle:** double-click a title bar (or press ⤢) to fill the canvas with
-  that tile, and again to restore.
-* **Close:** ✕ in the title bar. A panel can be reopened from the sidebar or
-  the launcher.
-* **Float:** ⇱ on a tool-window tile (Step Monitor, Debug Console, Webcam,
+* **Monocle:** double-click a title bar (or the green light) to fill the
+  canvas with that tile, and again to restore.
+* **Close:** the red light. A panel can be reopened from the sidebar or the
+  launcher.
+* **Float:** the yellow light on a tool-window tile (Step Monitor, Debug Console, Webcam,
   Vacuum, DC Motors) pops it out as a normal window. Opening the tool again
   tiles it back.
 

@@ -332,3 +332,46 @@ class MainWindowTilingTests(unittest.TestCase):
             self.assertGreater(window._flow_lbl.width(), 60)
         finally:
             self._dispose(window)
+
+
+class MacGlassChromeTests(unittest.TestCase):
+    def test_mac_chrome_uses_traffic_lights_that_follow_focus(self):
+        from rapidpy_common.tiling import TrafficLight
+
+        window = QtWidgets.QMainWindow()
+        canvas = TilingCanvas(chrome="mac")
+        canvas.set_animation_duration(0)
+        window.setCentralWidget(canvas)
+        canvas.register("a", QtWidgets.QLabel("a"), "A")
+        canvas.register("b", QtWidgets.QLabel("b"), "B")
+        window.show()
+        canvas.open("a")
+        canvas.open("b")
+        _pump()
+        frame_a, frame_b = canvas.frame("a"), canvas.frame("b")
+        self.assertIsInstance(frame_a.close_button, TrafficLight)
+        self.assertFalse(frame_a.float_button.isEnabled())  # panels cannot float
+        self.assertTrue(frame_b.close_button.active)
+        self.assertFalse(frame_a.close_button.active)  # inactive tiles go grey
+        frame_a.monocle_button.click()
+        self.assertEqual(canvas.visible_keys(), ["a"])
+        window.close()
+        window.deleteLater()
+
+    def test_macos_layer_is_applied_last_and_keeps_contracts(self):
+        from rapid_main.glass_theme import MACOS_GLASS_QSS, apply_macos_glass_theme, apply_main_glass_theme
+
+        app = QtWidgets.QApplication.instance()
+        original = app.styleSheet()
+        try:
+            app.setStyleSheet("")
+            apply_main_glass_theme(app)
+            apply_macos_glass_theme(app)
+            applied = app.styleSheet()
+            self.assertTrue(applied.endswith(MACOS_GLASS_QSS))
+            self.assertIn('QFrame#tile[chrome="mac"]', applied)
+            self.assertIn("QPushButton#navBtn:checked", applied)
+            apply_macos_glass_theme(app)  # idempotent
+            self.assertEqual(app.styleSheet().count(MACOS_GLASS_QSS), 1)
+        finally:
+            app.setStyleSheet(original)

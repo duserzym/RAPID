@@ -229,8 +229,57 @@ class TileScrollArea(QtWidgets.QScrollArea):
         widget.resize(width, max(self.viewport().height(), needed))
 
 
+class TrafficLight(QtWidgets.QAbstractButton):
+    """macOS window control: a coloured dot that shows its glyph on header hover.
+
+    Inactive tiles show grey dots, like background windows on macOS; a control
+    that does not apply to this tile (e.g. float for a panel) stays grey and is
+    disabled.
+    """
+
+    COLORS = {"close": ("#FF5F57", "#E0443E"), "float": ("#FEBC2E", "#DEA123"), "monocle": ("#28C840", "#1AAB29")}
+    GLYPHS = {"close": "×", "float": "−", "monocle": "+"}
+
+    def __init__(self, role: str, tip: str) -> None:
+        super().__init__()
+        self.role = role
+        self.setToolTip(tip)
+        self.setAccessibleName(tip)
+        self.setFixedSize(14, 14)
+        self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.active = False
+        self.reveal = False
+
+    def sizeHint(self) -> QtCore.QSize:  # type: ignore[override]
+        return QtCore.QSize(14, 14)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        rect = QtCore.QRectF(1, 1, 12, 12)
+        coloured = self.isEnabled() and (self.active or self.reveal)
+        fill, rim = self.COLORS[self.role] if coloured else ("#D7D2D3", "#C3BDBE")
+        painter.setPen(QtGui.QPen(QtGui.QColor(rim), 0.8))
+        painter.setBrush(QtGui.QColor(fill))
+        painter.drawEllipse(rect)
+        if coloured and self.reveal:
+            painter.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 150), 1.4))
+            font = QtGui.QFont(self.font())
+            font.setPixelSize(11)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(rect.adjusted(0, -1, 0, 0), QtCore.Qt.AlignmentFlag.AlignCenter, self.GLYPHS[self.role])
+        painter.end()
+
+
 class TileFrame(QtWidgets.QFrame):
-    """One tile: a draggable title bar and a scrollable body."""
+    """One tile: a draggable title bar and a scrollable body.
+
+    ``chrome="mac"`` draws macOS-style traffic lights (close / float /
+    monocle) on the left with a centred title; ``"compact"`` keeps small
+    glyph buttons on the right.
+    """
 
     focus_requested = QtCore.Signal(str)
     close_requested = QtCore.Signal(str)
@@ -238,11 +287,13 @@ class TileFrame(QtWidgets.QFrame):
     float_requested = QtCore.Signal(str)
 
     def __init__(self, key: str, title: str, widget: QtWidgets.QWidget, *, icon: str = "", closable: bool = True,
-                 floatable: bool = False, scroll: bool = True) -> None:
+                 floatable: bool = False, scroll: bool = True, chrome: str = "compact") -> None:
         super().__init__()
         self.key = key
         self.widget = widget
+        self.chrome = chrome
         self.setObjectName("tile")
+        self.setProperty("chrome", chrome)
         self.setProperty("active", False)
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         outer = QtWidgets.QVBoxLayout(self)
@@ -254,19 +305,38 @@ class TileFrame(QtWidgets.QFrame):
         self.header.setCursor(QtCore.Qt.CursorShape.OpenHandCursor)
         self.header.installEventFilter(self)
         head = QtWidgets.QHBoxLayout(self.header)
-        head.setContentsMargins(12, 5, 6, 5)
-        head.setSpacing(4)
         self.title_label = QtWidgets.QLabel(f"{icon}  {title}".strip())
         self.title_label.setObjectName("tileTitle")
         self.title_label.installEventFilter(self)
-        head.addWidget(self.title_label, 1)
-        self.float_button = self._tool_button("⇱", "Float / tile this window (MOD+T)", self.float_requested)
-        self.float_button.setVisible(floatable)
-        self.monocle_button = self._tool_button("⤢", "Monocle: fill the canvas (MOD+F)", self.monocle_requested)
-        self.close_button = self._tool_button("✕", "Close tile (MOD+W)", self.close_requested)
-        self.close_button.setVisible(closable)
-        for button in (self.float_button, self.monocle_button, self.close_button):
-            head.addWidget(button)
+        if chrome == "mac":
+            head.setContentsMargins(12, 7, 12, 7)
+            head.setSpacing(8)
+            self.close_button = self._traffic("close", "Close tile (MOD+W)", self.close_requested)
+            self.float_button = self._traffic("float", "Float / tile this window (MOD+T)", self.float_requested)
+            self.monocle_button = self._traffic("monocle", "Monocle: fill the canvas (MOD+F)", self.monocle_requested)
+            self.close_button.setEnabled(closable)
+            self.float_button.setEnabled(floatable)
+            lights = QtWidgets.QHBoxLayout()
+            lights.setSpacing(8)
+            for button in (self.close_button, self.float_button, self.monocle_button):
+                lights.addWidget(button)
+            head.addLayout(lights)
+            self.title_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            head.addWidget(self.title_label, 1)
+            # Balance the traffic lights so the title stays visually centred.
+            head.addSpacing(3 * 14 + 2 * 8)
+            self.header.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
+        else:
+            head.setContentsMargins(12, 5, 6, 5)
+            head.setSpacing(4)
+            head.addWidget(self.title_label, 1)
+            self.float_button = self._tool_button("⇱", "Float / tile this window (MOD+T)", self.float_requested)
+            self.float_button.setVisible(floatable)
+            self.monocle_button = self._tool_button("⤢", "Monocle: fill the canvas (MOD+F)", self.monocle_requested)
+            self.close_button = self._tool_button("✕", "Close tile (MOD+W)", self.close_requested)
+            self.close_button.setVisible(closable)
+            for button in (self.float_button, self.monocle_button, self.close_button):
+                head.addWidget(button)
         outer.addWidget(self.header)
 
         if scroll:
@@ -276,6 +346,14 @@ class TileFrame(QtWidgets.QFrame):
             self.body = widget
         outer.addWidget(self.body, 1)
         self._press_pos: QtCore.QPoint | None = None
+
+    def _traffic(self, role: str, tip: str, signal) -> TrafficLight:
+        button = TrafficLight(role, tip)
+        button.clicked.connect(lambda: signal.emit(self.key))
+        return button
+
+    def _traffic_lights(self) -> list[TrafficLight]:
+        return [b for b in (self.close_button, self.float_button, self.monocle_button) if isinstance(b, TrafficLight)]
 
     def _tool_button(self, text: str, tip: str, signal) -> QtWidgets.QToolButton:
         button = QtWidgets.QToolButton()
@@ -294,16 +372,30 @@ class TileFrame(QtWidgets.QFrame):
         if bool(self.property("active")) == bool(active):
             return
         self.setProperty("active", bool(active))
+        for light in self._traffic_lights():
+            light.active = bool(active)
+            light.update()
         self.style().unpolish(self)
         self.style().polish(self)
+        for child in (self.header, self.title_label):
+            child.style().unpolish(child)
+            child.style().polish(child)
         self.update()
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
         super().paintEvent(event)
         if not self.property("active"):
             return
-        # Omarchy-style gradient border on the focused tile.
         painter = QtGui.QPainter(self)
+        if self.chrome == "mac":
+            # macOS-style key window: a quiet accent ring, no loud gradient.
+            painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+            painter.setPen(QtGui.QPen(QtGui.QColor(122, 2, 25, 90), 1.5))
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(QtCore.QRectF(self.rect()).adjusted(0.75, 0.75, -0.75, -0.75), 12, 12)
+            painter.end()
+            return
+        # Omarchy-style gradient border on the focused tile.
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
         gradient = QtGui.QLinearGradient(0, 0, self.width(), self.height())
         gradient.setColorAt(0.0, QtGui.QColor(122, 2, 25, 235))
@@ -316,6 +408,11 @@ class TileFrame(QtWidgets.QFrame):
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
         kind = event.type()
+        if obj is self.header and kind in (QtCore.QEvent.Type.HoverEnter, QtCore.QEvent.Type.HoverLeave):
+            for light in self._traffic_lights():
+                light.reveal = kind == QtCore.QEvent.Type.HoverEnter
+                light.update()
+            return False
         if kind == QtCore.QEvent.Type.MouseButtonPress and event.button() == QtCore.Qt.MouseButton.LeftButton:
             self._press_pos = event.position().toPoint()
             self.focus_requested.emit(self.key)
@@ -385,9 +482,11 @@ class TilingCanvas(QtWidgets.QWidget):
     workspaceChanged = QtCore.Signal(int)
     floated = QtCore.Signal(str)
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None, *, workspaces: int = 5, gap: int = 8) -> None:
+    def __init__(self, parent: QtWidgets.QWidget | None = None, *, workspaces: int = 5, gap: int = 8,
+                 chrome: str = "compact") -> None:
         super().__init__(parent)
         self.setObjectName("tilingCanvas")
+        self._chrome = chrome
         self.setAcceptDrops(True)
         self._gap = int(gap)
         self._workspace_count = max(1, int(workspaces))
@@ -426,7 +525,8 @@ class TilingCanvas(QtWidgets.QWidget):
                  kind: str = "panel", scroll: bool = True, on_close: Callable[[], None] | None = None) -> TileSpec:
         if key in self._specs:
             raise ValueError(f"tile {key!r} is already registered")
-        frame = TileFrame(key, title, widget, icon=icon, closable=closable, floatable=(kind == "window"), scroll=scroll)
+        frame = TileFrame(key, title, widget, icon=icon, closable=closable, floatable=(kind == "window"), scroll=scroll,
+                          chrome=self._chrome)
         frame.setParent(self._holder)
         frame.focus_requested.connect(self.focus)
         frame.close_requested.connect(self.close_tile)
@@ -633,7 +733,20 @@ class TilingCanvas(QtWidgets.QWidget):
         for name, spec in self._specs.items():
             if spec.frame is not None:
                 spec.frame.set_active(name == key)
+        self._sync_keyboard_focus()
         self._emit_focus()
+
+    def _sync_keyboard_focus(self) -> None:
+        """Put keyboard focus inside the focused tile unless it is already there."""
+        frame = self.frame(self.focused_key()) if self.focused_key() else None
+        if frame is None or not frame.isVisible():
+            return
+        current = QtWidgets.QApplication.focusWidget()
+        if current is not None and (current is frame or frame.isAncestorOf(current)):
+            return
+        if current is not None and not self.isAncestorOf(current):
+            return  # focus is outside the canvas (header, sidebar, dialog): leave it
+        frame.body.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
 
     def _emit_focus(self) -> None:
         key = self.focused_key()
@@ -992,6 +1105,16 @@ class TilingCanvas(QtWidgets.QWidget):
             self._empty.setParent(self._holder)
 
     def _rebuild(self) -> None:
+        # Reparenting tiles makes Qt move keyboard focus around; that churn must
+        # not be mistaken for the operator focusing a different tile.
+        self._rebuilding = True
+        try:
+            self._rebuild_tree()
+        finally:
+            self._rebuilding = False
+        self._sync_keyboard_focus()
+
+    def _rebuild_tree(self) -> None:
         old_root = self._root_widget
         if old_root is not None:
             self._layout.removeWidget(old_root)
@@ -1107,6 +1230,8 @@ class TilingCanvas(QtWidgets.QWidget):
 
     # ── focus tracking ────────────────────────────────────────────────
     def _on_app_focus_changed(self, _old: QtWidgets.QWidget | None, new: QtWidgets.QWidget | None) -> None:
+        if getattr(self, "_rebuilding", False) or not shiboken6.isValid(self):
+            return
         widget = new
         while widget is not None:
             if isinstance(widget, TileFrame) and widget.key in self._specs:
