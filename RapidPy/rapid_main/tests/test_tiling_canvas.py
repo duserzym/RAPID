@@ -276,11 +276,17 @@ class MainWindowTilingTests(unittest.TestCase):
     def test_default_workspaces_and_navigation_sync(self):
         window = self._window()
         try:
+            from rapid_main.app import _default_tiling
+
             canvas = window._stack
-            self.assertEqual(canvas.occupied_workspaces(), [1, 2, 3, 4])
-            self.assertEqual(sorted(canvas.visible_keys()), ["dashboard", "measure"])
+            layout, _focus = _default_tiling(10_000)
+            self.assertEqual(len(layout), 4)  # wide screen: dashboard|measure and settings|calibration pair up
+            narrow, _ = _default_tiling(1060)
+            self.assertEqual(len(narrow), 6)  # 1336 px window: every heavy panel gets its own workspace
+            self.assertEqual(canvas.occupied_workspaces(), list(range(1, len(canvas.occupied_workspaces()) + 1)))
+            self.assertIn("dashboard", canvas.visible_keys())
             window._nav_select(2)
-            self.assertEqual(canvas.active_workspace, 3)
+            self.assertEqual(canvas.workspace_of("sequence"), canvas.active_workspace)
             self.assertIs(window._stack.currentWidget(), window._sequence)
             canvas.focus_direction("left")  # nothing to the left: focus stays
             canvas.switch_workspace(1)
@@ -296,14 +302,14 @@ class MainWindowTilingTests(unittest.TestCase):
             _pump()
             self.assertIn("tool:step", window._stack.visible_keys())
             self.assertFalse(window._step_dlg.isWindow())
-            window._stack.open("queue", workspace=1)
+            window._stack.open("queue", workspace=5)
             window._save_layout_state()
         finally:
             self._dispose(window)
         reopened = self._window(fresh=False)
         try:
             # Panels persist across restarts; tool windows are not resurrected.
-            self.assertEqual(reopened._stack.workspace_of("queue"), 1)
+            self.assertEqual(reopened._stack.workspace_of("queue"), 5)
             self.assertNotIn("tool:step", reopened._stack.registered_keys())
             reopened._settings.remove("ui/tiling_state")
         finally:

@@ -38,6 +38,13 @@ class LoginDialog(QtWidgets.QDialog):
     def set_operator_email(self, address: str) -> None:
         self._email_edit.setText(str(address or ""))
 
+    def set_operator_name(self, name: str) -> None:
+        if str(name or "").strip():
+            self._name_edit.setCurrentText(str(name).strip())
+
+    def set_nocomm(self, enabled: bool) -> None:
+        self._nocomm_chk.setChecked(bool(enabled))
+
     # ── UI ─────────────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
         vl = QtWidgets.QVBoxLayout(self)

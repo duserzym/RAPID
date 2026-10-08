@@ -189,19 +189,22 @@ def swap_leaves(root, first: str, second: str):
 
 
 class TileScrollArea(QtWidgets.QScrollArea):
-    """Fit content to the tile width; scroll vertically when the tile is short.
+    """Give a panel the tile's size, but never less than it needs to stay legible.
 
-    Panels already adapt their width (their minimum width is 0), so like the
-    former page stack the tile hands them exactly its width.  Height is never
-    squeezed below the panel's layout minimum -- the tile scrolls instead.
+    Panels adapt their layout to the width they get; below their layout
+    minimum their cards and fields would be squeezed unreadable, so the tile
+    scrolls instead (horizontally and/or vertically) and never crushes them.
     """
+
+    SQUEEZE_TOLERANCE = 48
+    SQUEEZE_FRACTION = 0.15  # a mild squeeze stays legible; beyond it, scroll
 
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("tileScroll")
         self.setWidgetResizable(False)
         self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
     def setWidget(self, widget: QtWidgets.QWidget) -> None:  # type: ignore[override]
@@ -218,15 +221,41 @@ class TileScrollArea(QtWidgets.QScrollArea):
             QtCore.QTimer.singleShot(0, self.fit_content)
         return super().eventFilter(obj, event)
 
+    def viewportEvent(self, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+        # The viewport narrows when the vertical scrollbar appears; refit so the
+        # content never ends up a scrollbar-width too wide.
+        handled = super().viewportEvent(event)
+        if event.type() == QtCore.QEvent.Type.Resize:
+            self.fit_content()
+        return handled
+
+    def legible_size(self) -> QtCore.QSize:
+        widget = self.widget()
+        if widget is None:
+            return QtCore.QSize(0, 0)
+        if widget.layout() is None:
+            return widget.minimumSize()
+        hint = widget.minimumSizeHint()
+        return QtCore.QSize(max(hint.width(), widget.minimumWidth()), max(hint.height(), widget.minimumHeight()))
+
     def fit_content(self) -> None:
         if not shiboken6.isValid(self):
             return  # a deferred fit can outlive its tile
         widget = self.widget()
         if widget is None:
             return
-        width = self.viewport().width()
-        needed = widget.minimumSizeHint().height() if widget.layout() is not None else widget.minimumHeight()
-        widget.resize(width, max(self.viewport().height(), needed))
+        needed = self.legible_size()
+        available = self.viewport().width()
+        # A few pixels short is absorbed by the panel's own layout; scroll only
+        # when the tile is meaningfully narrower than the panel can bear.
+        tolerance = max(self.SQUEEZE_TOLERANCE, int(needed.width() * self.SQUEEZE_FRACTION))
+        scroll_x = needed.width() - available > tolerance
+        policy = (QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded if scroll_x
+                  else QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        if self.horizontalScrollBarPolicy() != policy:
+            self.setHorizontalScrollBarPolicy(policy)
+        width = needed.width() if scroll_x else available
+        widget.resize(width, max(self.viewport().height(), needed.height()))
 
 
 class TrafficLight(QtWidgets.QAbstractButton):

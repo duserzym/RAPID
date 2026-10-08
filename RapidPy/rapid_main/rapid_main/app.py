@@ -11,6 +11,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
+import shiboken6
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from rapidpy_common.ui import (
@@ -105,6 +106,7 @@ from rapidpy_common.tiling import (
 )
 from .startup import main_assets_dir, select_main_icon
 from .branding import APP_USER_MODEL_ID, app_icon, brand_label, splash_screen
+from .error_log import install_error_logging, log_directory, previous_crash_summary
 
 
 # ── Extra stylesheet (appended to shared theme) ───────────────────────────────
@@ -345,19 +347,39 @@ _QSETTINGS_TILE_TOOLS = "ui/tile_tool_windows"
 #: public ``navigate_to`` names so links, menus and tiles share one vocabulary.
 _PANEL_KEYS = ("dashboard", "queue", "sequence", "measure", "settings", "calibration")
 
-#: First-start / Reset Layout arrangement (Omarchy-style workspaces).  Wide,
-#: table-heavy panels get a workspace of their own; tile them as you like.
-#:   1 Run       Dashboard | Live Measure
-#:   2 Queue     Sample Queue
-#:   3 Program   Sequence
-#:   4 Setup     Settings | Calibration
-_DEFAULT_TILING = {
-    1: {"split": "h", "ratios": [0.38, 0.62], "children": [{"leaf": "dashboard"}, {"leaf": "measure"}]},
-    2: {"leaf": "queue"},
-    3: {"leaf": "sequence"},
-    4: {"split": "h", "ratios": [0.5, 0.5], "children": [{"leaf": "settings"}, {"leaf": "calibration"}]},
-}
-_DEFAULT_TILING_FOCUS = {1: "dashboard", 2: "queue", 3: "sequence", 4: "settings"}
+#: Width a panel needs to stay legible side by side with another panel.
+_PANEL_LEGIBLE_WIDTH = {"dashboard": 600, "measure": 880, "settings": 690, "calibration": 620}
+
+
+def _default_tiling(canvas_width: int) -> tuple[dict, dict]:
+    """First-start / Reset Layout arrangement, chosen for the available width.
+
+    Panels share a workspace only when both stay legible; otherwise each heavy
+    panel gets its own workspace (operators can tile them as they like).
+    """
+    gap = 24
+
+    def pair(a: str, b: str) -> bool:
+        return canvas_width >= _PANEL_LEGIBLE_WIDTH[a] + _PANEL_LEGIBLE_WIDTH[b] + gap
+
+    workspaces: list[dict] = []
+    if pair("dashboard", "measure"):
+        workspaces.append({"split": "h", "ratios": [0.4, 0.6], "children": [{"leaf": "dashboard"}, {"leaf": "measure"}]})
+    else:
+        workspaces += [{"leaf": "dashboard"}, {"leaf": "measure"}]
+    workspaces += [{"leaf": "queue"}, {"leaf": "sequence"}]
+    if pair("settings", "calibration"):
+        workspaces.append({"split": "h", "ratios": [0.5, 0.5], "children": [{"leaf": "settings"}, {"leaf": "calibration"}]})
+    else:
+        workspaces += [{"leaf": "settings"}, {"leaf": "calibration"}]
+    layout = {number: tree for number, tree in enumerate(workspaces, start=1)}
+    focus = {}
+    for number, tree in layout.items():
+        first = tree
+        while "leaf" not in first:
+            first = first["children"][0]
+        focus[number] = first["leaf"]
+    return layout, focus
 
 
 def clamp_window_size_for_screen(available: QtCore.QRect, requested: tuple[int, int]) -> tuple[int, int]:
@@ -723,11 +745,11 @@ class MainWindow(QtWidgets.QMainWindow):
             return lbl
 
         # ── Tiling canvas (Omarchy-style workspaces) ──
-        self._stack = TilingCanvas(workspaces=5, chrome="mac")
+        self._stack = TilingCanvas(workspaces=6, chrome="mac")
         sl.addWidget(_sec_hdr("WORKSPACES"))
         self._workspace_bar = WorkspaceBar(self._stack)
         self._workspace_bar.setToolTip(
-            f"Workspaces · {_TILING_MODIFIER}+1…5 to switch, {_TILING_MODIFIER}+Space to open a panel, "
+            f"Workspaces · {_TILING_MODIFIER}+1…6 to switch, {_TILING_MODIFIER}+Space to open a panel, "
             f"{_TILING_MODIFIER}+K for all key bindings"
         )
         sl.addWidget(self._workspace_bar)
@@ -849,7 +871,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             panel.setMinimumSize(0, 0)
             self._stack.register(key, panel, label, icon=icon)
-        self._stack.set_layout(_DEFAULT_TILING, focus=_DEFAULT_TILING_FOCUS)
+        self._apply_default_tiling()
         for title, slot in (
             ("🔌  DC Motors", self._launch_dc_motors),
             ("💧  Vacuum", self._launch_vacuum),
@@ -2153,10 +2175,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._flow_action_group.addAction(self._flow_paused_action)
         self._flow_action_group.addAction(self._flow_halted_action)
         flm.addSeparator()
-        self._status_override_action = flm.addAction(
-            "Status Color &Override", self._toggle_status_override
-        )
+        # addAction(text, slot) connects the argument-less triggered(); the
+        # override needs the checked state, so it listens to toggled(bool).
+        self._status_override_action = flm.addAction("Status Color &Override")
         self._status_override_action.setCheckable(True)
+        self._status_override_action.toggled.connect(self._toggle_status_override)
         self._status_override_action.setToolTip(
             "Visual maintenance indicator only; never bypasses hardware interlocks or preflight."
         )
@@ -2196,6 +2219,7 @@ class MainWindow(QtWidgets.QMainWindow):
         dm.addAction("Calibrate &Rod", self._launch_calibrate_rod)
 
         hm = mb.addMenu("&Help")
+        hm.addAction("Open &Error Log Folder", self._open_error_log_folder)
         hm.addAction("&Quick Start", self._launch_startup_guide)
         hm.addAction("Where did this &VB6 control go?", self._launch_transition_help)
         hm.addAction("&About RAPID", self._launch_about)
@@ -2206,6 +2230,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stack.setCurrentIndex(index)
         if 0 <= index < len(self._nav_btns):
             self._nav_btns[index].setChecked(True)
+
+    def _apply_default_tiling(self) -> None:
+        screen = self.screen() or QtWidgets.QApplication.primaryScreen()
+        if screen is not None:
+            window = _clamp_main_window_size(screen.availableGeometry(), _DEFAULT_WINDOW_SIZE)[0]
+        else:
+            window = _DEFAULT_WINDOW_SIZE[0]
+        window = max(window, self.width() if self.isVisible() else 0)
+        sidebar = getattr(self, "_sidebar_default_width", _DEFAULT_SIDEBAR_WIDTH)
+        layout, focus = _default_tiling(window - sidebar - 40)
+        self._stack.set_layout(layout, focus=focus)
 
     def _sync_nav_from_canvas(self, index: int) -> None:
         """Keep the sidebar highlight on the focused tile's panel."""
@@ -2713,6 +2748,12 @@ class MainWindow(QtWidgets.QMainWindow):
         This prevents multiple widgets from attempting to control the same
         subsystem at the same time.
         """
+        existing = self._owned_dialogs.get(resource)
+        if existing is not None and shiboken6.isValid(existing) and self._ownership.owner_of(resource) == owner:
+            # Already open (usually as a tile): bring it forward instead of
+            # failing to take the device a second time.
+            self._present_tool(existing, f"tool:{resource}", existing.windowTitle() or owner)
+            return
         lease = None
         try:
             lease = self.acquire_device(resource, owner, allow_reentrant=False)
@@ -3051,7 +3092,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._main_splitter.setSizes(
             [self._sidebar_default_width, max(1, self.width() - self._sidebar_default_width)]
         )
-        self._stack.set_layout(_DEFAULT_TILING, focus=_DEFAULT_TILING_FOCUS)
+        self._apply_default_tiling()
         self._nav_select(0)
         QtWidgets.QMessageBox.information(self, "Reset Layout", "Layout reset to defaults.")
 
@@ -3100,6 +3141,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log_event("New operator session started; transient queue and sequence state cleared.")
         self._nav_select(0)
 
+    def _open_error_log_folder(self) -> None:
+        folder = log_directory()
+        folder.mkdir(parents=True, exist_ok=True)
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(folder)))
+        self.set_status(f"Error logs: {folder}")
+
     def _launch_login(self) -> None:
         reason = self._operating_mode_change_blocker(False)
         if reason:
@@ -3110,7 +3157,9 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
         dialog = LoginDialog(self)
+        dialog.set_operator_name(self.config.general.operator)
         dialog.set_operator_email(getattr(self.config.general, "operator_email", ""))
+        dialog.set_nocomm(bool(self.config.general.nocomm))
         if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
         reason = self._operating_mode_change_blocker(bool(dialog.nocomm))
@@ -3153,8 +3202,22 @@ class MainWindow(QtWidgets.QMainWindow):
             self._defer_window_callback(350, self._launch_startup_guide_if_enabled)
 
     def _launch_startup_guide_if_enabled(self) -> None:
+        if getattr(self, "_login_pending", False):
+            self._guide_after_login = True  # show it once the operator has signed in
+            return
         if self._show_startup_guide_enabled():
             self._launch_startup_guide()
+
+    def _start_session(self) -> None:
+        """Startup: sign in first (VB6 frmLogin), then the optional Quick Start guide."""
+        self._login_pending = True
+        try:
+            self._launch_login()
+        finally:
+            self._login_pending = False
+        if getattr(self, "_guide_after_login", False):
+            self._guide_after_login = False
+            self._launch_startup_guide_if_enabled()
 
     def _launch_startup_guide(self) -> None:
         dialog = self._startup_guide_dialog
@@ -3638,6 +3701,9 @@ def _vline() -> QtWidgets.QFrame:
 
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
+    last_crash = previous_crash_summary()
+    status_sink: dict = {}
+    install_error_logging(lambda text: status_sink["window"].set_status(text) if "window" in status_sink else None)
     apply_window_bounds_guard(app)
     apply_liquid_glass_theme(app)
     app.setStyleSheet(app.styleSheet() + _EXTRA_CSS)
@@ -3674,6 +3740,16 @@ def main() -> int:
     window.show()
     if splash is not None:
         splash.finish(window)
+    status_sink["window"] = window
+    # VB6 frmLogin: every session starts by identifying the operator.
+    QtCore.QTimer.singleShot(250, window._start_session)
+    if last_crash:
+        QtCore.QTimer.singleShot(400, lambda: QtWidgets.QMessageBox.warning(
+            window,
+            "RAPID closed unexpectedly",
+            "The previous RAPID session ended with a crash. The technical details were saved in\n"
+            f"{log_directory()}\n\nPlease include that folder when reporting the problem.",
+        ))
 
     def _enforce_startup_fit() -> None:
         # If restore/load paths briefly re-expand on the way in, enforce the

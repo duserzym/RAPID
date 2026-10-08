@@ -9,6 +9,8 @@ from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from rapidpy_common.flow_layout import FlowLayout
+
 from rapid_main.printing import print_widget_snapshot
 from rapid_main.queue_compiler import QueueOptions, QueueSample, validate_queue_samples, validate_average_count
 
@@ -47,10 +49,10 @@ class SampleQueuePanel(QtWidgets.QWidget):
     def _build_toolbar(self) -> QtWidgets.QFrame:
         bar = QtWidgets.QFrame()
         bar.setObjectName("header")
-        bar.setFixedHeight(48)
-        hl = QtWidgets.QHBoxLayout(bar)
-        hl.setContentsMargins(16, 0, 16, 0)
-        hl.setSpacing(8)
+        # The eleven queue actions wrap onto a second row in a narrow tile
+        # instead of forcing a 1350 px minimum width that squeezed the cards.
+        hl = FlowLayout(bar, margin=8, h_spacing=8, v_spacing=6)
+        hl.setContentsMargins(16, 8, 16, 8)
 
         self._run_btn = QtWidgets.QPushButton("[▶]  Run Queue")
         self._run_btn.setObjectName("accent")
@@ -102,8 +104,6 @@ class SampleQueuePanel(QtWidgets.QWidget):
             self._import_btn,
         ):
             hl.addWidget(btn)
-
-        hl.addStretch()
 
         self._count_lbl = QtWidgets.QLabel("0 samples")
         self._count_lbl.setStyleSheet("color: #7a6f6e; font-size: 12px; padding-right: 8px;")

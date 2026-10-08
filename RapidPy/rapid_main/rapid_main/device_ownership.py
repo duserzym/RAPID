@@ -5,6 +5,44 @@ from dataclasses import dataclass
 import threading
 
 
+#: Operator wording for resources and the windows/workflows that hold them.
+RESOURCE_LABELS = {
+    "changer": "the sample changer",
+    "measurement": "the measurement system",
+    "squid": "the SQUID magnetometer",
+    "vacuum": "the vacuum system",
+    "af_demag": "the AF / IRM coil electronics",
+    "susceptibility": "the susceptibility bridge",
+    "irm": "the IRM pulse circuit",
+}
+OWNER_LABELS = {
+    "dc_motors_panel": "the DC Motors window",
+    "vacuum_panel": "the Vacuum window",
+    "squid_panel": "the SQUID settings window",
+    "irm_panel": "the IRM / ARM window",
+    "measurement_panel": "Live Measure (a measurement is running)",
+    "queue_workflow": "the sample queue run",
+    "susceptibility_panel": "the Susceptibility window",
+    "af_panel": "the AF Demag tools",
+}
+
+
+def _label(table: dict, key: str) -> str:
+    return table.get(key, key.replace("_", " "))
+
+
+def busy_message(resource: str, current: str, requester: str) -> str:
+    """Explain a busy device in operator terms (keeps the technical IDs for support)."""
+    thing = _label(RESOURCE_LABELS, resource)
+    holder = _label(OWNER_LABELS, current)
+    if current == requester:
+        return (f"{holder[0].upper()}{holder[1:]} is already open and using {thing}. "
+                f"Use that window instead of opening a second one. "
+                f"(Resource '{resource}' is in use by '{current}'.)")
+    return (f"{thing[0].upper()}{thing[1:]} is in use by {holder}. Close it or let its work finish, "
+            f"then try again. (Resource '{resource}' is in use by '{current}', not '{requester}'.)")
+
+
 class DeviceOwnershipError(RuntimeError):
     """Raised when a device is already reserved by another owner."""
 
@@ -85,10 +123,7 @@ class DeviceOwnershipManager:
                 _owner, count = self._owners[resource]
                 self._owners[resource] = (_owner, count + 1)
                 return DeviceLease(resource, owner, self)
-            raise DeviceOwnershipError(
-                f"Resource '{resource}' is in use by '{current}', "
-                f"not '{owner}'"
-            )
+            raise DeviceOwnershipError(busy_message(resource, current, owner))
 
     def release(self, resource: str, owner: str) -> None:
         """Release a claimed device; invalid callers are ignored."""
@@ -116,7 +151,7 @@ class DeviceOwnershipManager:
             for resource in resources:
                 current = self._owners.get(resource)
                 if current is not None and (current[0] != owner or not allow_reentrant):
-                    raise DeviceOwnershipError(f"Resource '{resource}' is in use by '{current[0]}', not '{owner}'")
+                    raise DeviceOwnershipError(busy_message(resource, current[0], owner))
             for resource in resources:
                 current = self._owners.get(resource)
                 self._owners[resource] = (owner, current[1] + 1 if current else 1)
