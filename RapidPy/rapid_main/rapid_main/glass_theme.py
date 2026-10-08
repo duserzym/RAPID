@@ -239,6 +239,10 @@ QDialog#glassDialog QLabel#statusText[status="simulated"] {{
 QWidget#appBackdrop {{
     background: transparent;
 }}
+QLabel#brandIcon {{
+    background: transparent;
+    border: none;
+}}
 QWidget#appBackdrop QStackedWidget,
 QWidget#appBackdrop QStackedWidget > QWidget {{
     background: transparent;

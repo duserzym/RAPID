@@ -26,8 +26,15 @@ class AboutDialog(QtWidgets.QDialog):
         header = QtWidgets.QFrame()
         header.setObjectName("dialogHero")
         header.setMinimumHeight(96)
-        hl = QtWidgets.QVBoxLayout(header)
-        hl.setContentsMargins(24, 14, 24, 14)
+        hero = QtWidgets.QHBoxLayout(header)
+        hero.setContentsMargins(20, 12, 24, 12)
+        hero.setSpacing(16)
+        from rapid_main.branding import brand_label
+
+        hero.addWidget(brand_label(72, header), 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
+        hl = QtWidgets.QVBoxLayout()
+        hl.setContentsMargins(0, 0, 0, 0)
+        hero.addLayout(hl, 1)
 
         title_lbl = QtWidgets.QLabel("RAPID v4")
         title_lbl.setObjectName("dialogHeroTitle")

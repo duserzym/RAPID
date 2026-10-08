@@ -44,10 +44,16 @@ class LoginDialog(QtWidgets.QDialog):
         vl.setContentsMargins(24, 20, 24, 20)
         vl.setSpacing(14)
 
+        from rapid_main.branding import brand_label
+
+        title_row = QtWidgets.QHBoxLayout()
+        title_row.setSpacing(12)
+        title_row.addWidget(brand_label(44, self), 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
         hdr = QtWidgets.QLabel("Sign in to begin session")
         hdr.setObjectName("dialogTitle")
         hdr.setAccessibleName("Operator login title")
-        vl.addWidget(hdr)
+        title_row.addWidget(hdr, 1)
+        vl.addLayout(title_row)
 
         fl = QtWidgets.QFormLayout()
         fl.setSpacing(10)

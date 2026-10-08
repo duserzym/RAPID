@@ -1,5 +1,7 @@
 param([string]$Python = "")
-$ErrorActionPreference = "Stop"
+# Native tools (pip, PyInstaller) log to stderr; Windows PowerShell 5.1 turns that into
+# terminating errors under "Stop". Failures are detected through $LASTEXITCODE instead.
+$ErrorActionPreference = "Continue"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $Python) { $Python = Join-Path $repoRoot '.venv\Scripts\python.exe' }
 if (-not (Test-Path -LiteralPath $Python)) { throw "Python not found: $Python" }

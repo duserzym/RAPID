@@ -593,45 +593,70 @@ def apply_liquid_glass_theme(app: QtWidgets.QApplication) -> None:
     _apply_window_bounds_guard(app)
 
 
+def _icon_candidates(icon_name: str, dev_assets_dir: Path) -> list[Path]:
+    """Where an icon may live: the caller's asset folder first, then the frozen root."""
+    name = Path(icon_name)
+    folders = [Path(dev_assets_dir)]
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        folders.append(Path(sys._MEIPASS) / "assets")  # type: ignore[attr-defined]
+    out: list[Path] = []
+    for folder in folders:
+        out.append(folder / name.name)
+        for suffix in (".ico", ".png"):
+            out.append(folder / name.with_suffix(suffix).name)
+    return out
+
+
+def load_app_icon(icon_name: str, dev_assets_dir: Path) -> QtGui.QIcon:
+    """Build a crisp multi-size icon: every .ico frame plus the large .png if present."""
+    icon = QtGui.QIcon()
+    seen: set[Path] = set()
+    for candidate in _icon_candidates(icon_name, dev_assets_dir):
+        if candidate in seen or not candidate.is_file():
+            continue
+        seen.add(candidate)
+        if candidate.suffix.lower() == ".ico":
+            for size in QtGui.QIcon(str(candidate)).availableSizes() or [QtCore.QSize(256, 256)]:
+                pixmap = QtGui.QIcon(str(candidate)).pixmap(size)
+                if not pixmap.isNull():
+                    icon.addPixmap(pixmap)
+        else:
+            icon.addFile(str(candidate))
+    return icon
+
+
 def set_app_icon(
     target: "QtWidgets.QApplication | QtWidgets.QWidget",
     icon_name: str,
     dev_assets_dir: Path,
-) -> None:
-    """Set window/application icon, resolving path for both dev and frozen (PyInstaller) runs."""
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        icon_path = Path(sys._MEIPASS) / "assets" / icon_name  # type: ignore[attr-defined]
-    else:
-        icon_path = dev_assets_dir / icon_name
+    *,
+    app_id: str | None = None,
+) -> bool:
+    """Set the window/application icon for source and frozen (PyInstaller) runs.
 
-    # Prefer platform-friendly .ico files when both are available.
-    if not icon_path.exists():
-        if icon_path.suffix.lower() == ".png":
-            ico_path = icon_path.with_suffix(".ico")
-            if ico_path.exists():
-                icon_path = ico_path
-        elif icon_path.suffix.lower() == ".ico":
-            png_path = icon_path.with_suffix(".png")
-            if png_path.exists():
-                icon_path = png_path
-    if not icon_path.exists():
-        return
+    The caller's asset folder is tried first -- packaged asset modules such as
+    ``rapid_main_assets`` live there in a frozen build too -- then the legacy
+    ``_MEIPASS/assets`` folder used by the single-file standalone builds.
+    Returns whether an icon was found.
+    """
+    icon = load_app_icon(icon_name, dev_assets_dir)
+    if icon.isNull():
+        return False
+    target.setWindowIcon(icon)
 
-    target.setWindowIcon(QtGui.QIcon(str(icon_path)))
+    if sys.platform != "win32" or not isinstance(target, QtWidgets.QApplication):
+        return True
 
-    if sys.platform != "win32":
-        return
-
-    # On Windows, multiple script-run windows can still appear under the Python
-    # executable's taskbar group. A stable AppUserModelID helps taskbar identity
-    # pick up each app's own branding when the shell honors the AUMID path.
+    # A stable AppUserModelID makes Windows group the taskbar button under
+    # this app (with this icon) instead of the generic Python host.
     try:
         import ctypes
 
-        app_id = f"RapidPy.{Path(icon_name).stem}"
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(str(app_id))  # type: ignore[attr-defined]
+        identity = app_id or f"RapidPy.{Path(icon_name).stem}"
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(str(identity))  # type: ignore[attr-defined]
     except Exception:
         pass
+    return True
 
 
 def apply_card_shadow(widget: QtWidgets.QWidget) -> None:

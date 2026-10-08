@@ -104,6 +104,7 @@ from rapidpy_common.tiling import (
     install_tiling_shortcuts,
 )
 from .startup import main_assets_dir, select_main_icon
+from .branding import APP_USER_MODEL_ID, app_icon, brand_label, splash_screen
 
 
 # ── Extra stylesheet (appended to shared theme) ───────────────────────────────
@@ -452,6 +453,9 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setObjectName("rapidMainWindow")
         self.setWindowTitle("RAPID v4 — Paleomagnetics Control System")
+        icon = app_icon()
+        if not icon.isNull():
+            self.setWindowIcon(icon)
         self.resize(*_DEFAULT_WINDOW_SIZE)
         self._sidebar_min_width = _MIN_SIDEBAR_WIDTH
         self._sidebar_default_width = _DEFAULT_SIDEBAR_WIDTH
@@ -566,7 +570,10 @@ class MainWindow(QtWidgets.QMainWindow):
         hl.setContentsMargins(18, 0, 14, 0)
         hl.setSpacing(10)
 
-        title = QtWidgets.QLabel("⚗  RAPID v4")
+        self._header_icon = brand_label(30, header)
+        self._header_icon.setToolTip("RAPID v4")
+        hl.addWidget(self._header_icon, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
+        title = QtWidgets.QLabel("RAPID v4")
         title.setObjectName("headerTitle")
         title.setToolTip("RAPID v4")
         _header_label_fit(title, 0)
@@ -645,12 +652,12 @@ class MainWindow(QtWidgets.QMainWindow):
         layout = self._header_layout
         stages = (
             lambda: self._step_hdr.setVisible(False),
-            lambda: (self._sample_hdr.setVisible(False), self._header_title.setText("⚗")),
+            lambda: (self._sample_hdr.setVisible(False), self._header_title.setVisible(False)),
             lambda: (self._nocomm_btn.setText("⊘"), self._exit_btn.setText("✕")),
         )
         self._step_hdr.setVisible(True)
         self._sample_hdr.setVisible(True)
-        self._header_title.setText("⚗  RAPID v4")
+        self._header_title.setVisible(True)
         self._nocomm_btn.setText(self._nocomm_text)
         self._exit_btn.setText("✕  Exit")
         for stage in stages:
@@ -794,9 +801,14 @@ class MainWindow(QtWidgets.QMainWindow):
             btn.setContentsMargins(0, 0, 0, 0)
 
         sl.addStretch()
+        brand_row = QtWidgets.QHBoxLayout()
+        brand_row.setContentsMargins(10, 4, 8, 2)
+        brand_row.setSpacing(8)
+        brand_row.addWidget(brand_label(22, sidebar))
         ver = QtWidgets.QLabel("RAPID v4.0 · Phase 2")
-        ver.setStyleSheet("color: #c4b7b3; font-size: 10px; padding: 0 8px;")
-        sl.addWidget(ver)
+        ver.setStyleSheet("color: #9a8d90; font-size: 10px; background: transparent;")
+        brand_row.addWidget(ver, 1)
+        sl.addLayout(brand_row)
 
         # ── Panels live in tiles on the canvas created above ──
         self._stack.currentChanged.connect(self._stack.updateGeometry)
@@ -3636,7 +3648,12 @@ def main() -> int:
     icon_name, _icon_path = select_main_icon(assets_dir)
     if not icon_name:
         icon_name = "rapid_main_icon.png"
-    set_app_icon(app, icon_name, assets_dir)
+    # Taskbar + title bar: the packaged icon, grouped under RAPID's own ID.
+    set_app_icon(app, icon_name, assets_dir, app_id=APP_USER_MODEL_ID)
+    splash = splash_screen()
+    if splash is not None:
+        splash.show()
+        app.processEvents()
     window = MainWindow()
     set_app_icon(window, icon_name, assets_dir)
     screen = app.primaryScreen()
@@ -3655,6 +3672,8 @@ def main() -> int:
         window._fit_window_to_current_screen()
         window._defer_window_callback(75, window._fit_window_to_current_screen)
     window.show()
+    if splash is not None:
+        splash.finish(window)
 
     def _enforce_startup_fit() -> None:
         # If restore/load paths briefly re-expand on the way in, enforce the
