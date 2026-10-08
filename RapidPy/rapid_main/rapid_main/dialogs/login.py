@@ -31,6 +31,13 @@ class LoginDialog(QtWidgets.QDialog):
     def operator_name(self) -> str:
         return self._name_edit.currentText().strip()
 
+    @property
+    def operator_email(self) -> str:
+        return self._email_edit.text().strip()
+
+    def set_operator_email(self, address: str) -> None:
+        self._email_edit.setText(str(address or ""))
+
     # ── UI ─────────────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
         vl = QtWidgets.QVBoxLayout(self)
@@ -54,6 +61,11 @@ class LoginDialog(QtWidgets.QDialog):
         self._name_edit.lineEdit().setPlaceholderText("Your name or initials")
         self._name_edit.setAccessibleName("Operator name or initials")
         fl.addRow("Operator:", self._name_edit)
+
+        self._email_edit = QtWidgets.QLineEdit()
+        self._email_edit.setPlaceholderText("Optional — for run complete / error emails")
+        self._email_edit.setAccessibleName("Operator email for notices")
+        fl.addRow("Email:", self._email_edit)
 
         self._lab_lbl = QtWidgets.QLabel("IRM — University of Minnesota")
         self._lab_lbl.setObjectName("dialogSubtitle")
@@ -93,6 +105,10 @@ class LoginDialog(QtWidgets.QDialog):
     def _on_accept(self) -> None:
         if not self.operator_name:
             QtWidgets.QMessageBox.warning(self, "Login", "Please enter an operator name.")
+            return
+        email = self.operator_email
+        if email and ("@" not in email or " " in email or email.startswith("@") or email.endswith("@")):
+            QtWidgets.QMessageBox.warning(self, "Login", "Please enter a valid email address or leave it blank.")
             return
         self.accept()
 

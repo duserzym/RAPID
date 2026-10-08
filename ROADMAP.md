@@ -2353,3 +2353,39 @@ moves into the newly focused tile.
    1200 baud. After that, run the stream/capture validation plan.
 3. Consider adopting `TilingCanvas` in the multi-panel standalone apps
    (Changer XY, Up/Down).
+
+### Email notifications (8 October 2026)
+
+The email path of ASC_oven_control's notifier was ported to
+`rapidpy_common/notify.py` and wired into `rapid_main`. It follows VB6
+`frmSendMail.MailNotification`:
+
+* Red/Orange/Yellow/Green codes;
+* the operator's login email plus a CC/status-monitor list;
+* a sample/step/time/code footer.
+
+Mail goes out over SMTP, with the password DPAPI-encrypted for this Windows
+user, or through classic Outlook. Delivery is non-blocking with retries and a
+log.
+
+Notices are sent:
+
+* at the queue's terminal state: complete (Green), halted (Orange) and error
+  (Red);
+* when a manual measurement finishes: "Sample done. Please remove sample."
+  (Orange), plus stopped and error notices.
+
+Settings are kept in `notifications.json`, outside the repo and outside the
+config fingerprint. The VB6 `[Email]` import never copies the password.
+
+**Security finding.** The committed `VB6/settings/Paleomag_v3.INI` in this
+public repository contains the station Gmail account's SMTP password in plain
+text. The password must be changed, and the value should be removed from the
+file and its history.
+
+15 tests were added: composition, routing, filtering, SMTP with STARTTLS and
+the decrypted password, retry/log without secrets, Outlook, non-blocking send,
+the DPAPI round trip, the settings file, VB6 import, MainWindow hooks and the
+dialog. Next: Yellow notices for re-measure and flux-jump recoveries, and
+hardware-fault notices from the diagnostic panels (VB6 also mailed AF,
+homing/slop and file-save errors).

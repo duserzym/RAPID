@@ -48,6 +48,14 @@ from .diagnostic_services import (
     require_vacuum_ready,
 )
 from .device_ownership import DeviceOwnershipError, DeviceOwnershipManager
+from rapidpy_common.notify import (
+    CODE_GREEN,
+    CODE_ORANGE,
+    CODE_RED,
+    NotificationSettings,
+    Notifier,
+)
+from .dialogs.notifications import NotificationsDialog
 from .dialogs import (
     AboutDialog,
     DebugConsoleDialog,
@@ -454,6 +462,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Persistent configuration (load or create defaults)
         self.config: AppConfig = AppConfig.load()
+        self._notifier = Notifier(
+            NotificationSettings.load(self._notifications_path()),
+            log_path=self._notifications_path().with_name("notifications.log"),
+        )
         self._current_sample = "UNKNOWN"
         self.sample_registrations = None
         self._ownership = DeviceOwnershipManager()
@@ -1355,6 +1367,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.set_flow_state(state)
         if reason is not None:
             self.set_status(reason)
+        self._notify_queue_terminal(state, reason)
 
     def cancel_queue_run(self, reason: str = "Queue cancelled.") -> None:
         """Cancel active queue automation while leaving controls in a safe state."""
@@ -1911,6 +1924,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_queue_sample_finished(self, aborted: bool, sample: str) -> None:
         if not self._queue_active:
+            self._notify_manual_sample_finished(aborted, sample)
             return
         command = self._queue_current_command
         if command is not None and command.command_type == 'Meas' and command.sample_name != sample:
@@ -2070,6 +2084,7 @@ class MainWindow(QtWidgets.QMainWindow):
         fm.addAction("&New Session", self._new_session)
         fm.addAction("&Load Sample Index…", self._load_sample_from_index)
         fm.addAction("&Log Out", self._launch_login)
+        fm.addAction("Email &Notifications…", self._launch_notifications)
         fm.addSeparator()
         fm.addAction("E&xit", self._request_shutdown)
 
@@ -3083,6 +3098,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
         dialog = LoginDialog(self)
+        dialog.set_operator_email(getattr(self.config.general, "operator_email", ""))
         if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
         reason = self._operating_mode_change_blocker(bool(dialog.nocomm))
@@ -3090,6 +3106,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.set_status(reason)
             return
         self.config.general.operator = dialog.operator_name
+        self.config.general.operator_email = getattr(dialog, "operator_email", "")
         self.config.general.nocomm = bool(dialog.nocomm)
         self.config.save()
         self._settings_panel.load_from_config(self.config)
@@ -3352,6 +3369,70 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def set_status(self, text: str) -> None:
         self._sb_status.setText(text)
+
+    # ── Email notices (VB6 frmSendMail.MailNotification) ─────────────────────
+    @staticmethod
+    def _notifications_path() -> Path:
+        return AppConfig.default_path().with_name("notifications.json")
+
+    def _notice_context(self) -> dict:
+        general = self.config.general
+        return {
+            "operator": general.operator,
+            "sample": getattr(self, "_current_sample", "") if getattr(self, "_current_sample", "") not in ("", "UNKNOWN") else "",
+            "step": getattr(self, "_current_step", "") if getattr(self, "_current_step", "") not in ("", "\u2014") else "",
+            "station": general.lab_name,
+        }
+
+    def notify(self, subject: str, body: str, code: str = CODE_GREEN) -> bool:
+        """Send an email notice in the background; never blocks or raises."""
+        notifier = getattr(self, "_notifier", None)
+        if notifier is None:
+            return False
+        try:
+            return notifier.notify(
+                subject,
+                body,
+                code,
+                context=self._notice_context(),
+                operator_email=getattr(self.config.general, "operator_email", ""),
+            )
+        except Exception:  # noqa: BLE001 - a notice must never disturb a run
+            return False
+
+    def _notify_queue_terminal(self, state: str | None, reason: str | None) -> None:
+        detail = reason or ""
+        if state == "complete":
+            self.notify("Measurement run complete", detail or "The sample queue finished.", CODE_GREEN)
+        elif state == "halted":
+            self.notify("Measurement run halted", detail or "The sample queue was stopped.", CODE_ORANGE)
+        elif state == "error":
+            self.notify("Measurement run error", (detail or "The sample queue stopped with an error.")
+                        + "\n\nThe station was returned to its safe state where possible; check RAPID before restarting.",
+                        CODE_RED)
+
+    def _notify_manual_sample_finished(self, aborted: bool, sample: str) -> None:
+        had_error = bool(getattr(self._measurement, "take_last_run_error", lambda: False)())
+        if aborted:
+            self.notify("Measurement stopped", f"Measurement of {sample} was stopped before completion.", CODE_ORANGE)
+        elif had_error:
+            self.notify("Measurement error", f"Measurement of {sample} ended with an error.", CODE_RED)
+        else:
+            # VB6 frmMagnetometerControl: "Sample done. Please remove sample." (CodeOrange)
+            self.notify("Sample done", f"Sample {sample} done. Please remove sample.", CODE_ORANGE)
+
+    def _launch_notifications(self) -> None:
+        dialog = NotificationsDialog(
+            self,
+            self._notifier.settings,
+            settings_path=self._notifications_path(),
+            log_path=self._notifications_path().with_name("notifications.log"),
+            operator_email=getattr(self.config.general, "operator_email", ""),
+        )
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            self._notifier.settings = dialog.saved_settings
+            state = "on" if dialog.saved_settings.email_enabled else "off"
+            self.set_status(f"Email notifications saved ({state}).")
 
     def set_sample(self, name: str) -> None:
         self._current_sample = name or "UNKNOWN"

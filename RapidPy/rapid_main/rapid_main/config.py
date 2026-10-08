@@ -71,6 +71,7 @@ class GeneralConfig:
     sample_dir:   str  = ""
     backup_dir:   str  = ""
     operator:     str  = ""
+    operator_email: str = ""  # VB6 LoginEmail: receives this session's notices
     lab_name:     str  = "Paleomagnetism Laboratory"
     nocomm:       bool = False
     auto_save:    bool = True
