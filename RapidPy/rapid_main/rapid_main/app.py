@@ -341,6 +341,10 @@ _QSETTINGS_QUEUE_CURRENT_SAMPLE = "ui/queue_current_sample"
 _QSETTINGS_QUEUE_ACTIVE = "ui/queue_active"
 _QSETTINGS_SHOW_STARTUP_GUIDE = "ui/show_startup_guide"
 _QSETTINGS_TILING_STATE = "ui/tiling_state"
+_QSETTINGS_TILING_VERSION = "ui/tiling_layout_version"
+#: Bump when the default arrangement changes so saved layouts from an older
+#: default are replaced once (v2: legible, width-adaptive workspaces).
+_TILING_LAYOUT_VERSION = 2
 _QSETTINGS_TILE_TOOLS = "ui/tile_tool_windows"
 
 #: Tile keys for the six main panels, in ``_NAV_ITEMS`` order.  They match the
@@ -2937,6 +2941,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.resize(*_DEFAULT_WINDOW_SIZE)
 
         tiling_state = self._settings.value(_QSETTINGS_TILING_STATE)
+        saved_version = self._settings.value(_QSETTINGS_TILING_VERSION, 0, type=int)
+        if saved_version != _TILING_LAYOUT_VERSION:
+            tiling_state = None  # older default arrangement: start from the current defaults
         if not (tiling_state and self._stack.restore_state(str(tiling_state))):
             panel_index = self._settings.value("ui/active_panel", 0, type=int)
             self._nav_select(panel_index or 0)
@@ -3002,6 +3009,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._settings.setValue("ui/window_geometry", self.saveGeometry())
         self._settings.setValue("ui/active_panel", self._stack.currentIndex())
         self._settings.setValue(_QSETTINGS_TILING_STATE, json.dumps(self._stack.save_state()))
+        self._settings.setValue(_QSETTINGS_TILING_VERSION, _TILING_LAYOUT_VERSION)
         self._settings.setValue("ui/main_splitter_state", self._main_splitter.saveState())
         self._settings.setValue(
             "ui/sidebar_width",
@@ -3721,6 +3729,7 @@ def main() -> int:
         splash.show()
         app.processEvents()
     window = MainWindow()
+    window._login_pending = True  # the Quick Start guide waits for sign-in
     set_app_icon(window, icon_name, assets_dir)
     screen = app.primaryScreen()
     if screen is not None:
