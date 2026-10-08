@@ -331,3 +331,31 @@ class ConfigMappingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Vb6SquidDefaultsTests(unittest.TestCase):
+    """VB6 frmSQUID.Connect hardcodes 1200,N,8,1; the station INI sets ReadDelay=1."""
+
+    def test_defaults_follow_vb6_station(self):
+        from rapid_main.config import SquidConfig
+
+        cfg = SquidConfig()
+        self.assertEqual((cfg.port, cfg.baud, cfg.settle_time, cfg.samples_per_pos), ("COM1", 1200, 1.0, 1))
+
+    def test_damaged_range_label_is_repaired_on_load(self):
+        from rapid_main.config import SquidConfig
+
+        self.assertEqual(SquidConfig(range_label="1�").range_label, "1×")
+        self.assertEqual(SquidConfig(range_label="1Ã—").range_label, "1×")
+        self.assertEqual(SquidConfig(range_label="100×").range_label, "100×")
+
+    def test_legacy_import_sets_hardcoded_vb6_baud(self):
+        from rapid_main.legacy_ini import import_vb6_ini
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ini = Path(tmp) / "Paleomag.INI"
+            ini.write_text("[COMPorts]\nCOMPortSquids= 1\n[MagnetometerCalibration]\nReadDelay= 1\n", encoding="utf-8")
+            config = AppConfig()
+            config.squid.baud = 9600
+            import_vb6_ini(config, ini)
+        self.assertEqual((config.squid.port, config.squid.baud, config.squid.settle_time), ("COM1", 1200, 1.0))

@@ -202,6 +202,9 @@ def import_vb6_ini(config: AppConfig, path: str | Path) -> LegacyIniImportReport
     if mapped:
         config.squid.port = mapped
         mark_mapped(com_section, "COMPortSquids", "squid.port")
+        # VB6 never stored SQUID framing: frmSQUID.Connect hardcodes 1200,N,8,1.
+        config.squid.baud = 1200
+        mapped_fields.append("frmSQUID.Connect 1200,N,8,1 (hardcoded) -> squid.baud")
 
     raw = _value(parser, com_section, "COMPortVacuum")
     mapped = _normalize_com_port(raw, field="COMPorts.COMPortVacuum", warnings=warnings)

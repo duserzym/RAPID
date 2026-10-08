@@ -25,6 +25,25 @@ Recording those intervals continuously, then filtering and fitting them, may
 add resolution and sensitivity on weak specimens. This is the hypothesis to
 test on the bench (see *Validation plan*).
 
+## SQUID link settings: VB6 reference vs RapidPy (checked 2026-10-08)
+
+| Setting | VB6 source of truth | RapidPy default (from 2026-10-08) | Saved `~/.rapid/config.json` on the lab PC (8 Oct) |
+|---|---|---|---|
+| Port | `COMPorts.COMPortSquids= 1` → COM1 | COM1 | COM1 ✓ |
+| Framing | `frmSQUID.Connect`: `MSCommSquid.Settings = "1200,N,8,1"` (hardcoded; RTS asserted before each command) | 1200, 8N1 | **9600 ✗** — set to 1200 |
+| Settle before a latched read | `MagnetometerCalibration.ReadDelay= 1` (stored as whole seconds) | 1.0 s | **1.5 s ✗** — VB6 uses 1 s |
+| Latch holds | `LatchCount` 0.10 s, `LatchData` 0.12 s | same | ✓ |
+| Reply timeout | `GetResponse`: 1 s | 1 s | ✓ |
+| Post-reset (ARC) delay | `modMeasure` `Measure_ARCDelay = 2.5` | 2.5 s | ✓ |
+| Range | Holder blocks: `ChangeRange "A","1"` (1×); specimens: no range change, flux counting with `rangeval = 1` | 1× | stored as the corrupted `"1�"`; now repaired on load to 1× |
+| Averaging | Per-file `AvgSteps` (default 1); holder uses `maxAvgSteps` | 1 | **4** — VB6 equivalent is 1 |
+| Axis calibration | `XCal= 2.2792`, `YCal=-2.294`, `ZCal= 1.6717`, `RangeFact= .00001` | from the INI import | **1.0 / 1.0 / 1.0 ✗** — not imported yet |
+
+The lab PC is running in NO-COMM mode with an un-imported configuration.
+**Settings → Import VB6 INI…** (`legacy_ini.import_vb6_ini`) on
+`VB6/settings/Paleomag_v3.INI` sets every value above, including the hardcoded
+1200 baud. Do that before any hardware run.
+
 ## Operator controls
 
 **SQUID → Communication Settings → Continuous read**

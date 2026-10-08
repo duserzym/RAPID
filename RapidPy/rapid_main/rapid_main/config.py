@@ -76,13 +76,37 @@ class GeneralConfig:
     auto_save:    bool = True
 
 
+#: VB6 ``frmSQUID.Connect`` hardcodes ``MSCommSquid.Settings = "1200,N,8,1"``.
+VB6_SQUID_BAUD = 1200
+SQUID_RANGE_LABELS = ("1×", "10×", "100×", "1000×")
+
+
+def normalize_squid_range_label(label: object) -> str:
+    """Return the canonical range wording, repairing damaged encodings.
+
+    Older config files stored ``"1×"`` through a lossy encoding (``"1\ufffd"``
+    or ``"1Ã—"``).  The leading digits still identify the 2G control rate.
+    """
+
+    text = str(label or "").strip()
+    if "flux" in text.lower():
+        return text
+    digits = "".join(ch for ch in text if ch.isdigit())
+    for canonical in reversed(SQUID_RANGE_LABELS):  # longest prefix first
+        if digits.startswith(canonical[:-1]):
+            return canonical
+    return SQUID_RANGE_LABELS[0]
+
+
 @dataclass
 class SquidConfig:
+    # Defaults follow the VB6 station: COMPortSquids=1, 1200,N,8,1 (hardcoded in
+    # frmSQUID), ReadDelay=1 s, and one bracketed block per position (AvgSteps=1).
     port:             str   = "COM1"
-    baud:             int   = 9600
+    baud:             int   = VB6_SQUID_BAUD
     range_label:      str   = "1×"
-    samples_per_pos:  int   = 4
-    settle_time:      float = 1.5
+    samples_per_pos:  int   = 1
+    settle_time:      float = 1.0
     # Continuous read rate (live stream and motion capture).  The latch holds
     # default to the VB6 LatchCount/LatchData pauses; bracketed static reads
     # always keep the VB6 values regardless of these settings.
@@ -97,6 +121,9 @@ class SquidConfig:
     motion_capture_turns:       bool = True
     motion_capture_ascent:      bool = True
     motion_capture_dir:         str  = ""
+
+    def __post_init__(self) -> None:
+        self.range_label = normalize_squid_range_label(self.range_label)
 
 
 @dataclass

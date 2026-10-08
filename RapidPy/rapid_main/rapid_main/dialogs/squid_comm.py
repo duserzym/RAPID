@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from PySide6 import QtCore, QtWidgets
 
+from rapid_main.config import normalize_squid_range_label
 from rapid_main.diagnostic_services import SquidBackend, SquidNoCommBackend
 from rapid_main.glass_theme import set_semantic_status
 
@@ -71,7 +72,7 @@ class SquidCommDialog(QtWidgets.QDialog):
 
         self._baud = QtWidgets.QComboBox()
         self._baud.addItems(["1200", "2400", "4800", "9600", "19200"])
-        self._baud.setCurrentText("9600")
+        self._baud.setCurrentText("1200")  # VB6 frmSQUID: 1200,N,8,1
         self._baud.setAccessibleName("SQUID serial baud rate")
         fl.addRow("Baud rate:", self._baud)
 
@@ -97,7 +98,7 @@ class SquidCommDialog(QtWidgets.QDialog):
 
         self._samples = QtWidgets.QSpinBox()
         self._samples.setRange(1, 64)
-        self._samples.setValue(8)
+        self._samples.setValue(1)
         self._samples.setAccessibleName("SQUID samples per position")
         fl2.addRow("Samples per position:", self._samples)
 
@@ -208,7 +209,7 @@ class SquidCommDialog(QtWidgets.QDialog):
             return
         self._port.setCurrentText(str(getattr(cfg, "port", self._port.currentText())))
         self._baud.setCurrentText(str(getattr(cfg, "baud", self._baud.currentText())))
-        self._range.setCurrentText(str(getattr(cfg, "range_label", self._range.currentText())))
+        self._range.setCurrentText(normalize_squid_range_label(getattr(cfg, "range_label", self._range.currentText())))
         self._samples.setValue(int(getattr(cfg, "samples_per_pos", self._samples.value())))
         self._settle.setValue(float(getattr(cfg, "settle_time", self._settle.value())))
         for name, default in STREAM_FIELDS:
