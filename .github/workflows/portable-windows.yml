@@ -63,7 +63,7 @@ jobs:
         run: |
           $bundle = Join-Path $env:RUNNER_TEMP 'RAPID Portable'
           $evidence = Join-Path $env:RUNNER_TEMP 'RAPID qualification'
-          & (Join-Path $bundle 'Verify-RapidPy.ps1') -RequireFullInventory -EvidenceDirectory $evidence
+          & (Join-Path $bundle 'Verify-RapidPy.ps1') -RequireFullInventory -EvidenceDirectory $evidence -MeasurePerformance
           $report = Get-ChildItem -LiteralPath $evidence -Filter verification.json -File -Recurse |
               Get-Content -Raw | ConvertFrom-Json
           if (-not $report.passed -or $report.inventory.source_revision -cne $env:GITHUB_SHA) {

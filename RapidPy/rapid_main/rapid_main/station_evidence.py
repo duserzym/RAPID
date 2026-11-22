@@ -32,7 +32,7 @@ REQUIRED_CASES = tuple(
 _SOFTWARE_CASES = {"discontinuity/D1", "discontinuity/D5", "rockmag/K1", "rockmag/K2"}
 _OFFLINE_SCHEMAS = {
     "rapidpy.portable_verification.v2", "rapidpy.release_smoke.v1", "rapidpy.startup_environment.v1",
-    "rapidpy.display_check.v1",
+    "rapidpy.display_check.v1", "rapidpy.performance_check.v1",
 }
 
 

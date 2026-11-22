@@ -2948,3 +2948,9 @@ an active attempt before treatment. On restart it separates captured readings
 from a treatment with unknown outcome and blocks a fresh run for that specimen
 until an operator records the disposition. Unpublished staging and earlier
 accepted data are preserved. I1 and I3 still require physical station evidence.
+
+**Workstation performance checkpoint (2026-11-22).** The portable verifier
+can record launch time, idle CPU, Windows memory samples, and Qt event-loop
+intervals through a simulated queue. The workload starts from the Sample
+Queue button and verifies the published MagIC files. The report identifies
+the candidate revision. The oldest supported station still needs its own run.

@@ -4,8 +4,18 @@ import argparse
 import json
 import sys
 from importlib import import_module
+from time import perf_counter_ns
 
 from rapid_main.package_launch import HELPER_MODULES
+
+
+def _bounded_int(minimum, maximum):
+    def parse(text):
+        value = int(text)
+        if not minimum <= value <= maximum:
+            raise argparse.ArgumentTypeError(f'expected an integer from {minimum} to {maximum}')
+        return value
+    return parse
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -29,10 +39,19 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--backup-measurement", nargs=2, metavar=("PUBLICATION", "BACKUP_FOLDER"),
                         help="verify and back up a completed specimen publication")
     parser.add_argument("--backup-index-sha256", help=argparse.SUPPRESS)
+    parser.add_argument('--measure-performance', action='store_true',
+                        help='measure startup, idle CPU and UI responsiveness under an offline queue')
+    parser.add_argument('--performance-specimens', type=_bounded_int(1, 100), default=40,
+                        help='number of synthetic specimens in the performance queue (default 40)')
+    parser.add_argument('--performance-idle-seconds', type=_bounded_int(1, 60), default=5,
+                        help='duration of the idle measurement in seconds (default 5)')
+    parser.add_argument('--performance-queue-timeout-seconds', type=_bounded_int(10, 1800), default=240,
+                        help='limit for the offline performance queue in seconds (default 240)')
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    entry_started_ns = perf_counter_ns()
     args = _parser().parse_args(argv)
     if args.check_station_evidence:
         from rapid_main.station_evidence import audit_station_evidence
@@ -57,6 +76,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.smoke_test:
         from rapid_main.release_smoke import run_smoke_test
         return run_smoke_test()
+    if args.measure_performance:
+        from rapid_main.performance_check import run_performance_check
+
+        return run_performance_check(args.performance_specimens, args.performance_idle_seconds,
+                                     args.performance_queue_timeout_seconds, entry_started_ns=entry_started_ns)
     if args.check_display:
         from rapid_main.display_check import run_display_check
         return run_display_check()

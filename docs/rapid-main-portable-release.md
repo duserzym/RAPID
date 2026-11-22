@@ -340,6 +340,27 @@ transferred package in a separate Windows runner. Its qualification artifact
 contains the report for that candidate commit. Physical station, vendor
 driver, and display checks use the lab's acceptance procedure.
 
+### Measure workstation performance
+
+Run the verifier with `-MeasurePerformance` on the oldest supported control
+computer and retain its `verification.json` with the build's station evidence.
+The separate Windows verification job runs the same workload on the hosted
+runner.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Verify-RapidPy.ps1 `
+    -RequireFullInventory -MeasurePerformance -PerformanceSpecimens 40 -PerformanceIdleSeconds 5
+```
+
+This opens an isolated offscreen No-Communication session and runs the actual
+Sample Queue button with synthetic specimens. The report records process launch
+to the first sampled window, idle CPU time, working set and private bytes,
+queue duration, published specimen and step counts, and the 95th percentile
+and longest intervals between 20 ms Qt timer ticks. CPU percentage is relative
+to one logical processor. The verifier samples Windows memory every 100 ms.
+The report identifies the candidate revision and records the workload at each
+run so the lab can compare equivalent results on its control computers.
+
 The portable verifier opens the Sample Index dialog at 150% and 200% scaling
 on offscreen work areas. It checks that the registry and specimen selection
 controls fit and that a maximized window keeps its state. Lab sign-off covers

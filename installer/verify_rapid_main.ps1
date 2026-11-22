@@ -2,7 +2,11 @@ param(
     [string]$Bundle = '',
     [string]$EvidenceDirectory = '',
     [switch]$RequireFullInventory,
-    [ValidateRange(10, 600)][int]$TimeoutSeconds = 120
+    [ValidateRange(10, 600)][int]$TimeoutSeconds = 120,
+    [switch]$MeasurePerformance,
+    [ValidateRange(1, 100)][int]$PerformanceSpecimens = 40,
+    [ValidateRange(1, 60)][int]$PerformanceIdleSeconds = 5,
+    [ValidateRange(15, 1800)][int]$PerformanceTimeoutSeconds = 300
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,8 +34,53 @@ $console = Join-Path $Bundle 'RapidPyMainConsole.exe'
 $windows = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
 $system = Join-Path $windows 'System32'
 
+function Measure-BundledProcess {
+    param([Diagnostics.Process]$Process, [Diagnostics.Stopwatch]$Clock, [string]$ReadyFile, [int]$Timeout)
+
+    $interval = 100
+    $samples = 0
+    $peakWorkingSet = [long]0
+    $peakPrivate = [long]0
+    $ready = $null
+    while (-not $Process.WaitForExit($interval)) {
+        $Process.Refresh()
+        if ($Process.HasExited) { break }
+        try {
+            $workingSet = $Process.WorkingSet64
+            $private = $Process.PrivateMemorySize64
+        } catch [System.InvalidOperationException] {
+            if ($Process.HasExited) { break }
+            throw
+        }
+        $samples++
+        $peakWorkingSet = [Math]::Max($peakWorkingSet, $workingSet)
+        $peakPrivate = [Math]::Max($peakPrivate, $private)
+        if ($null -eq $ready -and [IO.File]::Exists($ReadyFile)) {
+            $observedPid = ''
+            try { $observedPid = [IO.File]::ReadAllText($ReadyFile) } catch [IO.IOException] { }
+            if ($observedPid -ceq [string]$Process.Id) {
+                $ready = [ordered]@{
+                    observed_launch_to_window_ms = [Math]::Round($Clock.Elapsed.TotalMilliseconds, 3)
+                    working_set_bytes = $workingSet
+                    private_bytes = $private
+                }
+            }
+        }
+        if ($Clock.Elapsed.TotalSeconds -ge $Timeout) { break }
+    }
+    [ordered]@{
+        exited = $Process.HasExited
+        sample_interval_ms = $interval
+        samples = $samples
+        window_ready = $ready
+        peak_sampled_working_set_bytes = $peakWorkingSet
+        peak_sampled_private_bytes = $peakPrivate
+        logical_processors = [Environment]::ProcessorCount
+    }
+}
+
 function Invoke-BundledCheck {
-    param([string]$Name, [string]$Argument, [string]$Scale = '')
+    param([string]$Name, [string]$Argument, [string]$Scale = '', [switch]$SamplePerformance)
 
     $profile = Join-Path $checkRoot $Name
     $roaming = Join-Path $profile 'AppData\Roaming'
@@ -65,14 +114,25 @@ function Invoke-BundledCheck {
         QT_QPA_PLATFORM = 'offscreen'
     }
     if ($Scale) { $environment.QT_SCALE_FACTOR = $Scale }
+    $readyFile = Join-Path $profile 'window-ready'
+    if ($SamplePerformance) { $environment.RAPID_PERFORMANCE_READY_FILE = $readyFile }
     foreach ($entry in $environment.GetEnumerator()) {
         $start.EnvironmentVariables[$entry.Key] = $entry.Value
     }
+    $clock = [Diagnostics.Stopwatch]::StartNew()
     $process = [Diagnostics.Process]::Start($start)
     try {
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
-        $exited = $process.WaitForExit($TimeoutSeconds * 1000)
+        $processSample = $null
+        $limit = $TimeoutSeconds
+        if ($SamplePerformance) {
+            $limit = $PerformanceTimeoutSeconds
+            $processSample = Measure-BundledProcess -Process $process -Clock $clock -ReadyFile $readyFile -Timeout $limit
+            $exited = $processSample.exited
+        } else {
+            $exited = $process.WaitForExit($limit * 1000)
+        }
         if (-not $exited) {
             if (-not $process.HasExited) { $process.Kill() }
             $process.WaitForExit()
@@ -80,11 +140,32 @@ function Invoke-BundledCheck {
         $json = $stdout.GetAwaiter().GetResult()
         [IO.File]::WriteAllText((Join-Path $checkRoot "$Name.stdout.log"), $json)
         [IO.File]::WriteAllText((Join-Path $checkRoot "$Name.stderr.log"), $stderr.GetAwaiter().GetResult())
-        if (-not $exited) { throw "Bundled $Name check timed out after $TimeoutSeconds seconds." }
+        if (-not $exited) { throw "Bundled $Name check timed out after $limit seconds." }
         if ($process.ExitCode -ne 0) { throw "Bundled $Name check failed with exit code $($process.ExitCode)." }
-        return ($json | ConvertFrom-Json)
+        $result = $json | ConvertFrom-Json
+        if ($SamplePerformance) {
+            if ($null -eq $processSample.window_ready -or $processSample.samples -lt 2) {
+                throw 'The performance run did not yield enough live process samples.'
+            }
+            $result | Add-Member -NotePropertyName windows_process -NotePropertyValue $processSample
+        }
+        return $result
     } finally {
-        $process.Dispose()
+        try {
+            if (-not $process.HasExited) {
+                $process.Kill()
+                $process.WaitForExit()
+            }
+        } finally {
+        try {
+            if (-not $process.HasExited) {
+                $process.Kill()
+                $process.WaitForExit()
+            }
+        } finally {
+            $process.Dispose()
+        }
+        }
     }
 }
 
@@ -139,12 +220,25 @@ try {
             }
         }
     }
+    if ($MeasurePerformance) {
+        $arguments = '--measure-performance --performance-specimens {0} --performance-idle-seconds {1} --performance-queue-timeout-seconds {2}' -f `
+            $PerformanceSpecimens, $PerformanceIdleSeconds, $PerformanceTimeoutSeconds
+        $performance = Invoke-BundledCheck -Name 'performance' -Argument $arguments -SamplePerformance
+        $report.performance = $performance
+        if ($performance.schema -cne 'rapidpy.performance_check.v1' -or $performance.ok -ne $true -or
+            $performance.simulated -ne $true -or $performance.software_version -cne $smoke.software_version -or
+            $performance.idle_seconds_requested -ne $PerformanceIdleSeconds -or
+            $performance.queue.requested_specimens -ne $PerformanceSpecimens -or
+            $performance.queue.published_specimens -ne $PerformanceSpecimens) {
+            throw 'The performance report did not identify a completed workload for this candidate.'
+        }
+    }
     $after = Test-RapidPyBundle -Bundle $Bundle -RequireFullInventory:$RequireFullInventory
     if ($after.manifest_sha256 -cne $report.inventory.manifest_sha256) {
         throw 'The portable build manifest changed during verification.'
     }
     $report.passed = $true
-    Write-Output "Portable startup and offline UI checks passed. Evidence: $reportPath"
+    Write-Output "Portable qualification checks passed. Evidence: $reportPath"
 } catch {
     $report.error = $_.Exception.Message
     throw "Portable verification failed. $($report.error) Evidence: $reportPath"
