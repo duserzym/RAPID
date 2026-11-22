@@ -11,6 +11,7 @@ from typing import Iterator
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 from rapidpy_common.hardware_safety import _canonical, _replace_snapshot
+from rapidpy_common.paths import absolute_io_path as _archive_io_path
 from rapid_main.io.bundle_publication import _digest, _sync_directory
 from rapid_main.specimen_paths import contained_path
 
@@ -24,16 +25,6 @@ _EVIDENCE_DIRECTORIES = {
     ".rapidpy-acquisitions", ".rapidpy-pairs", "af_treatments",
     "pulse_treatments", "susceptibility_acquisitions",
 }
-
-
-def _archive_io_path(path: str | Path) -> Path:
-    """Use Windows extended paths for the additional archive directory levels."""
-    absolute = os.path.abspath(path)
-    if os.name != "nt" or absolute.startswith(("\\\\?\\", "\\\\.\\")):
-        return Path(absolute)
-    if absolute.startswith("\\\\"):
-        return Path("\\\\?\\UNC\\" + absolute[2:])
-    return Path("\\\\?\\" + absolute)
 
 
 def is_bundle_archive(directory: str | Path) -> bool:

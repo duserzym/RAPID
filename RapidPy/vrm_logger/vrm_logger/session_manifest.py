@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from rapidpy_common.paths import absolute_io_path
+
 
 VRM_CONTEXT_ENV = "RAPID_VRM_CONTEXT_JSON"
 VRM_CONTEXT_SCHEMA = "rapidpy.vrm.launch_context.v1"
@@ -122,7 +124,7 @@ def load_handoff_context(env: Mapping[str, str] | None = None) -> dict[str, obje
         return _handoff_error(None, "The main-app handoff path is empty.")
     path = Path(raw_path.strip())
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(absolute_io_path(path).read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         return _handoff_error(path, str(exc))
     return validate_handoff_context(payload, path=path)
@@ -130,7 +132,7 @@ def load_handoff_context(env: Mapping[str, str] | None = None) -> dict[str, obje
 
 def file_sha256(path: Path | str) -> str:
     digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
+    with absolute_io_path(path).open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
@@ -222,11 +224,13 @@ def write_vrm_output_manifest(
     error: str = "",
 ) -> Path:
     csv_path = Path(output_csv)
-    if not csv_path.is_file():
+    csv_file = absolute_io_path(csv_path)
+    if not csv_file.is_file():
         raise FileNotFoundError(f"VRM output CSV does not exist: {csv_path}")
     resolved_session_id = _safe_session_id(session_id or str(uuid.uuid4()))
     manifest_path = vrm_manifest_path(csv_path, resolved_session_id)
-    if manifest_path.exists():
+    manifest_file = absolute_io_path(manifest_path)
+    if manifest_file.exists():
         raise FileExistsError(f"VRM session manifest already exists: {manifest_path}")
     payload = build_vrm_output_manifest(
         output_csv=csv_path,
@@ -245,8 +249,8 @@ def write_vrm_output_manifest(
         device_port=device_port,
         provenance=provenance,
         error=error,
-        output_size_bytes=csv_path.stat().st_size,
-        output_sha256=file_sha256(csv_path),
+        output_size_bytes=csv_file.stat().st_size,
+        output_sha256=file_sha256(csv_file),
     )
-    _atomic_write_json(manifest_path, payload)
+    _atomic_write_json(manifest_file, payload)
     return manifest_path

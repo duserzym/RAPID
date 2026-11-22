@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import struct
+import sys
 import tempfile
 
 from rapid_main import software_version
@@ -169,10 +170,12 @@ def _check_measurement_backup(app, root):
 def _check_vrm_practice(app, root):
     from PySide6 import QtCore
     from rapid_main.vrm import VRM_CONTEXT_ENV, build_vrm_launch_context, write_vrm_launch_context
+    from rapidpy_common.paths import absolute_io_path
     from vrm_logger.app import MainWindow
     from vrm_logger.session_manifest import file_sha256
 
-    output_dir = root / "vrm-output"
+    output = tempfile.TemporaryDirectory(prefix="vrm-", dir=absolute_io_path(root))
+    output_dir = Path(output.name)
     context = build_vrm_launch_context(nocomm=True, intended_output_dir=output_dir)
     handoff = write_vrm_launch_context(root, context=context)
     previous_handoff = os.environ.get(VRM_CONTEXT_ENV)
@@ -199,8 +202,9 @@ def _check_vrm_practice(app, root):
         window.stop_btn.click()
         if not wait_until(lambda: window._thread is None):
             return False
-        manifests = list((output_dir / "SIMULATED").glob("*/*.vrm.json"))
+        manifests = list(absolute_io_path(output_dir / "SIMULATED").glob("*/*.vrm.json"))
         if len(manifests) != 1:
+            print(window.console_output.toPlainText(), file=sys.stderr)
             return False
         manifest = json.loads(manifests[0].read_bytes())
         csv_path = manifests[0].with_name("vrm_log.csv")
@@ -214,6 +218,7 @@ def _check_vrm_practice(app, root):
             os.environ.pop(VRM_CONTEXT_ENV, None)
         else:
             os.environ[VRM_CONTEXT_ENV] = previous_handoff
+        output.cleanup()
 
 
 def _check_sample_index_registry(window, root):

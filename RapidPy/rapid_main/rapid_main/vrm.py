@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
+from rapidpy_common.paths import absolute_io_path
+
 
 VRM_CONTEXT_ENV = "RAPID_VRM_CONTEXT_JSON"
 VRM_CONTEXT_SCHEMA = "rapidpy.vrm.launch_context.v1"
@@ -140,7 +142,6 @@ def write_vrm_launch_context(
     context: Mapping[str, object] | None = None,
 ) -> Path:
     target_dir = Path(directory) if directory is not None else default_vrm_context_dir()
-    target_dir.mkdir(parents=True, exist_ok=True)
     payload = validate_vrm_launch_context(context or build_vrm_launch_context())
     stamp = str(payload.get("launched_at_utc") or _utc_timestamp())
     safe_stamp = (
@@ -151,5 +152,5 @@ def write_vrm_launch_context(
     )
     launch_id = str(payload["launch_id"]).replace("/", "_").replace("\\", "_")
     path = target_dir / f"vrm_launch_{safe_stamp}_{launch_id}.json"
-    _atomic_write_json(path, payload)
+    _atomic_write_json(absolute_io_path(path), payload)
     return path

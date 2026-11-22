@@ -18,6 +18,7 @@ from rapid_main.vrm import (
     vrm_launch_block_reason,
     write_vrm_launch_context,
 )
+from rapidpy_common.paths import absolute_io_path
 from vrm_logger.session_manifest import (
     build_vrm_output_manifest,
     load_handoff_context,
@@ -243,6 +244,25 @@ class VrmIntegrationTests(unittest.TestCase):
             vrm_manifest_path(Path("example.csv"), "session-2"),
             Path("example.session-2.vrm.json"),
         )
+
+    def test_session_manifest_is_finalized_in_a_long_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            parent = base / ("e" * max(1, 223 - len(str(base))))
+            parent.mkdir()
+            with tempfile.TemporaryDirectory(dir=absolute_io_path(parent)) as nested:
+                csv_path = parent / Path(nested).name / "vrm_log.csv"
+                absolute_io_path(csv_path).write_bytes(b"time_s,x\n1.0,2.0\n")
+                path = write_vrm_output_manifest(
+                    csv_path, session_start_epoch=1.0, session_end_epoch=2.0, session_id="3" * 36,
+                    outcome="operator_stopped", row_count=1, write_mode="new", interval_s=1.0,
+                    spacing_mode="Linear", display_unit="Volts", baseline_volts=(0.1, 0.2, 0.3),
+                    calibration={}, provenance="simulated",
+                )
+                self.assertGreater(len(str(path)), 260)
+                manifest = json.loads(absolute_io_path(path).read_bytes())
+                self.assertEqual(manifest["output_csv"], str(csv_path))
+                self.assertEqual(manifest["output_sha256"], hashlib.sha256(b"time_s,x\n1.0,2.0\n").hexdigest())
 
     def test_manifest_requires_truthful_error_and_valid_lifecycle(self) -> None:
         common = dict(

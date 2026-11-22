@@ -36,6 +36,7 @@ from .session_manifest import load_handoff_context, write_vrm_output_manifest
 from .squid_serial import SimulatedSquidClient, SquidCommunicationError, SquidSerialClient
 from rapidpy_common.ui import apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon, workspace_window_size
 from rapidpy_common.resources import asset_directory
+from rapidpy_common.paths import absolute_io_path
 
 
 class AbsoluteTimeAxis(pg.AxisItem):
@@ -663,7 +664,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # --- CSV exists check ---
         append_to_existing = False
         overwrite = False
-        if not self._simulated and output_path.exists() and output_path.stat().st_size > 0:
+        target = absolute_io_path(output_path)
+        if not self._simulated and target.exists() and target.stat().st_size > 0:
             dlg = QtWidgets.QMessageBox(self)
             dlg.setWindowTitle("CSV File Already Exists")
             dlg.setText(f"<b>{output_path.name}</b> already exists.")
@@ -694,13 +696,15 @@ class MainWindow(QtWidgets.QMainWindow):
             session_id = str(uuid.uuid4())
             if self._simulated:
                 simulated_dir = output_path.parent.resolve() / "SIMULATED"
-                if simulated_dir.resolve() != simulated_dir:
+                directory = absolute_io_path(simulated_dir)
+                if directory.resolve() != directory:
                     raise ValueError("Choose an output folder with a local SIMULATED directory.")
                 output_path = simulated_dir / session_id / f"{output_path.stem}.csv"
-            output_path.parent.mkdir(parents=True, exist_ok=not self._simulated)
+            target = absolute_io_path(output_path)
+            target.parent.mkdir(parents=True, exist_ok=not self._simulated)
             is_new_file = not append_to_existing
             open_mode = "x" if self._simulated else ("w" if overwrite else "a")
-            self._csv_handle = output_path.open(open_mode, newline="", encoding="utf-8")
+            self._csv_handle = target.open(open_mode, newline="", encoding="utf-8")
             self._csv_writer = csv.writer(self._csv_handle)
             if is_new_file:
                 self._csv_writer.writerow(
