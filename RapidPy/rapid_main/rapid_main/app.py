@@ -861,8 +861,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._measurement.sample_run_finished.connect(self._on_queue_sample_finished)
         self._settings_panel    = SettingsPanel()
         self._calibration_panel = CalibrationCenterPanel(
-            self, backend_provider=lambda: self.measurement_backend()
+            self, backend_provider=lambda: self.measurement_backend(), rod_scan_provider=self._prepare_rod_scan
         )
+        self._calibration_panel.rod_scan_recovery_required.connect(self._on_rod_scan_recovery_required)
         self._calibration_panel.thermal_plan_recorded.connect(self._install_thermal_plan)
         for (icon, label, _idx), key, panel in zip(_NAV_ITEMS, _PANEL_KEYS, (
             self._dashboard,
@@ -1128,6 +1129,9 @@ class MainWindow(QtWidgets.QMainWindow):
             return False
         if self._queue_active or self._queue_command_thread is not None:
             self.set_status("Queue run is already active.")
+            return False
+        if getattr(getattr(self, '_calibration_panel', None), 'rod_scan_active', False):
+            self.set_status('Wait for the susceptibility rod scan to finish before starting the queue.')
             return False
 
         if hasattr(self._measurement, "is_active") and self._measurement.is_active():
@@ -2982,9 +2986,62 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _launch_calibrate_rod(self) -> None:
         self._nav_select(5)
-        self._calibration_panel.set_procedure("gaussmeter_baseline")
-        self._calibration_panel.set_mode("automated")
-        self.set_status("Opened Calibration Center for rod-related SQUID workflow setup.")
+        self._calibration_panel.set_procedure("susceptibility_rod")
+        self.set_status("Opened Susceptibility Rod Scan in Calibration Center.")
+
+    @QtCore.Slot(str)
+    def _on_rod_scan_recovery_required(self, message):
+        if self._shutdown_cleanup_requested:
+            self._diagnostic_shutdown_blocked(message)
+        else:
+            self.set_status(message)
+
+    def _prepare_rod_scan(self, request, folder):
+        from functools import partial
+        from .diagnostic_services import DCMotorBackendAdapter, SusceptibilityBackendAdapter
+        from .hardware_contracts import _build_motor_controller_config
+        from .rod_calibration import RodScanJob, plan_rod_scan
+
+        if self._shutdown_cleanup_requested or self._has_active_automation():
+            raise DeviceOwnershipError('Wait for the active workflow to finish before scanning the rod.')
+        config = self.config
+        simulator = config.general.nocomm is True
+        operator = str(config.general.operator or '').strip()
+        if not simulator and not operator:
+            raise ValueError('Sign in before running the live rod calibration.')
+        station, susceptibility = config.motor_station, config.susceptibility
+        plan = plan_rod_scan(request,
+            coil=susceptibility.coil_position or (-22700 if simulator else 0),
+            travel_limit=config.motion.meas_pos or (-97500 if simulator else 0),
+            counts_per_cm=station.lift_counts_per_cm or (961 if simulator else 0),
+            moment_factor_cgs=susceptibility.moment_factor_cgs)
+        fingerprint = config_fingerprint(config)
+        scan = None
+        if not simulator:
+            motors, bridge = self._dc_motor_backend, self._susceptibility_backend
+            if (config.general.nocomm is not False or not isinstance(motors, DCMotorBackendAdapter)
+                    or not isinstance(bridge, SusceptibilityBackendAdapter)
+                    or motors._client.config != _build_motor_controller_config(config)
+                    or asdict(bridge._cfg) != asdict(susceptibility)):
+                raise ValueError('Restore the accepted live motor and Bartington bridge settings.')
+            if QtWidgets.QMessageBox.question(self, 'Confirm mounted susceptibility standard',
+                    f'Confirm that {request.standard} is securely mounted, the lift is at top, '
+                    f'the changer opening and travel to {min(plan.positions):,d} counts are clear, '
+                    'and field outputs are off.',
+                    QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                    QtWidgets.QMessageBox.StandardButton.No) != QtWidgets.QMessageBox.StandardButton.Yes:
+                return None
+            if (self._shutdown_cleanup_requested or self._has_active_automation()
+                    or config_fingerprint(self.config) != fingerprint
+                    or motors is not self._dc_motor_backend or bridge is not self._susceptibility_backend):
+                raise DeviceOwnershipError('The station changed while confirming the mounted standard.')
+            scan = partial(motors.run_rod_scan, bridge=bridge, port=config.changer.port, operator=operator)
+
+        path = Path(folder).expanduser() / f'susceptibility-rod-{uuid.uuid4().hex}.json'
+        job = RodScanJob(plan, path, operator=operator or 'No-Comm', config_hash=fingerprint, scan=scan)
+        lease = self.acquire_devices(('measurement', 'changer', 'susceptibility', 'vacuum', 'af_demag'),
+                                     'rod_calibration', allow_reentrant=False)
+        return job, lease
 
     def _launch_irm_voltage_calibration(self) -> None:
         self._nav_select(5)
@@ -3185,12 +3242,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.set_status('Shutdown remains open for diagnostic recovery: ' + reason)
 
     def _has_active_automation(self) -> bool:
-        """Return true when a live measurement or queue run is active."""
+        """Return true when a measurement, queue, or rod scan owns automation."""
         measurement_active = bool(
             hasattr(self._measurement, "is_active") and self._measurement.is_active()
         )
         return (measurement_active or bool(self._queue_active) or self._queue_preparation is not None
                 or self._queue_starting
+                or getattr(getattr(self, '_calibration_panel', None), 'rod_scan_active', False)
                 or self._queue_command_thread is not None
                 or self._queue_native_session is not None)
 
@@ -3203,15 +3261,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
         active = self._has_active_automation()
         if prompt and active:
+            active_message = (
+                'Shutdown will stop the rod scan and wait for verified motor settlement.'
+                if getattr(getattr(self, '_calibration_panel', None), 'rod_scan_active', False)
+                else 'Shutdown will halt the active measurement or queue run.'
+            )
             if (
                 QtWidgets.QMessageBox.question(
                     self,
                     "Active run in progress",
-                    (
-                        "A measurement or queue run is currently active.\n"
-                        "Shutdown will halt the run and stop queue execution.\n\n"
-                        "Continue?"
-                    ),
+                    f"{active_message}\n\nContinue?",
                     QtWidgets.QMessageBox.StandardButton.Yes
                     | QtWidgets.QMessageBox.StandardButton.No,
                     QtWidgets.QMessageBox.StandardButton.No,
@@ -3998,6 +4057,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._queue_paused = False
         if hasattr(self._measurement, "halt_run"):
             self._measurement.halt_run()
+        if getattr(getattr(self, '_calibration_panel', None), 'rod_scan_active', False):
+            self._calibration_panel.stop_rod_scan()
         self.cancel_queue_run("Queue halted by user.")
 
     def _on_header_pause(self) -> None:
@@ -4010,7 +4071,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self._measurement, "is_active") and self._measurement.is_active():
             self.halt_measurement()
             self.set_flow_state("halted")
-        elif self._queue_active or self._queue_preparation is not None or self._queue_starting:
+        elif (self._queue_active or self._queue_preparation is not None or self._queue_starting
+              or getattr(getattr(self, '_calibration_panel', None), 'rod_scan_active', False)):
             self.halt_measurement()
         else:
             self.set_status("No active run to halt.")

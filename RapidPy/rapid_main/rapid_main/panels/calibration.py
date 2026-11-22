@@ -21,6 +21,7 @@ from rapid_main.calibration_registry import (
     CalibrationRegistryError,
 )
 from rapid_main.hardware_contracts import MeasurementBackend
+from rapid_main.rod_calibration import RodScanRequest, RodScanWorker
 from rapid_main.thermal import (
     ThermalSafetyLimits,
     compile_thermal_routine,
@@ -37,6 +38,7 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
     """
 
     thermal_plan_recorded = QtCore.Signal(object)
+    rod_scan_recovery_required = QtCore.Signal(str)
 
     PROCEDURES = {
         "gaussmeter_baseline": {
@@ -62,10 +64,15 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         *,
         backend_provider: Callable[[], MeasurementBackend] | None = None,
         registry: CalibrationRegistry | None = None,
+        rod_scan_provider=None,
     ) -> None:
         super().__init__(parent)
         self._backend_provider = backend_provider
         self._registry = registry or CalibrationRegistry.default()
+        self._rod_scan_provider = rod_scan_provider
+        self._rod_worker = None
+        self._rod_lease = None
+        self._rod_configuring = False
         self._last_calibration_artifact: Path | None = None
         self._history: deque[str] = deque(maxlen=8)
         self._build_ui()
@@ -100,6 +107,7 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         self._procedure.addItem("SQUID / Gaussmeter Baseline", "gaussmeter_baseline")
         self._procedure.addItem("IRM Voltage Calibration", "irm_voltage")
         self._procedure.addItem("Thermal Routine Planning", "thermal_routine")
+        self._procedure.addItem("Susceptibility Rod Scan", "susceptibility_rod")
         self._procedure.currentIndexChanged.connect(self._on_procedure_changed)
         fl.addRow("Procedure:", self._procedure)
 
@@ -223,6 +231,33 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         thermal_form.addRow("", self._run_thermal_btn)
         fl.addRow("", self._thermal_box)
 
+        self._rod_box = QtWidgets.QGroupBox("Bartington susceptibility standard")
+        rod_form = QtWidgets.QFormLayout(self._rod_box)
+        rod_form.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
+        self._rod_standard = QtWidgets.QLineEdit()
+        self._rod_height = self._spin(.001, 100, 2, " cm")
+        self._rod_spacing = self._spin(.008, 10, .4, " cm")
+        self._rod_spacing.setToolTip("The lift advances half this distance between readings.")
+        self._rod_reference = QtWidgets.QLineEdit()
+        self._rod_threshold = self._spin(.01, 99.99, 10, " %")
+        self._rod_artifact_dir = QtWidgets.QLineEdit(str(self._registry.root.parent))
+        rod_form.addRow("Standard identity:", self._rod_standard)
+        rod_form.addRow("Standard height:", self._rod_height)
+        rod_form.addRow("Scan spacing:", self._rod_spacing)
+        rod_form.addRow("Certified moment susceptibility (CGS):", self._rod_reference)
+        rod_form.addRow("Fit and verification threshold:", self._rod_threshold)
+        rod_form.addRow("Artifact folder:", self._rod_artifact_dir)
+        self._rod_run = QtWidgets.QPushButton("Run Rod Scan")
+        self._rod_run.clicked.connect(self._run_rod_scan)
+        self._rod_stop = QtWidgets.QPushButton("Stop Rod Scan")
+        self._rod_stop.setEnabled(False)
+        self._rod_stop.clicked.connect(self.stop_rod_scan)
+        rod_buttons = QtWidgets.QHBoxLayout()
+        rod_buttons.addWidget(self._rod_run)
+        rod_buttons.addWidget(self._rod_stop)
+        rod_form.addRow(rod_buttons)
+        fl.addRow(self._rod_box)
+
         button_row = QtWidgets.QHBoxLayout()
         self._run_auto_btn = QtWidgets.QPushButton("Run Automated")
         self._run_auto_btn.clicked.connect(self._run_automated)
@@ -231,9 +266,13 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         button_row.addWidget(self._run_auto_btn)
         button_row.addWidget(self._run_manual_btn)
         button_row.addStretch()
-        fl.addRow("", button_row)
+        self._baseline_buttons = QtWidgets.QWidget()
+        self._baseline_buttons.setLayout(button_row)
+        fl.addRow(self._baseline_buttons)
+        self._procedure_form = fl
 
         self._status = QtWidgets.QLabel("Ready")
+        self._status.setWordWrap(True)
         fl.addRow("Status:", self._status)
         root.addWidget(card)
 
@@ -341,15 +380,23 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
 
     def _on_procedure_changed(self) -> None:
         key = self._procedure.currentData()
-        info = self.PROCEDURES.get(key if key else "gaussmeter_baseline")
-        if info is None:
-            return
-        self._expected.setValue(float(info["expected_default"]))
-        self._tolerance.setValue(float(info["tolerance_default"]))
+        info = self.PROCEDURES.get(key)
+        if info is not None:
+            self._expected.setValue(float(info["expected_default"]))
+            self._tolerance.setValue(float(info["tolerance_default"]))
         is_irm = key == "irm_voltage"
         is_thermal = key == "thermal_routine"
+        is_rod = key == "susceptibility_rod"
+        is_baseline = not (is_irm or is_thermal or is_rod)
         self._irm_box.setVisible(is_irm)
         self._thermal_box.setVisible(is_thermal)
+        self._rod_box.setVisible(is_rod)
+        for widget in (
+            self._mode, self._expected, self._samples, self._tolerance, self._manual_value,
+            self._baseline_context, self._baseline_operator, self._baseline_artifact_dir,
+            self._baseline_buttons,
+        ):
+            self._procedure_form.setRowVisible(widget, not is_rod)
         for widget in (
             self._expected,
             self._samples,
@@ -361,7 +408,7 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
             self._run_auto_btn,
             self._run_manual_btn,
         ):
-            widget.setEnabled(not is_irm and not is_thermal)
+            widget.setEnabled(is_baseline)
         for widget in (
             self._irm_field_1,
             self._irm_voltage_1,
@@ -390,11 +437,11 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
             self._run_thermal_btn,
         ):
             widget.setEnabled(is_thermal)
-        if not is_irm and not is_thermal:
+        if is_baseline:
             self._on_mode_changed()
 
     def _on_mode_changed(self) -> None:
-        if self._procedure.currentData() in {"irm_voltage", "thermal_routine"}:
+        if self._procedure.currentData() != "gaussmeter_baseline":
             return
         self._run_auto_btn.setEnabled(self._mode.currentData() == "automated")
         self._run_manual_btn.setEnabled(self._mode.currentData() == "manual")
@@ -402,6 +449,8 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         self._manual_value.setEnabled(self._mode.currentData() == "manual")
 
     def set_procedure(self, procedure_id: str) -> None:
+        if self.rod_scan_active:
+            return
         for idx in range(self._procedure.count()):
             if self._procedure.itemData(idx) == procedure_id:
                 self._procedure.setCurrentIndex(idx)
@@ -412,6 +461,95 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
             if self._mode.itemData(idx) == mode:
                 self._mode.setCurrentIndex(idx)
                 return
+
+    @property
+    def rod_scan_active(self) -> bool:
+        return self._rod_worker is not None
+
+    def stop_rod_scan(self) -> None:
+        if self._rod_worker is not None:
+            self._rod_worker.requestInterruption()
+            self._rod_stop.setEnabled(False)
+            self._status.setText("Stopping the rod scan and verifying motor settlement…")
+
+    def _run_rod_scan(self) -> None:
+        if self.rod_scan_active or self._rod_configuring:
+            return
+        self._rod_configuring = True
+        lease = None
+        try:
+            folder = self._rod_artifact_dir.text().strip()
+            if not folder:
+                raise ValueError("Enter an artifact folder.")
+            try:
+                reference = float(self._rod_reference.text())
+            except ValueError as exc:
+                raise ValueError("Enter the certified moment susceptibility as a number in CGS units.") from exc
+            if self._rod_scan_provider is None:
+                raise ValueError("A susceptibility rod scan backend is unavailable.")
+            request = RodScanRequest(self._rod_standard.text().strip(), self._rod_height.value(),
+                                     self._rod_spacing.value(), reference, self._rod_threshold.value())
+            prepared = self._rod_scan_provider(request, folder)
+            if prepared is None:
+                self._status.setText("Rod scan canceled before connecting.")
+                return
+            job, lease = prepared
+            self._rod_lease = lease
+            self._rod_worker = RodScanWorker(job, self)
+            self._rod_worker.finished.connect(self._rod_scan_finished)
+            self._set_last_calibration_artifact(None)
+            self._procedure.setEnabled(False)
+            self._rod_run.setEnabled(False)
+            self._rod_stop.setEnabled(True)
+            self._status.setText(f"Scanning {request.standard} at {len(job.plan.positions)} lift positions…")
+            self._rod_worker.start()
+        except Exception as exc:
+            if self._rod_worker is not None:
+                self._rod_worker.deleteLater()
+                self._rod_worker = None
+            if lease is not None:
+                lease.release()
+            self._rod_lease = None
+            self._procedure.setEnabled(True)
+            self._rod_run.setEnabled(True)
+            self._rod_stop.setEnabled(False)
+            self._status.setText(str(exc))
+        finally:
+            self._rod_configuring = False
+
+    def _rod_scan_finished(self) -> None:
+        worker = self._rod_worker
+        if worker is None:
+            return
+        if not worker.wait(0):
+            QtCore.QTimer.singleShot(10, self, self._rod_scan_finished)
+            return
+        self._rod_lease.release()
+        self._rod_lease = None
+        self._rod_worker = None
+        self._procedure.setEnabled(True)
+        self._rod_run.setEnabled(True)
+        self._rod_stop.setEnabled(False)
+        worker.deleteLater()
+        result = worker.result
+        if result is None:
+            self._status.setText(f"Rod scan evidence could not be saved. {worker.error}")
+            return
+        label = "Simulated rod scan" if result.simulated else "Rod scan"
+        if result.fit is None:
+            self._status.setText(f"{label} unsuccessful. {result.error}")
+            lines = [result.error]
+        else:
+            fit = result.fit
+            self._status.setText(f"{label} complete. Calibration proposal saved.")
+            lines = [f"Proposed coil position   {fit.coil:,d} counts",
+                     f"Proposed moment factor   {fit.moment_factor_cgs:.9g}",
+                     f"Independent center reading   {fit.verification_reading_cgs:.9g} CGS"]
+            self._set_last_calibration_artifact(None if result.simulated else result.artifact,
+                                                suggested_operator=worker.job.operator)
+        self._result.setPlainText("\n".join([label, *lines, f"Evidence   {result.artifact}"]))
+        if result.recovery_required:
+            self.rod_scan_recovery_required.emit("Recover Verify Stopped in DC Motors before closing or resuming motion.")
 
     def _set_last_calibration_artifact(
         self,

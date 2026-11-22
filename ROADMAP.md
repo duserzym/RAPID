@@ -2756,3 +2756,25 @@ all 24 steps and retained the original .sam digest and each header's
 specimen volume. The measurements are offscreen, with other tests running
 on the same host. Per-specimen UI time, supported workstation performance,
 and physical qualification remain open.
+
+Bartington rod calibration checkpoint (2026-11-22). **Calibrate Rod**
+opens a dedicated Calibration Center procedure for the operator-mounted
+standard. It uses the accepted lift geometry and bridge configuration,
+records the settled position and bridge response at each step, and checks
+the proposed coil position and moment factor with an independent acquisition
+at the fitted center. The scan runs on a worker and holds the device lease
+through cleanup. An unverified stop retains the original motor recovery
+record. A simulated scan produces practice evidence and is ineligible for
+registry approval.
+
+The staged source passed nine focused tests covering the No-Comm desktop
+route and routed motor fixtures, including cancellation, failed readback,
+recovery, and approval boundaries. An offscreen desktop check confirmed that
+the scan controls fit at 1280 × 720. At the 752-pixel fallback width the form
+uses horizontal scrolling. The Windows package passed offline startup and
+smoke checks for all six panels and six helpers. The staged application also
+passed all 1,472 regression tests in 777.534 seconds with exit code 0. The
+verified bundle is local under `.tmp/rod-calibration-release/dist/RapidPyMain`.
+
+Bench acceptance with the certified standard remains open, along with the
+separate automatic loading, SQUID rod scan, and U-channel workflows.

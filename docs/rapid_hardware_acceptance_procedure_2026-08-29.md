@@ -216,7 +216,7 @@ SHA-256). Attach those files to the evidence record.
 | S8 | Halt during the move to the coil | Run aborts, lift returns home, record outcome `failed` with `cancelled`; no `.rmg`, specimen, or `susceptibility.json` output |
 | S9 | Unplug the bridge between zero and measure | Record shows the reply error, `safe_state_confirmed = true`, and no value; the prior holder (if a holder run) is unchanged |
 | S10 | Block the home limit switch (controlled fault) after a read | `SAFE-STATE NOT CONFIRMED` error names both the acquisition and safe-return failures; operator inspection is required before continuing |
-| S11 | Run the Bartington calibration scan (`frmCalRod.RunSusceSeq` equivalent) only as a separate calibration workflow | Never triggered by ordinary `SUSC` steps |
+| S11 | With the certified Bartington standard securely mounted and the travel clear, open **Diagnostics → Calibrate Rod**. Run two scans using the lab's certified moment susceptibility and chosen tolerance. | Attach both `susceptibility-rod-*.json` records. Compare the fitted coil positions and moment factors with the lab's accepted calibration and repeatability limits. Verify the two fitted-center readings, recorded final top position, and stationary changer axes. Review the proposal before changing station settings. |
 
 ---
 

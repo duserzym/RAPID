@@ -115,6 +115,18 @@ Calibration Center records proposals, approval, expiry/invalidation, and
 rollback. Review/approve calibration before using its coefficients. Help →
 “Where did this VB6 control go?” supplies the searchable transition map.
 
+**Diagnostics → Calibrate Rod** opens the Bartington susceptibility procedure.
+Enter the certified standard identity, height, moment susceptibility in CGS,
+scan spacing, and fit threshold. The lift advances at half the entered spacing.
+Enable the Bartington bridge in Settings for live mode. The procedure uses the
+accepted motor and bridge configuration and asks the signed-in
+operator to confirm the mounted standard and clear opening. The scan saves its
+position and bridge readings, independent center check, and proposed coil position
+and moment factor. Use **Halt** or **Stop Rod Scan** to cancel. If motor settlement
+requires recovery, open DC Motors and use **Recover Verify Stopped**. A No-Comm run
+creates simulated evidence for practice. Registry approval stores a provenance
+record. Review the proposal and apply any accepted station settings separately.
+
 ## Rebuild and test
 
 Use an environment with the declared RapidPy dependencies, setuptools, wheel,
@@ -148,6 +160,9 @@ that must not be mistaken for physical acceptance alone:
   adapter binding and loopback/position evidence.
 - Thermal treatment remains manual/external; automated furnace operation needs
   an identified controller, protocol, readback, and interlocks.
+- Other calibration rod workflows still need parity work, including automatic
+  rod loading, SQUID scans, and U-channel calibration. The mounted Bartington rod
+  scan still needs bench acceptance with the station's certified standard.
 
 These integrations remain open. Vendor driver installation, fresh-Windows
 deployment, mixed-DPI display review, physical fault/recovery tests, scientific

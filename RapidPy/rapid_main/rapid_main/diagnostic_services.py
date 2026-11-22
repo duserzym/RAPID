@@ -1719,7 +1719,7 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
                 'axes': {name: asdict(axis) for name, axis in self._axes.items()},
                 'native_config': asdict(getattr(self._client, 'config', MotorControllerConfig()))}
 
-    def _run_motion(self, action, names, parameters, call, *, asynchronous=False):
+    def _run_motion(self, action, names, parameters, call, *, asynchronous=False, timeout_s=360):
         from rapidpy_common.motor_diagnostic_safety import motor_axes_diagnostic_operation
         self._require_connected()
         if any(name not in self._axes for name in names):
@@ -1733,7 +1733,7 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
                 raise HardwareError('DC motor command cancelled before initialization.')
             self._operation_active = True
             self._background_thread = None
-        deadline = time.monotonic() + 360.
+        deadline = time.monotonic() + timeout_s
         self._client._motion_cancel_check = lambda: self._stop_event.is_set() or time.monotonic() >= deadline or (self._cancel_check is not None and self._cancel_check())
         manager = motor_axes_diagnostic_operation(self._client, axes,
             {'action': action, 'axes': list(names), 'parameters': parameters}, self._safety_profile(), store=self._safety_store)
@@ -2192,6 +2192,109 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
                 raise HardwareError('The configured specimen height places drop-off outside the lift envelope.')
         return self._run_sample_lift('sample_dropoff', {'use_xy_table': use_xy},
             lambda: self._client.sample_dropoff(self._axes['Up/Down'], use_xy_table=use_xy))
+
+    def run_rod_scan(self, plan, readings, evidence, *, bridge, port, operator, cancelled):
+        """Borrow the accepted motor station for one operator-mounted rod scan."""
+        from .queue_instruments import QueueInstrumentLifetime
+        from .rod_calibration import RodFit, RodFitError, RodReading, plan_rod_scan, scan_rod
+        if (self._station_baud is None or self._client.config.meas_pos != plan.travel_limit
+                or not isinstance(bridge, SusceptibilityBackendAdapter) or bridge.simulated is not False
+                or self._client._connections or bridge.is_connected()):
+            raise HardwareError('Restore the original idle native motor station and susceptibility bridge.')
+        if not operator.strip() or plan != plan_rod_scan(plan.request, coil=bridge._cfg.coil_position,
+                travel_limit=self._client.config.meas_pos, counts_per_cm=plan.counts_per_cm,
+                moment_factor_cgs=bridge._cfg.moment_factor_cgs):
+            raise HardwareError('The mounted standard confirmation or accepted rod scan plan is missing.')
+        port_key = QueueInstrumentLifetime.port_key
+        if port_key(bridge._cfg.port) in {port_key(axis.port) for axis in self._axes.values()}:
+            raise HardwareError('The bridge and motors need distinct native serial connections.')
+        if cancelled():
+            raise InterruptedError('The rod scan was canceled before connecting.')
+
+        axes = tuple(self._axes)
+        lift = self._axes['Up/Down']
+        upper, lower = max(plan.positions), min(plan.positions)
+        evidence['bridge'] = asdict(bridge._cfg)
+        evidence['mount_confirmed_by'] = operator
+        errors = []
+        fit = None
+        bridge_attempted = False
+
+        def run(observations):
+            nonlocal bridge_attempted
+            initial = self._observe_stopped(axes, observations, 'before_rod_scan')
+            self._require_lift_clearance(initial)
+            self._client._check_motion_cancel()
+            bridge_attempted = True
+            bridge.test_connection()
+
+            def home():
+                self._require_move_success('home the calibration rod lift', self._client.home_to_top(lift))
+                positions = self._observe_stopped(('Up/Down',), observations, 'rod_at_top')
+                self._require_lift_clearance(positions)
+
+            def sample(target):
+                if not lower <= target <= upper:
+                    raise HardwareError('Rod scan target is outside its planned travel.')
+                home()
+                self._client._check_motion_cancel()
+                zero = bridge.zero()
+                move = self._client.updown_move(lift, target, 1)
+                self._require_move_success('position the calibration rod', move)
+                stopped = self._observe_stopped(('Up/Down',), observations, 'rod_at_target')['Up/Down']
+                if (abs(stopped - target) > plan.readback_tolerance
+                        or self._client.check_internal_status(lift, 4) != 0):
+                    raise HardwareError('The rod lift did not verify the planned scan point.')
+                self._client._check_motion_cancel()
+                return RodReading(target, stopped, bridge.measure(), zero)
+
+            try:
+                try:
+                    proposal = scan_rod(plan, sample, readings, cancelled=cancelled)
+                except RodFitError:
+                    home()
+                    raise
+                home()
+                final = self._observe_stopped(axes, observations, 'after_rod_scan')
+                self._require_lift_clearance(final)
+                if any(final[name] != initial[name] for name in axes if name != 'Up/Down'):
+                    raise HardwareError('A stationary axis changed position during the rod scan.')
+                evidence['final_stopped_positions'] = final
+                return asdict(proposal)
+            finally:
+                observations.append(dict(phase='rod_readings', samples=[asdict(reading) for reading in readings]))
+
+        previous_cancel = self._cancel_check
+        try:
+            self.set_cancel_check(cancelled)
+            self.connect(port, self._station_baud)
+            evidence['motor_profile'] = self._safety_profile()
+            parameters = dict(plan=asdict(plan), mount_confirmed_by=operator, bridge=evidence['bridge'])
+            fit = RodFit(**self._run_motion('susceptibility_rod_scan', axes, parameters, run,
+                                            timeout_s=360 + 30 * len(plan.positions)))
+        except Exception as exc:
+            errors.append(str(exc) or type(exc).__name__)
+        finally:
+            self.set_cancel_check(previous_cancel)
+            if bridge_attempted:
+                try:
+                    bridge.disconnect()
+                    evidence['bridge_closed'] = True
+                except Exception as exc:
+                    errors.append(f'Bridge close failed. {exc}')
+            try:
+                pending = self._safety_store.pending()
+                if pending is not None:
+                    evidence['pending_motion_record'] = pending['token']
+                    errors.append('Use Recover Verify Stopped in DC Motors before further motion.')
+                elif self.is_connected():
+                    self.disconnect()
+                    evidence['motor_closed'] = True
+            except Exception as exc:
+                errors.append(f'Motor settlement failed. {exc}')
+        if errors:
+            raise HardwareError(' '.join(errors))
+        return fit
 
     def read_telemetry(self, axis: str) -> MotorTelemetry:
         axis_cfg = self._axes.get(axis)
