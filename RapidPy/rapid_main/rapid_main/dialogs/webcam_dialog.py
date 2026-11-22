@@ -104,11 +104,8 @@ class WebcamDialog(QtWidgets.QDialog):
             layout.addWidget(self._webcam)
         else:
             msg = QtWidgets.QLabel(
-                "webcam_viewer module not found.\n\n"
-                "Ensure the webcam_viewer package is in your Python path:\n"
-                "  RapidPy/webcam_viewer/\n\n"
-                "Also install OpenCV:\n"
-                "  pip install opencv-python"
+                "Webcam Monitor could not load Qt Multimedia. "
+                "Check that all files from the RAPID bundle are installed."
             )
             msg.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             msg.setObjectName("guidanceText")

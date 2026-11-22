@@ -149,6 +149,7 @@ grip through the dummy specimen release.
 | H8 | Place each certified standard in an approved tray slot. Select the slot in Calibration Center and repeat H6 or S11 using automatic loading on the station's configured changer. | Attach the rod artifact and native queue evidence. Verify measured height, grip, the calibrated empty scan slot, support before release, return to the original slot, and verified transport shutdown. With a controlled interruption, verify retention of the original grip and queue recovery state. |
 | H9 | Mount the reference transverse probe and place it at the accepted AF height. Verify the turning reference, fixture clearance for the entire interval, and degausser cooling for repeated ramps. Start with an accepted low transverse field and a 908A range appropriate for the reference. Run Diagnostics → Transverse Probe Scan. | Attach the scan and apply records. Compare the signed peaks and best angle with the lab's reference scan and angle tolerance. Confirm the probe stays at the final scan point until Move to Best Angle, with no lift or changer travel. Pause and verify AF outputs off and both axes stopped, then resume. Stop a controlled run and verify that the checkpoint preserves the completed readings. Exercise Verify Safe State after a controlled fault, with the original wiring. |
 | H10 | Use a reference specimen and the approved external furnace procedure. Measure two planned thermal steps in order in Live Measure, after each furnace step and verified cooldown. | Attach furnace logs, operator attestations, and accepted acquisition records. Reconcile specimen identity, recorded peak and dwell, handling temperature, and chronology. Compare the RMG and MagIC values with the logs and verify prior rows survive the second measurement and a controlled failed attempt. |
+| H11 | Open **View → Webcam Monitor**. Connect the station USB camera and, where configured, the station's RTSP or HTTP(S) camera. | Verify the selected device shows the actual stage with the expected orientation. Save a PNG and compare its frame and resolution with the preview and camera. Exercise disconnect, reconnect, and loss of video while the main workspace remains responsive. |
 
 ---
 
@@ -240,6 +241,7 @@ as a replacement rather than transition/testing software.
 | Rod and long-scan acquisition | H6–H8 and S11 |
 | Transverse probe alignment | H9 |
 | Externally treated specimen measurement | H10 |
+| XY stage camera monitoring | H11 |
 | Output parity | H4, H5 |
 | Restart behavior | Section 9 |
 | VRM acquisition | Section 10 |

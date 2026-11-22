@@ -2890,3 +2890,8 @@ whole-bundle SHA-256 inventory and a standalone verifier. The verifier runs
 offline with an isolated profile and verifies the package before and after
 launch. The manual GitHub Actions workflow transfers the bundle to a
 separate Windows job for qualification and retains the report.
+
+**Portable stage webcam checkpoint (2026-11-22).** Webcam Monitor uses bundled
+Qt Multimedia for USB devices and supported network streams. Offline startup
+verification decodes a generated clip through the monitor and checks the PNG
+snapshot. H11 covers station camera, orientation, and disconnect acceptance.

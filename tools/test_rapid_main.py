@@ -8,7 +8,7 @@ import unittest
 from traceback_watchdog import StackWatchdog
 
 ROOT = Path(__file__).resolve().parents[1]
-for module in ("rapid_main", "updown_control", "vrm_logger", "af_tuner", "af_clip_test", "adwin_comms"):
+for module in ("rapid_main", "updown_control", "vrm_logger", "af_tuner", "af_clip_test", "adwin_comms", "webcam_viewer"):
     sys.path.insert(0, str(ROOT / "RapidPy" / module))
 sys.path.insert(0, str(ROOT / "RapidPy"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

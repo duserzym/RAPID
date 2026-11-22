@@ -5,6 +5,7 @@ from importlib import import_module
 import json
 import os
 from pathlib import Path
+import struct
 import tempfile
 
 
@@ -41,6 +42,62 @@ def _check_transverse_probe(window, app):
     finally:
         dialog.stop()
         wait_until(lambda: not dialog.active)
+        dialog.close()
+        app.processEvents()
+
+
+def _write_webcam_fixture(path):
+    """Build a short AVI clip with a known RGB color and no codec dependencies."""
+    def chunk(tag, data):
+        return tag + struct.pack("<I", len(data)) + data + (b"\x00" if len(data) % 2 else b"")
+
+    width = height = 16
+    fps, frame_count = 4, 12
+    pixels = bytes((38, 100, 220)) * (width * height)
+    frame_size = len(pixels)
+    main = struct.pack("<14I", 1_000_000 // fps, frame_size * fps, 0, 0, frame_count,
+                       0, 1, frame_size, width, height, 0, 0, 0, 0)
+    stream = struct.pack("<4s4sIHHIIIIIIIIhhhh", b"vids", b"DIB ", 0, 0, 0,
+                         0, 1, fps, 0, frame_count, frame_size, 0xFFFFFFFF, 0, 0, 0, width, height)
+    bitmap = struct.pack("<IiiHHIIiiII", 40, width, height, 1, 24, 0, frame_size, 0, 0, 0, 0)
+    headers = chunk(b"LIST", b"hdrl" + chunk(b"avih", main)
+                    + chunk(b"LIST", b"strl" + chunk(b"strh", stream) + chunk(b"strf", bitmap)))
+    frames = chunk(b"LIST", b"movi" + chunk(b"00db", pixels) * frame_count)
+    path.write_bytes(chunk(b"RIFF", b"AVI " + headers + frames))
+
+
+def _check_webcam_decode(window, app, root):
+    from PySide6 import QtCore, QtGui
+
+    clip = root / "offline-camera.avi"
+    _write_webcam_fixture(clip)
+    window._launch_webcam()
+    dialog = window._webcam_dlg
+    widget = getattr(dialog, "_webcam", None)
+    if widget is None:
+        return False
+    widget._snapshot_dir = root / "offline-camera-snapshots"
+    try:
+        widget._open_stream(QtCore.QUrl.fromLocalFile(str(clip)))
+        timer = QtCore.QElapsedTimer()
+        timer.start()
+        while widget._sink is not None and not widget._connected and timer.elapsed() < 5000:
+            app.processEvents()
+            QtCore.QThread.msleep(10)
+        if not widget._connected:
+            return False
+        widget._snapshot_btn.click()
+        snapshots = list(widget._snapshot_dir.glob("*.png"))
+        if len(snapshots) != 1:
+            return False
+        snapshot = QtGui.QImage(str(snapshots[0]))
+        if snapshot.size() != QtCore.QSize(16, 16):
+            return False
+        color = snapshot.pixelColor(8, 8)
+        return all(abs(actual - expected) <= 8 for actual, expected in
+                   zip((color.red(), color.green(), color.blue()), (220, 100, 38), strict=True))
+    finally:
+        widget.disconnect_camera()
         dialog.close()
         app.processEvents()
 
@@ -82,10 +139,12 @@ def run_smoke_test() -> int:
             for name in HELPER_MODULES:
                 helpers[name] = callable(import_module(f"{name}.app").main)
             transverse_probe = _check_transverse_probe(window, app)
+            webcam_decode = _check_webcam_decode(window, app, root)
             report = {
                 "schema": "rapidpy.release_smoke.v1", "simulated": True,
-                "ok": window.config.general.nocomm and all(helpers.values()) and transverse_probe,
+                "ok": window.config.general.nocomm and all(helpers.values()) and transverse_probe and webcam_decode,
                 "transverse_probe": transverse_probe,
+                "webcam_decode": webcam_decode,
                 "panels": window._stack.count(), "helpers": helpers,
                 "width": window.width(), "height": window.height(),
             }

@@ -33,12 +33,19 @@ The individual diagnostic entry points are also available.
 
 The smoke test uses temporary configuration and INI preferences, forces
 No-Communication, constructs all six main panels, imports all six helper entry
-points, prints JSON, and exits. It never uses operator configuration or connects
-to instruments. Startup diagnostics are read-only. Configuration normally
+points, decodes a generated video clip in Webcam Monitor, and prints JSON.
+It uses an isolated configuration and leaves instrument connections untouched.
+Startup diagnostics are read-only. Configuration normally
 lives in `~/.rapid/config.json`; `RAPID_CONFIG` selects a different file.
 Windows preferences and queue recovery state belong to the operator account.
 Main-window helper launches use separate bundled processes; VRM retains its
 ownership leases and handoff environment.
+
+**View → Webcam Monitor** lists USB cameras by their operating-system device
+identity and opens supported RTSP or HTTP(S) streams through Qt Multimedia.
+The preview and snapshot button become active on receipt of a usable frame.
+**Snapshot** saves a full-resolution PNG to the selected folder. Use
+**Disconnect** to release the camera when you finish monitoring.
 
 ## Operator workflow
 
