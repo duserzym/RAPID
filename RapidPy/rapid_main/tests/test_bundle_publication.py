@@ -18,6 +18,7 @@ from rapid_main.hardware_contracts import NoCommBackend
 from rapid_main.io import bundle_history, bundle_publication, measurement_bundle
 from rapid_main.io.measurement_bundle import MeasurementBundleWriter, recover_measurement_output
 from rapid_main.measurement_worker import MeasurementWorker
+from rapid_main.quicklook import write_measurement_quicklook
 from rapidpy_common.hardware_safety import HardwareSafetyError
 from tests.test_queue_and_bundle import _step
 
@@ -223,6 +224,31 @@ with patch.object(bundle_publication, '_replace_snapshot', crash):
         self.assertFalse(delayed._progress._path('accepted.json').exists())
         self.assertIn('.rapidpy-attempts', delayed._publish_dir.parts)
         self.assertTrue((delayed._publish_dir / 'artifact_index.json').is_file())
+
+    def test_quicklook_is_written_under_the_publication_lease_and_included_in_final_index(self):
+        specimen = SpecimenMeta('A')
+        output = self.root / 'SIMULATED'
+        worker = MeasurementWorker(specimen, ['NRM'], self.root, NoCommBackend(), run_id='original')
+        writes = []
+
+        def publish_quicklook(path, steps, *, simulated):
+            with self.assertRaises(HardwareSafetyError):
+                MeasurementBundleWriter(self.root, specimen, simulated=True)
+            provisional_index = json.loads((output / 'artifact_index.json').read_bytes())
+            self.assertTrue(provisional_index['diagnostics_pending'])
+            writes.append(path)
+            return write_measurement_quicklook(path, steps, simulated=simulated)
+
+        with patch('rapid_main.measurement_worker.write_measurement_quicklook', side_effect=publish_quicklook):
+            worker.run()
+
+        self.assertFalse(worker.quicklook_error)
+        self.assertEqual(writes, [output / 'quicklook.json'])
+        final_index = json.loads((output / 'artifact_index.json').read_bytes())
+        self.assertNotIn('diagnostics_pending', final_index)
+        entry, = [item for item in final_index['artifacts'] if item['name'] == 'quicklook_summary']
+        self.assertTrue(entry['exists'])
+        self.assertEqual(entry['sha256'], hashlib.sha256(writes[0].read_bytes()).hexdigest())
 
     def test_scientific_index_is_current_even_if_final_diagnostics_are_interrupted(self):
         class Interrupted(BaseException):

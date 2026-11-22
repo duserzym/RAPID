@@ -842,24 +842,30 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
         allowed = {phase.value for phase in WorkflowPhase}
         self.assertTrue(set(phases).issubset(allowed))
 
-    def test_quicklook_write_failure_preserves_successful_measurement(self) -> None:
+    def test_quicklook_write_failure_preserves_remeasurement_without_indexing_old_plot(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             output = Path(td) / "QUICKLOOK"
-            worker = MeasurementWorker(_meta("QUICKLOOK"), ["NRM"], output,
-                                       backend=DeterministicBackend([("NRM", 1.0, 2.0, 3.0)]))
+            original = MeasurementWorker(_meta("QUICKLOOK"), ["NRM"], output)
+            original.run()
+            previous_quicklook = output / "SIMULATED" / "quicklook.json"
+            self.assertEqual(json.loads(previous_quicklook.read_bytes())["labels"], ["NRM"])
+            worker = MeasurementWorker(_meta("QUICKLOOK"), ["AF20"], output, run_id="repeat")
             finished: list[bool] = []
             worker.run_finished.connect(finished.append)
-            with patch("rapid_main.measurement_worker.publish_measurement_quicklook",
+            with patch("rapid_main.measurement_worker.write_measurement_quicklook",
                        side_effect=OSError("quicklook destination denied")):
                 worker.run()
 
             self.assertEqual(finished, [False])
             self.assertEqual(worker.quicklook_error, "quicklook destination denied")
-            self.assertTrue((output / "measurements.txt").is_file())
-            index = json.loads((output / "artifact_index.json").read_text(encoding="utf-8"))
+            provenance = json.loads(previous_quicklook.with_name("provenance.json").read_bytes())
+            self.assertEqual(provenance["labels"], ["AF20"])
+            index = json.loads(previous_quicklook.with_name("artifact_index.json").read_bytes())
+            self.assertEqual(index["run_id"], "repeat")
             entry, = [item for item in index["artifacts"] if item["name"] == "quicklook_summary"]
             self.assertFalse(entry["exists"])
             self.assertFalse(entry["required"])
+            self.assertEqual(entry["sha256"], "")
 
     def test_requested_susceptibility_failure_aborts_without_publishing_run(self) -> None:
         class _FailingSusceptibilityBackend(DeterministicBackend):

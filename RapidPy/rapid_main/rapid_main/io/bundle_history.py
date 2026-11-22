@@ -58,10 +58,11 @@ def _indexed_evidence(directory):
             yield contained_path(directory, name, output=True)
 
 
-def archive_previous_bundle(directory, specimen, scientific_paths, mutable_paths, staging):
+def archive_previous_bundle(directory, specimen, scientific_paths, mutable_names, staging):
     """Archive the source bytes under the writer's publication lease."""
     if not any(path.is_file() for path in scientific_paths):
         return None, {path.relative_to(directory).as_posix(): None for path in scientific_paths}
+    mutable_paths = tuple(contained_path(directory, name, output=True) for name in mutable_names)
     candidates = set((*scientific_paths, *mutable_paths, *_indexed_evidence(directory)))
     previous = {path.relative_to(directory).as_posix(): _digest(path) for path in sorted(candidates)}
     files = {name: digest for name, digest in previous.items() if digest is not None}

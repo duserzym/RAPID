@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
@@ -134,9 +133,10 @@ def _atomic_write_text(target: Path, text: str) -> Path:
     return target
 
 
-def publish_measurement_quicklook(
-    output_dir: Path, steps: Sequence[MeasurementStep], *, simulated: bool
+def write_measurement_quicklook(
+    path: Path, steps: Sequence[MeasurementStep], *, simulated: bool
 ) -> Path:
+    """Write the current run's plot data with its measurement provenance."""
     summary = build_quicklook_summary(
         [step.sdx for step in steps],
         [step.sdy for step in steps],
@@ -152,34 +152,4 @@ def publish_measurement_quicklook(
             else "Measurement quicklook data."
         ),
     }
-    written = write_quicklook_json(output_dir / "quicklook.json", summary)
-    _refresh_quicklook_artifact_index(written)
-    return written
-
-
-def _refresh_quicklook_artifact_index(quicklook_path: Path) -> None:
-    """Record the published quicklook size and digest in its bundle index."""
-
-    index_path = quicklook_path.parent / "artifact_index.json"
-    if not index_path.exists():
-        return
-    payload = json.loads(index_path.read_text(encoding="utf-8"))
-    artifacts = payload.get("artifacts")
-    if not isinstance(artifacts, list):
-        raise ValueError("Artifact index does not contain an artifacts list.")
-    matching = [
-        entry
-        for entry in artifacts
-        if isinstance(entry, dict) and entry.get("name") == "quicklook_summary"
-    ]
-    if len(matching) != 1:
-        raise ValueError(
-            "Artifact index must contain exactly one quicklook_summary entry."
-        )
-    entry = matching[0]
-    entry["relative_path"] = quicklook_path.name
-    entry["exists"] = True
-    entry["size_bytes"] = quicklook_path.stat().st_size
-    with quicklook_path.open("rb") as stream:
-        entry["sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
-    write_quicklook_json(index_path, payload)
+    return write_quicklook_json(path, summary)

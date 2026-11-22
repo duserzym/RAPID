@@ -1185,7 +1185,7 @@ class MeasurementPanel(QtWidgets.QWidget):
         msg = ('Run saved. Use Continue Saved Run to start the next step.' if saved_checkpoint
                else 'Run halted.' if aborted else 'Sequence complete!')
         if sidecar_error:
-            msg = f"{msg} Quicklook sidecar not written: {sidecar_error}"
+            msg = f"{msg} Quicklook could not be published: {sidecar_error}"
         if hasattr(mw, "set_status"):
             mw.set_status(msg)
         self.sample_run_finished.emit(aborted, sample_name)

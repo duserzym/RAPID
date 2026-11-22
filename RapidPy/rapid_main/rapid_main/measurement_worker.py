@@ -63,7 +63,7 @@ from rapid_main.manual_run_recovery import (clear_manual_run, has_interrupted_ru
 from rapid_main.measurement_progress import MeasurementProgress
 from rapid_main.queue_pair import QueueSide
 from rapid_main.io.rmg_writer import RmgTreatment, describe_rmg_treatment
-from rapid_main.quicklook import publish_measurement_quicklook
+from rapid_main.quicklook import write_measurement_quicklook
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend, config_fingerprint
 from rapid_main.io.bundle_publication import _digest
 from rapid_main.io.specimen_reader import read_specimen
@@ -251,6 +251,7 @@ class MeasurementWorker(QtCore.QThread):
         self._skipped_labels: list[str] = []
         self._completed_labels: list[str] = []
         self._quicklook_steps: list[MeasurementStep] = []
+        self._quicklook_written = False
         self.quicklook_error = ""
         self._error_messages: list[str] = []
         self._recovery_count = 0
@@ -333,16 +334,7 @@ class MeasurementWorker(QtCore.QThread):
         except Exception as exc:
             self._record_worker_failure(exc)
         finally:
-            aborted = self._pending_run_result is not False or bool(self._error_messages)
-            # Finish the optional diagnostic before the UI can advance the queue or back up this bundle.
-            if not aborted and self._quicklook_steps:
-                try:
-                    publish_measurement_quicklook(
-                        self._publish_dir, self._quicklook_steps, simulated=self._simulated,
-                    )
-                except Exception as exc:
-                    self.quicklook_error = str(exc) or type(exc).__name__
-            self.run_finished.emit(aborted)
+            self.run_finished.emit(self._pending_run_result is not False or bool(self._error_messages))
 
     def _record_worker_failure(self, exc):
         phase = WorkflowPhase.PREFLIGHT if self._pending_run_result is None else WorkflowPhase.RETURNING
@@ -1502,6 +1494,15 @@ class MeasurementWorker(QtCore.QThread):
         self._write_communication_transcript()
         self._write_rockmag_run_artifact(aborted=aborted)
         self._write_thermal_run_artifact(aborted=aborted)
+        # The bundle writer still holds the output lease during accepted-run diagnostics.
+        if not aborted and not self._error_messages and self._quicklook_steps:
+            try:
+                write_measurement_quicklook(
+                    self._artifact_path("quicklook.json"), self._quicklook_steps, simulated=self._simulated,
+                )
+                self._quicklook_written = True
+            except Exception as exc:
+                self.quicklook_error = str(exc) or type(exc).__name__
         self._write_artifact_index(aborted=aborted)
         self._pending_run_result = aborted
 
@@ -1588,6 +1589,8 @@ class MeasurementWorker(QtCore.QThread):
             self._publish_dir.mkdir(parents=True, exist_ok=True)
             _write_json_atomic(self._artifact_path('artifact_index.json'), self._artifact_index_payload(aborted=aborted))
         except Exception as exc:
+            if self._quicklook_written and not aborted:
+                self.quicklook_error = f"Artifact index update failed: {exc}"
             if self._comm_logger is not None:
                 self._comm_logger.error(f"artifact index write failed: {exc}")
 
@@ -1603,13 +1606,13 @@ class MeasurementWorker(QtCore.QThread):
             required: bool,
             producer: str,
             description: str,
+            include: bool = True,
         ) -> dict[str, object]:
             source = sources.get(path, path)
             if diagnostics_pending and path.name in {'workflow_summary.json', 'communication.tsv',
                     'quicklook.json', 'rockmag_run.json', 'thermal_run.json'}:
-                return dict(name=name, relative_path=self._relative_artifact_path(path), required=False,
-                            exists=False, size_bytes=0, sha256='', producer=producer, description=description)
-            exists = source.exists()
+                required = include = False
+            exists = include and source.exists()
             size = source.stat().st_size if exists else 0
             digest = ""
             if exists:
@@ -1723,6 +1726,7 @@ class MeasurementWorker(QtCore.QThread):
                     required=False,
                     producer="MeasurementWorker",
                     description="Quicklook plot data from the successfully completed measurement.",
+                    include=self._quicklook_written and not aborted,
                 ),
             ],
             "hardware_validation_required": True,

@@ -228,10 +228,9 @@ class MeasurementBundleWriter:
         try:
             destinations = validate_measurement_output(self.publish_dir, self.meta.name)
             staged = _paths_for(self.staging_dir, self.meta.name)
-            mutable = tuple(contained_path(self.publish_dir, name, output=True)
-                            for name in (*_SIDECARS, *_RUN_DIAGNOSTICS))
             previous, previous_files = archive_previous_bundle(
-                self.publish_dir, self.meta.name, astuple(destinations), mutable, self.staging_dir,
+                self.publish_dir, self.meta.name, astuple(destinations), (*_SIDECARS, *_RUN_DIAGNOSTICS),
+                self.staging_dir,
             )
             if previous is not None:
                 self._provenance["previous_publication"] = previous
