@@ -316,12 +316,15 @@ class MeasurementWorker(QtCore.QThread):
             original_up = side.check_admission(self._pair_directory, simulated=self._simulated)
             if original_up is not None:
                 up_blocks, up_susceptibility, up_source, self._up_reference = original_up
-                for field in ('specimen_source', 'specimen_metadata', 'calibration_records'):
-                    if canonical(source[field]) != canonical(up_source[field]):
-                        raise ValueError('Specimen source or calibration changed after the Up pass.')
+                if up_source is not None:
+                    for field in ('specimen_source', 'specimen_metadata', 'calibration_records'):
+                        if canonical(source[field]) != canonical(up_source[field]):
+                            raise ValueError('Specimen source or calibration changed after the Up pass.')
             source['queue_side'] = side.context
             source['up_acquisition'] = self._up_reference
             side.begin(self._pair_directory)
+            if side.legacy_up is not None:
+                side.archive_legacy_up(self._pair_directory)
         self._progress = MeasurementProgress(self._publish_dir, run_id=self._progress_run_id,
             specimen=self._meta.name, labels=self._labels, source=source, simulated=self._simulated)
         self._progress.begin()
@@ -530,7 +533,8 @@ class MeasurementWorker(QtCore.QThread):
                     susceptibility=(dict(value=susc, evidence=susceptibility_evidence)
                                     if label.strip().upper() == 'SUSC' else None))
                 if up_blocks:
-                    self._last_collection_stats = paired_block_statistics(up_blocks, self._cycle_blocks)
+                    self._last_collection_stats = paired_block_statistics(up_blocks, self._cycle_blocks,
+                        legacy_up=side.legacy_up is not None)
                     sdx, sdy, sdz = self._last_collection_stats.moment_emu
                     cycle_stats = reading_cycle_statistics([
                         *(reduce_bracketed_measurement(block).moment_emu for block in up_blocks),
@@ -601,6 +605,8 @@ class MeasurementWorker(QtCore.QThread):
                     _, _, _, current_up = side.load_up(self._pair_directory, simulated=self._simulated)
                     if current_up != self._up_reference:
                         raise ValueError('The original Up acquisition changed during the Down pass.')
+                    if side.legacy_up is not None:
+                        side.verify_legacy_archive(self._pair_directory)
                 write_susceptibility_summary_json(
                     self._artifact_path("susceptibility.json"),
                     susceptibility_records,
@@ -823,7 +829,11 @@ class MeasurementWorker(QtCore.QThread):
             transport_recoveries_before = len(self._transport_recovery_evidence())
             read_squid = self._backend.read_squid
             if self._queue_side is not None and isinstance(self._backend, NoCommBackend):
-                read_squid = lambda: self._backend.read_paired_squid(is_up=self._queue_side.is_up)
+                legacy_up = self._queue_side.legacy_up
+                if legacy_up is None:
+                    read_squid = lambda: self._backend.read_paired_squid(is_up=self._queue_side.is_up)
+                else:
+                    read_squid = lambda: self._backend.read_paired_squid(is_up=False, range_factor=legacy_up.range_factor)
             squid_reading = self._call_with_timeout(
                 read_squid,
                 timeout=self._get_backend_timeout("read_timeout"),
@@ -1474,6 +1484,10 @@ class MeasurementWorker(QtCore.QThread):
                     payload['artifacts'].append(entry('acquisition_progress:' + path.name, path,
                         required=True, producer='MeasurementProgress',
                         description='Original step intent, lossless raw acquisition or acceptance seal.'))
+        if self._queue_side is not None and self._queue_side.legacy_up is not None and self._up_reference:
+            payload['artifacts'].append(entry('legacy_up_source', self._queue_side.legacy_archive(self._pair_directory),
+                required=not aborted, producer='VB6 Sample.WriteUpMeasurements',
+                description='Byte-for-byte capture of the original Up import.'))
         for treatment_id, path in self._af_artifacts:
             payload["artifacts"].append(entry(
                 f"af_treatment:{treatment_id}", path, required=True,

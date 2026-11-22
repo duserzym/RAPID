@@ -222,6 +222,50 @@ class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestC
         self.assertEqual((self.store.read(), len(self.commands), len(self.vacuum_serial.writes)), before)
         self.assertTrue(all(self.window._ownership.owner_of(item) is None for item in RESOURCES))
 
+    def test_native_legacy_down_persists_original_receipt_and_checks_it_before_load(self):
+        from tests.test_legacy_up import FIXTURE
+
+        path = self.store.path.parent / 'NRM.UP'
+        path.write_text(FIXTURE.replace('A|', 'S1|'), encoding='ascii')
+        self.window.config.general.data_dir = str(self.store.path.parent / 'output')
+        sample = QueueSample('S1', 'F1', 1, do_up=False, do_both=True)
+        before = len(self.commands), list(self.vacuum_serial.writes), self.store.read()
+        prompts = []
+        choose = lambda *args: (str(path), '')
+        with (patch.object(QtWidgets.QFileDialog, 'getOpenFileName', choose),
+              patch.object(QtWidgets.QInputDialog, 'getText', lambda *args, **kwargs: ('0.25', True)),
+              patch.object(QtWidgets.QMessageBox, 'critical', lambda *args: None),
+              patch.object(QtWidgets.QMessageBox, 'question', lambda *args: prompts.append(True))):
+            self.assertFalse(self.window.start_queue_run([sample], QueueOptions()))
+        self.assertEqual(prompts, [])
+        self.assertIn('historical range factor', self.window._sb_status.text())
+        self.assertEqual((len(self.commands), self.vacuum_serial.writes, self.store.read()), before)
+
+        with (self.arm_xy_edges(), patch.object(QtWidgets.QFileDialog, 'getOpenFileName', choose),
+              patch.object(QtWidgets.QInputDialog, 'getText', lambda *args, **kwargs: (kwargs['text'], True)),
+              patch.object(QtWidgets.QMessageBox, 'question', lambda *args: QtWidgets.QMessageBox.StandardButton.Yes)):
+            self.assertTrue(self.window.start_queue_run([sample], QueueOptions()), self.window._sb_status.text())
+            self.wait_for(lambda: bool(self.started), timeout=30)
+        state = self.store.read()
+        side = self.window.queue_measurement_side('S1')
+        self.assertFalse(side.is_up)
+        self.assertEqual(side.pair.queue_run_id, state['run_id'])
+        self.assertEqual(state['plan']['commands']['legacy_up_sources']['F1']['sha256'], side.legacy_up.sha256)
+        self.assertEqual(self.started[0][4], False)
+
+        command = self.window._queue_current_command
+        with patch.object(command, 'legacy_up_required', False):
+            with self.assertRaisesRegex(ValueError, 'original queue plan'):
+                self.window._queue_measurement_side(command)
+        path.write_bytes(b'changed')
+        self.window._queue_loaded_command = None
+        refusals = []
+        before = len(self.commands), list(self.vacuum_serial.writes), self.store.read()
+        with patch.object(self.window, '_finalize_queue_run', lambda *args, **kwargs: refusals.append(kwargs['reason'])):
+            self.window._run_measure_command()
+        self.assertIn('selected legacy Up file changed', refusals[0])
+        self.assertEqual((len(self.commands), self.vacuum_serial.writes, self.store.read()), before)
+
     def test_file_sequence_handoff_requires_original_journaled_command(self):
         self.assertTrue(self.start(), self.window._sb_status.text())
         self.window._sequence_labels = ['IRM100']

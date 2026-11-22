@@ -30,7 +30,7 @@ from .io.sample_index import read_sample_index_registrations
 from .specimen_metadata import capture_specimen_metadata, restore_specimen_metadata, validate_specimen_provenance
 from .specimen_paths import contained_path, specimen_run_directory
 from .io.measurement_bundle import SIMULATED_SUBDIR, validate_measurement_output
-from .queue_pair import QueuePair
+from .queue_pair import LegacyUpSource, QueuePair
 from .hardware_contracts import (
     MeasurementAutomationBackend,
     QueueHardwareBackend,
@@ -1153,6 +1153,7 @@ class MainWindow(QtWidgets.QMainWindow):
             samples = resolve_queue_samples(samples, self._sequence_labels)
             self._queue_plan = compile_queue(samples, options, strict=True)
             self._queue_source_indexes = {}
+            self._queue_legacy_up_sources = {}
             for sample in samples:
                 index = Path(sample.source_file).resolve() if sample.source_file else None
                 output = self.config.general.data_dir or (Path.home() / 'RAPID_data')
@@ -1203,6 +1204,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if self._uses_native_queue():
             return self._start_native_queue(samples, options)
+
+        try:
+            if not self._prepare_legacy_up_sources():
+                return False
+        except (OSError, ValueError) as exc:
+            self.set_status(f'Legacy Up queue setup failed: {exc}')
+            QtWidgets.QMessageBox.critical(self, 'Legacy Up Queue Setup', str(exc))
+            return False
 
         vacuum_fault = self._queue_vacuum_fault_reason()
         if vacuum_fault:
@@ -1259,6 +1268,60 @@ class MainWindow(QtWidgets.QMainWindow):
     def _uses_native_queue(self):
         return self.config.general.nocomm is False and isinstance(self._measurement_backend, QueueHardwareBackend)
 
+    def _prepare_legacy_up_sources(self):
+        groups = {}
+        for command in self._queue_plan:
+            if command.legacy_up_required:
+                groups.setdefault(command.file_id, []).append(command)
+        if not groups:
+            return True
+
+        operator = self.config.general.operator
+        if not isinstance(operator, str) or not operator.strip():
+            raise ValueError('Sign in before confirming legacy Up data.')
+        active_range = self.config.calibration.range_factor
+        sources = {}
+        for file_id, commands in groups.items():
+            label, = commands[0].measurement_labels
+            specimens = tuple(dict.fromkeys(command.sample_name for command in commands))
+            index = self._queue_source_indexes.get(file_id)
+            directory = str(Path(index['source_file']).parent) if index else self.config.general.sample_dir
+            path, _ = QtWidgets.QFileDialog.getOpenFileName(self,
+                f'Select the original {label} Up file for {Path(file_id).name}', str(directory or ''),
+                'VB6 Up Measurements (*.up *.UP)')
+            if not path:
+                self.set_status('Queue setup canceled before acquisition.')
+                return False
+            factor, accepted = QtWidgets.QInputDialog.getText(self, 'Confirm Legacy Up Calibration',
+                f'Enter the historical range factor for {Path(path).name}.\n'
+                f'Confirm that it contains the Up measurements for step {label} and the selected specimens, '
+                'with the same SQUID axis convention and gains as the planned Down pass.',
+                text=format(active_range, '.17g'))
+            if not accepted:
+                self.set_status('Queue setup canceled before acquisition.')
+                return False
+            factor = float(factor.strip())
+            if self._uses_native_queue() and factor != active_range:
+                raise ValueError('The historical range factor must match the accepted native SQUID range factor.')
+
+            susceptibility = {}
+            if label.strip().upper() == 'SUSC':
+                for specimen in specimens:
+                    value, accepted = QtWidgets.QInputDialog.getText(self, 'Original Up Susceptibility',
+                        f'Enter the original standardized susceptibility for {specimen} from the Up pass record.')
+                    if not accepted:
+                        self.set_status('Queue setup canceled before acquisition.')
+                        return False
+                    susceptibility[specimen] = float(value.strip())
+            sources[file_id] = LegacyUpSource.capture(path, file_id=file_id, label=label, specimens=specimens,
+                range_factor=factor, operator=operator, susceptibility=susceptibility)
+        self._queue_legacy_up_sources = sources
+        return True
+
+    def _legacy_up_plan(self):
+        return json.loads(json.dumps({key: asdict(source)
+            for key, source in getattr(self, '_queue_legacy_up_sources', {}).items()}, allow_nan=False))
+
     def _start_native_queue(self, samples, options):
         missing = self._missing_required_queue_methods(self._queue_plan)
         if missing:
@@ -1279,6 +1342,8 @@ class MainWindow(QtWidgets.QMainWindow):
             for sample in samples:
                 station.specimen_slot(sample.hole)
                 station.xy_target(sample.hole)
+            if not self._prepare_legacy_up_sources():
+                return False
             self._queue_lease = self.acquire_devices(
                 ('measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptibility'), 'queue_workflow',
                 allow_reentrant=False)
@@ -1300,7 +1365,7 @@ class MainWindow(QtWidgets.QMainWindow):
             startup = self._measurement_backend.prepare_queue_lifetime(self._vacuum_backend,
                 dict(commands=[asdict(command) for command in self._queue_plan],
                      samples=[asdict(sample) for sample in samples], options=asdict(options), file_directions=directions,
-                     source_indexes=self._queue_source_indexes),
+                     source_indexes=self._queue_source_indexes, legacy_up_sources=self._legacy_up_plan()),
                 run_id='queue-' + uuid.uuid4().hex, operator=self.config.general.operator,
                 empty_rod_confirmed=True)
             self._queue_native_startup, self._queue_native_session = startup, startup.session
@@ -1693,18 +1758,22 @@ class MainWindow(QtWidgets.QMainWindow):
         if not any(item is command for item in self._queue_plan):
             raise ValueError('The original measurement command is required.')
         run_id = getattr(self, '_queue_execution_id', '')
-        side = QueuePair.from_command(run_id, self._queue_plan, command)
+        legacy = getattr(self, '_queue_legacy_up_sources', {}).get(command.file_id)
         session = self._queue_native_session
-        if side is not None and session is not None:
+        if session is not None:
             state = session.store.read()
             session.store.verify_history(state)
             plan = state['plan']['commands']
             if (state['family'] != 'queue' or state['token'] != session.token or state['status'] != 'pending'
                     or plan['commands'] != json.loads(json.dumps([asdict(item) for item in self._queue_plan]))
-                    or plan['source_indexes'] != self._queue_source_indexes):
-                raise ValueError('Paired measurement requires the original queue plan and source indexes.')
-            side = QueuePair.from_command(state['run_id'], self._queue_plan, command)
-        return side
+                    or plan['source_indexes'] != self._queue_source_indexes
+                    or plan.get('legacy_up_sources', {}) != self._legacy_up_plan()):
+                raise ValueError('Measurement requires the original queue plan and source indexes.')
+            if (legacy is not None and (legacy.range_factor != self.config.calibration.range_factor
+                    or legacy.range_factor != state['profile']['stage_profiles']['acquisition']['calibration']['range_factor'])):
+                raise ValueError('The original confirmed legacy and native SQUID range factors are required.')
+            run_id = state['run_id']
+        return QueuePair.from_command(run_id, self._queue_plan, command, legacy_up=legacy)
 
     def queue_measurement_side(self, sample_name):
         self.queue_measurement_labels(sample_name)

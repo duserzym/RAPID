@@ -2591,3 +2591,28 @@ smoke for six panels and six helpers. It is available locally under
 The abort leaves earlier scientific and treatment evidence linked. Stage-specific
 reentry, independent legacy Up import, remaining scientific and VB6 workflow parity,
 fresh-machine deployment, performance, and physical station qualification remain open.
+
+Independent legacy Up checkpoint (2026-11-22). A single-step Down queue with
+Both sides enabled now requires the original VB6 `.UP` before queue startup.
+The operator selects the collection for the file and treatment and confirms
+the historical range factor, specimen identities, and matching SQUID axis
+convention. `.UP` rows already include the VB6 axis gains. RAPID applies the
+confirmed range factor once, keeps a hashed copy of the input, and combines it
+with the Down blocks using the existing raw collection statistics. A legacy
+SUSC run requires the operator to transcribe the original standardized Up
+susceptibility. The imported values retain their source and operator identity.
+The Down pass retains its independent native acquisition audit.
+
+Native admission checks the journaled command and receipt before loading the
+specimen. Changes to the selected file or archived bytes prevent publication.
+VB6 combined audit dumps can be parsed alongside the dedicated Up collection.
+
+The staged source passed 1,421 tests in 717.275 seconds and exited with code 0.
+Coverage includes the desktop Down-only run, native queue admission before
+specimen loading, historical and Down audit linkage, and preservation of an
+accepted result after a changed archive. The Windows portable bundle passed
+packaged startup and six-panel, six-helper offline smoke. The bundle is available
+locally under `.tmp/legacy-up-release/dist/RapidPyMain`.
+
+Stage-specific queue reentry, remaining scientific and VB6 workflow parity,
+fresh-machine deployment, performance, and physical station qualification remain open.

@@ -27,6 +27,7 @@ class QueueCommand:
     measurement_labels: tuple[str, ...] = ()
     row_id: str = ""
     avg_steps: int = 1
+    legacy_up_required: bool = False
 
 
 @dataclass(slots=True)
@@ -189,7 +190,9 @@ def compile_queue(
     ordered = sorted(samples, key=lambda s: s.hole, reverse=not options.ascending)
     measured_count = 0
     for item in ordered:
-        cmds.append(QueueCommand("Meas", item.hole, item.file_id, item.sample_name, item.measurement_labels, item.row_id, item.avg_steps))
+        legacy_up_required = item.do_both and not item.do_up and item.measurement_step_count <= 1
+        cmds.append(QueueCommand("Meas", item.hole, item.file_id, item.sample_name, item.measurement_labels,
+                                 item.row_id, item.avg_steps, legacy_up_required=legacy_up_required))
         measured_count += 1
         if (
             options.repeat_holder

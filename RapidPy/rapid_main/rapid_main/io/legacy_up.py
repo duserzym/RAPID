@@ -122,26 +122,34 @@ def parse_up_file(text: str) -> tuple[LegacyUpRun, ...]:
             raise ValueError("truncated .UP run")
         blocks = []
         for number in range(1, count + 1):
+            _, _, fields_after_sample = lines[cursor].partition('|')
+            block_direction, _, _ = fields_after_sample.partition('|')
+            if block_direction not in ('U', 'D'):
+                raise ValueError("invalid .UP block direction")
             vectors, timestamps = [], []
             for role, position in ROW_ORDER:
                 fields = lines[cursor].split('|')
                 cursor += 1
-                expected = [sample, direction, count_text, role, str(number), str(position)]
+                expected = [sample, block_direction, count_text, role, str(number), str(position)]
                 if len(fields) not in (7, 8) or fields[:6] != expected:
                     raise ValueError("inconsistent .UP run identity, count or row order")
                 vectors.append(_vector(fields[6].split(',')))
                 timestamps.append(_timestamp(fields[7] if len(fields) == 8 else None))
             blocks.append(LegacyUpBlock(vectors[0], tuple(vectors[2:6]), vectors[1],
-                                       tuple(vectors[6:10]), direction == 'U', tuple(timestamps)))
+                                       tuple(vectors[6:10]), block_direction == 'U', tuple(timestamps)))
         runs.append(LegacyUpRun(sample, tuple(blocks)))
     return tuple(runs)
 
 
 def read_up_measurements(text: str, sample: str) -> LegacyUpRun:
     """Select the latest complete Up run for the exact specimen, as in VB6."""
+    return select_up_measurements(parse_up_file(text), sample)
+
+
+def select_up_measurements(runs: Sequence[LegacyUpRun], sample: str) -> LegacyUpRun:
+    """Select a dedicated Up collection, skipping VB6's combined audit exports."""
     _sample(sample)
-    matches = [run for run in parse_up_file(text)
-               if run.sample == sample and run.blocks[0].is_up]
+    matches = [run for run in runs if run.sample == sample and all(block.is_up for block in run.blocks)]
     if not matches:
         raise ValueError("specimen has no complete Up measurements in .UP file")
     return matches[-1]

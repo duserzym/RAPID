@@ -1,20 +1,77 @@
-"""Bind two original queue commands to one scientific result."""
+"""Bind accepted Up evidence and a Down queue command to one scientific result."""
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 import hashlib
 import json
 import math
 import os
+from pathlib import Path
 
 from rapid_main.acquisition_evidence import canonical, restore_block
-from rapid_main.io.legacy_up import read_up_measurements
+from rapid_main.io.legacy_up import parse_up_file, read_up_measurements, select_up_measurements
 from rapid_main.measurement_progress import MeasurementProgress
 from rapid_main.specimen_paths import contained_path
+
+
+def _parse_archive(payload):
+    try:
+        text = payload.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        text = payload.decode('cp1252')
+    return parse_up_file(text)
+
+
+@dataclass(frozen=True)
+class LegacyUpSource:
+    path: str
+    sha256: str
+    file_id: str
+    label: str
+    range_factor: float
+    operator: str
+    confirmed_iso: str
+    specimen_names: tuple[str, ...]
+    susceptibility: tuple[tuple[str, float], ...] = ()
+
+    @classmethod
+    def capture(cls, path, *, file_id, label, specimens, range_factor, operator, susceptibility=None):
+        if (not isinstance(operator, str) or not operator.strip() or not label or not file_id
+                or type(range_factor) not in (int, float) or not math.isfinite(range_factor) or range_factor <= 0):
+            raise ValueError('Legacy Up requires a named operator, original step and positive range factor.')
+        path = Path(path).resolve(strict=True)
+        if path.suffix.lower() != '.up':
+            raise ValueError('Select a VB6 .UP file.')
+        names = tuple(dict.fromkeys(specimens))
+        bridge = {} if susceptibility is None else susceptibility
+        if label.strip().upper() == 'SUSC' and (set(bridge) != set(names) or any(
+                type(value) not in (int, float) or not math.isfinite(value) for value in bridge.values())):
+            raise ValueError('Legacy SUSC pairing requires the original susceptibility for every specimen.')
+        payload = path.read_bytes()
+        runs = _parse_archive(payload)
+        for name in names:
+            select_up_measurements(runs, name)
+        return cls(str(path), hashlib.sha256(payload).hexdigest(), file_id, label, float(range_factor),
+                   operator.strip(), datetime.now(timezone.utc).isoformat(), names, tuple(sorted(bridge.items())))
+
+    def verified_bytes(self):
+        payload = Path(self.path).read_bytes()
+        if hashlib.sha256(payload).hexdigest() != self.sha256:
+            raise ValueError('The selected legacy Up file changed after confirmation.')
+        return payload
+
+    def load(self, specimen):
+        if specimen not in self.specimen_names:
+            raise ValueError('This specimen was not included in the legacy Up confirmation.')
+        selected = select_up_measurements(_parse_archive(self.verified_bytes()), specimen)
+        # frmSQUID applies the axis gains before Sample.WriteUpMeasurements.
+        return tuple(raw.to_measurement_block(range_factor=self.range_factor,
+            axis_calibration=(1., 1., 1.)) for raw in selected.blocks)
 
 
 @dataclass(frozen=True)
 class QueuePair:
     queue_run_id: str
-    up_index: int
+    up_index: int | None
     down_index: int
     file_id: str
     row_id: str
@@ -24,13 +81,21 @@ class QueuePair:
     count: int
 
     @classmethod
-    def from_command(cls, queue_run_id, commands, current):
+    def from_command(cls, queue_run_id, commands, current, *, legacy_up=None):
         matches = [(index, command) for index, command in enumerate(commands)
                    if command.command_type == 'Meas' and command.file_id == current.file_id
                    and command.sample_name == current.sample_name and command.hole == current.hole
                    and command.row_id == current.row_id]
         if len(matches) == 1:
-            return None
+            if not current.legacy_up_required:
+                return None
+            (down, original), = matches
+            if (not isinstance(legacy_up, LegacyUpSource) or not queue_run_id or current is not original
+                    or legacy_up.file_id != current.file_id or current.measurement_labels != (legacy_up.label,)
+                    or current.sample_name not in legacy_up.specimen_names):
+                raise ValueError('Select the verified legacy Up collection for the original Down command.')
+            return QueueSide(cls(queue_run_id, None, down, current.file_id, current.row_id,
+                current.hole, current.sample_name, legacy_up.label, current.avg_steps), False, legacy_up)
         if (len(matches) != 2 or any(command != current for _, command in matches)
                 or len(current.measurement_labels) != 1):
             raise ValueError('Paired queue commands must identify one original specimen and step.')
@@ -50,6 +115,7 @@ class QueuePair:
 class QueueSide:
     pair: QueuePair
     is_up: bool
+    legacy_up: LegacyUpSource | None = None
 
     @property
     def run_id(self):
@@ -89,7 +155,10 @@ class QueueSide:
 
     @property
     def context(self):
-        return dict(pair=asdict(self.pair), is_up=self.is_up)
+        value = dict(pair=asdict(self.pair), is_up=self.is_up)
+        if self.legacy_up is not None:
+            value['legacy_up'] = asdict(self.legacy_up)
+        return value
 
     def validate_blocks(self, blocks, *, simulated):
         if len(blocks) != self.pair.count or any(block.is_up is not self.is_up for block in blocks):
@@ -111,6 +180,19 @@ class QueueSide:
 
     def load_up(self, directory, *, simulated):
         try:
+            if self.legacy_up is not None:
+                source = self.legacy_up
+                blocks = source.load(self.pair.specimen)
+                archived = self.legacy_archive(directory)
+                reference = dict(schema='rapidpy.legacy_up_import.v1', source_file=source.path,
+                    sha256=source.sha256, archive=str(archived), sample=self.pair.specimen,
+                    label=source.label, blocks=len(blocks), range_factor=source.range_factor,
+                    operator=source.operator, confirmed_iso=source.confirmed_iso, audited=False)
+                bridge = dict(source.susceptibility)
+                susceptibility = (dict(value=bridge[self.pair.specimen], evidence=dict(
+                    source='operator_transcribed_legacy_up', operator=source.operator,
+                    confirmed_iso=source.confirmed_iso)) if self.pair.label.strip().upper() == 'SUSC' else None)
+                return blocks, susceptibility, None, reference
             receipt = json.loads(self._path(directory, 'up-ready.json').read_bytes())
             up_side = QueueSide(self.pair, True)
             identity = receipt['identity']
@@ -137,3 +219,20 @@ class QueueSide:
                 seal_sha256=receipt['seal_sha256'])
         except (OSError, TypeError, KeyError, AttributeError) as exc:
             raise ValueError('The original accepted Up acquisition is required before the Down pass.') from exc
+
+    def legacy_archive(self, directory):
+        return self._path(directory, 'down/legacy-up.UP')
+
+    def archive_legacy_up(self, directory):
+        target = self.legacy_archive(directory)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = self.legacy_up.verified_bytes()
+        with target.open('xb') as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+
+    def verify_legacy_archive(self, directory):
+        payload = self.legacy_archive(directory).read_bytes()
+        if hashlib.sha256(payload).hexdigest() != self.legacy_up.sha256:
+            raise ValueError('The archived legacy Up input changed during the Down pass.')

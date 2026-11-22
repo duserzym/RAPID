@@ -62,6 +62,19 @@ class LegacyUpTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             read_up_measurements(text, 'a')
 
+    def test_vb6_combined_down_up_audit_preserves_blocks_without_replacing_original_up(self):
+        original = read_up_measurements(FIXTURE, 'A')
+        rows = FIXTURE.splitlines()[1:]
+        combined = [row.replace('|U|1|', '|D|2|', 1) for row in rows]
+        for row in rows:
+            fields = row.split('|')
+            fields[2], fields[4] = '2', '2'
+            combined.append('|'.join(fields))
+        text = FIXTURE + '\n'.join(combined)
+        _, audit = parse_up_file(text)
+        self.assertEqual(tuple(block.is_up for block in audit.blocks), (False, True))
+        self.assertEqual(read_up_measurements(text, 'A'), original)
+
     def test_seven_column_older_rows_preserve_missing_time(self):
         text = '\n'.join(line.rsplit('|', 1)[0] if index else line
                          for index, line in enumerate(FIXTURE.splitlines()))

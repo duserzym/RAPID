@@ -49,16 +49,18 @@ def block_collection_statistics(blocks: Sequence[BracketedMeasurementBlock]) -> 
     return _statistics(blocks)
 
 
-def paired_block_statistics(up, down) -> BlockCollectionStatistics:
+def paired_block_statistics(up, down, *, legacy_up=False) -> BlockCollectionStatistics:
     """Reduce two separately accepted sides with their own holder records."""
     up, down = tuple(up), tuple(down)
     if not up or not down or any(block.is_up is not True for block in up) or any(
             block.is_up is not False for block in down):
         raise ValueError('A pair requires both an Up and a Down collection.')
-    return _statistics(up + down, split=len(up))
+    if legacy_up and any(block.audit is not None or block.observations for block in up):
+        raise ValueError('Legacy Up blocks cannot carry native acquisition evidence.')
+    return _statistics(up + down, split=len(up), legacy_up=legacy_up)
 
 
-def _statistics(blocks, *, split=None) -> BlockCollectionStatistics:
+def _statistics(blocks, *, split=None, legacy_up=False) -> BlockCollectionStatistics:
     """Reduce every block before combining; one rejected block rejects the set.
 
     Raw statistics follow MeasurementBlocks.cls: positions have equal weight,
@@ -82,13 +84,13 @@ def _statistics(blocks, *, split=None) -> BlockCollectionStatistics:
             raise ValueError("block collection calibration cannot contain boolean gains")
         if block.range_factor != factor or tuple(block.axis_calibration) != calibration:
             raise ValueError("block collection calibration changed between acquisitions")
-    audits = [block.audit for block in blocks]
+    audits = [block.audit for block in (blocks[split:] if legacy_up else blocks)]
     if any(audit is not None for audit in audits):
         if any(audit is None for audit in audits):
             raise ValueError("block collection mixed audited and unaudited acquisitions")
         common = {(audit.sample_name, audit.treatment_label, audit.config_hash, audit.simulated,
                    audit.range_label, tuple(audit.axis_calibration_applied)) for audit in audits}
-        groups = (audits,) if split is None else (audits[:split], audits[split:])
+        groups = (audits,) if split is None or legacy_up else (audits[:split], audits[split:])
         if len(common) != 1 or any(len({(audit.run_id, audit.holder_record_id) for audit in group}) != 1
                                    for group in groups):
             raise ValueError("block collection acquisition context changed")

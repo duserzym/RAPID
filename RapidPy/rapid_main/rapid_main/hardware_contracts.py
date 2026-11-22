@@ -237,17 +237,16 @@ class NoCommBackend:
         del label
         self._step_count += 1
 
-    def read_paired_squid(self, *, is_up):
+    def read_paired_squid(self, *, is_up, range_factor=1e-5):
         """Simulate four sensor positions without inventing instrument replies."""
         from rapid_main.magnetometer import BracketedMeasurementBlock
 
-        factor = 1e-5
-        x, y, z = (value / factor for value in self.read_squid())
+        x, y, z = (value / range_factor for value in self.read_squid())
         direction = 1 if is_up else -1
         y, z = y * direction, z * direction
         positions = ((x, -y, z), (y, x, z), (-x, y, z), (-y, -x, z))
         zero = (0., 0., 0.)
-        return BracketedMeasurementBlock(zero, positions, zero, is_up=is_up, range_factor=factor)
+        return BracketedMeasurementBlock(zero, positions, zero, is_up=is_up, range_factor=range_factor)
 
     def read_susceptibility(self) -> float:
         return 1e-3 * math.exp(-self._step_count * 0.1)

@@ -60,6 +60,14 @@ ownership leases and handoff environment.
    remaining operation.
    Review interrupted rows after settling the station. Re-run starts a new
    acquisition, while Skip and Abort exclude the row.
+9. To finish a single-step VB6 Up/Down pair from a saved Up acquisition, set the
+   file's queue orientation to **Down** and enable **Both sides**. When starting the
+   queue, select the original VB6 `.UP` for that file and step. Confirm that it
+   covers the selected specimens and uses the same SQUID axis convention and gains.
+   Enter the historical range factor, which must match the accepted native setting.
+   For `SUSC`, transcribe each specimen's original standardized susceptibility from
+   the Up pass record. RAPID measures Down and links the original bytes and operator
+   confirmation to the combined result.
 
 Calibration Center records proposals, approval, expiry/invalidation, and
 rollback. Review/approve calibration before using its coefficients. Help →
