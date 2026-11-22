@@ -2884,3 +2884,9 @@ records a completed, cooled furnace step from a reviewed plan, binds it to
 the SQUID acquisition, and appends it to the verified specimen bundle.
 RMG records peak and dwell. MagIC uses the measured peak. H10 covers
 physical reconciliation with the furnace log.
+
+**Portable qualification checkpoint (2026-11-22).** New builds include a
+whole-bundle SHA-256 inventory and a standalone verifier. The verifier runs
+offline with an isolated profile and verifies the package before and after
+launch. The manual GitHub Actions workflow transfers the bundle to a
+separate Windows job for qualification and retains the report.

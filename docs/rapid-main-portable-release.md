@@ -9,7 +9,21 @@ and approved calibration remain necessary for hardware operation.
 ## Launch and verify
 
 Copy the **entire** `dist/RapidPyMain` folder, including `_internal`, to the
-operator computer. Launch `RapidPyMain.exe`. The console entry point supports:
+operator computer. From a trusted copy of the release, run the bundled
+verifier before launching `RapidPyMain.exe`.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Verify-RapidPy.ps1 -RequireFullInventory
+```
+
+The verifier checks every packaged file against `build_manifest.json`. It
+checks startup and the No-Comm UI with a temporary user profile, temporary
+safety journal, and Windows-only PATH. It prints the location of the JSON
+report, which records the manifest hash and the startup and UI results.
+Use `-EvidenceDirectory` to save the report under a specific directory
+outside the package.
+
+The individual diagnostic entry points are also available.
 
 ```powershell
 .\RapidPyMainConsole.exe --check-startup
@@ -225,9 +239,13 @@ and PyInstaller. The default build interpreter is the repository `.venv`:
 .\.venv\Scripts\python.exe tools\test_rapid_main.py
 ```
 
-The build packages a staged installation wheel, including metadata, icons,
-common assets, helpers, and GPL licensing. Tests isolate configuration and
-Qt preferences instead of changing the operator's registry or saved queue.
+The build packages a newly staged installation wheel, including metadata,
+icons, common assets, helpers, and GPL licensing. Tests use isolated
+configuration and Qt preferences. The manually triggered **Qualify the
+portable Windows bundle** workflow runs the regression suite, then verifies the
+transferred package in a separate Windows runner. Its qualification artifact
+contains the report for that candidate commit. Physical station, vendor
+driver, and display checks use the lab's acceptance procedure.
 
 ## Remaining full-replacement gates
 

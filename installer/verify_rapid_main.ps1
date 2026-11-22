@@ -1,42 +1,135 @@
-param([string]$Bundle = "")
+param(
+    [string]$Bundle = '',
+    [string]$EvidenceDirectory = '',
+    [switch]$RequireFullInventory,
+    [ValidateRange(10, 600)][int]$TimeoutSeconds = 120
+)
+
 $ErrorActionPreference = 'Stop'
-$repoRoot = Split-Path -Parent $PSScriptRoot
-if (-not $Bundle) { $Bundle = Join-Path $repoRoot 'dist\RapidPyMain' }
-$console = Join-Path ([System.IO.Path]::GetFullPath($Bundle)) 'RapidPyMainConsole.exe'
-if (-not (Test-Path -LiteralPath $console)) { throw "Missing console entry point: $console" }
-$checkRoot = Join-Path $repoRoot ('.tmp\release-check-' + [guid]::NewGuid().ToString('N'))
+Import-Module (Join-Path $PSScriptRoot 'portable_bundle.psm1') -Force
+
+if (-not $Bundle) {
+    $Bundle = if ((Split-Path -Leaf $PSCommandPath) -eq 'Verify-RapidPy.ps1') {
+        $PSScriptRoot
+    } else {
+        Join-Path (Split-Path -Parent $PSScriptRoot) 'dist\RapidPyMain'
+    }
+}
+$Bundle = (Get-Item -LiteralPath $Bundle).FullName.TrimEnd('\', '/')
+if (-not $EvidenceDirectory) {
+    $EvidenceDirectory = Join-Path ([IO.Path]::GetTempPath()) 'RAPID portable verification'
+}
+$evidenceParent = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($EvidenceDirectory).TrimEnd('\', '/')
+$bundlePrefix = $Bundle + [IO.Path]::DirectorySeparatorChar
+if ($evidenceParent -eq $Bundle -or $evidenceParent.StartsWith($bundlePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Verification evidence must be written outside the bundle.'
+}
+$checkRoot = Join-Path $evidenceParent ('release-check-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $checkRoot -Force | Out-Null
-$savedConfig = $env:RAPID_CONFIG
-$savedPythonPath = $env:PYTHONPATH
-$savedPlatform = $env:QT_QPA_PLATFORM
-try {
-    $env:RAPID_CONFIG = Join-Path $checkRoot 'operator-test-config.json'
-    $env:PYTHONPATH = ''
-    $env:QT_QPA_PLATFORM = 'offscreen'
-    Push-Location $checkRoot
+$console = Join-Path $Bundle 'RapidPyMainConsole.exe'
+$windows = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
+$system = Join-Path $windows 'System32'
+
+function Invoke-BundledCheck {
+    param([string]$Name, [string]$Argument)
+
+    $profile = Join-Path $checkRoot $Name
+    $roaming = Join-Path $profile 'AppData\Roaming'
+    $local = Join-Path $profile 'AppData\Local'
+    $scratch = Join-Path $local 'Temp'
+    New-Item -ItemType Directory -Path $roaming, $scratch -Force | Out-Null
+    $start = New-Object Diagnostics.ProcessStartInfo
+    $start.FileName = $console
+    $start.Arguments = $Argument
+    $start.WorkingDirectory = $profile
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $start.StandardErrorEncoding = [Text.Encoding]::UTF8
+    $start.EnvironmentVariables.Clear()
+    $environment = @{
+        SystemRoot = $windows
+        WINDIR = $windows
+        ComSpec = (Join-Path $system 'cmd.exe')
+        PATH = "$system;$windows"
+        TEMP = $scratch
+        TMP = $scratch
+        USERPROFILE = $profile
+        HOME = $profile
+        APPDATA = $roaming
+        LOCALAPPDATA = $local
+        RAPID_CONFIG = (Join-Path $profile 'config.json')
+        RAPID_SAFETY_STATE = (Join-Path $profile 'hardware-safety.json')
+        QT_QPA_PLATFORM = 'offscreen'
+    }
+    foreach ($entry in $environment.GetEnumerator()) {
+        $start.EnvironmentVariables[$entry.Key] = $entry.Value
+    }
+    $process = [Diagnostics.Process]::Start($start)
     try {
-        $startupJson = & $console --check-startup
-        if ($LASTEXITCODE -ne 0) { throw 'Bundled startup check failed.' }
-        $startup = ($startupJson -join "`n") | ConvertFrom-Json
-        $smokeJson = & $console --smoke-test
-        if ($LASTEXITCODE -ne 0) { throw 'Bundled UI smoke check failed.' }
-        $smoke = ($smokeJson -join "`n") | ConvertFrom-Json
-        if (-not $startup.ok -or -not $startup.packaged -or -not $smoke.ok -or -not $smoke.simulated) {
-            throw 'Release checks did not verify an isolated packaged simulation.'
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $exited = $process.WaitForExit($TimeoutSeconds * 1000)
+        if (-not $exited) {
+            if (-not $process.HasExited) { $process.Kill() }
+            $process.WaitForExit()
         }
-        $report = [ordered]@{
-            schema = 'rapidpy.portable_verification.v1'
-            checked_at_utc = [DateTimeOffset]::UtcNow.ToString('o')
-            executable = $console
-            executable_sha256 = (Get-FileHash -LiteralPath $console -Algorithm SHA256).Hash.ToLowerInvariant()
-            startup = $startup
-            smoke = $smoke
-        }
-        $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $checkRoot 'verification.json') -Encoding utf8
-        Write-Output "Portable startup and offline UI checks passed. Evidence: $checkRoot\verification.json"
-    } finally { Pop-Location }
+        $json = $stdout.GetAwaiter().GetResult()
+        [IO.File]::WriteAllText((Join-Path $checkRoot "$Name.stdout.log"), $json)
+        [IO.File]::WriteAllText((Join-Path $checkRoot "$Name.stderr.log"), $stderr.GetAwaiter().GetResult())
+        if (-not $exited) { throw "Bundled $Name check timed out after $TimeoutSeconds seconds." }
+        if ($process.ExitCode -ne 0) { throw "Bundled $Name check failed with exit code $($process.ExitCode)." }
+        return ($json | ConvertFrom-Json)
+    } finally {
+        $process.Dispose()
+    }
+}
+
+$reportPath = Join-Path $checkRoot 'verification.json'
+$report = [ordered]@{
+    schema = 'rapidpy.portable_verification.v2'
+    checked_at_utc = [DateTimeOffset]::UtcNow.ToString('o')
+    scope = 'offline startup and UI with an isolated profile and Windows-only PATH'
+    os_version = [Environment]::OSVersion.VersionString
+    executable = $console
+    passed = $false
+}
+try {
+    $report.inventory = Test-RapidPyBundle -Bundle $Bundle -RequireFullInventory:$RequireFullInventory
+    $report.executable_sha256 = Get-RapidPyFileHash -Path $console
+    $report.startup = Invoke-BundledCheck -Name 'startup' -Argument '--check-startup'
+    $startup = $report.startup
+    if ($startup.schema -cne 'rapidpy.startup_environment.v1' -or $startup.ok -ne $true -or
+        $startup.packaged -ne $true -or $startup.config_exists -ne $false -or
+        $startup.config_path -ne (Join-Path $checkRoot 'startup\config.json') -or
+        $startup.python_executable -ne $console -or
+        -not $startup.icon_path.StartsWith($bundlePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Startup evidence did not identify the bundled executable, assets and isolated configuration.'
+    }
+
+    $report.smoke = Invoke-BundledCheck -Name 'smoke' -Argument '--smoke-test'
+    $smoke = $report.smoke
+    if ($smoke.schema -cne 'rapidpy.release_smoke.v1' -or $smoke.ok -ne $true -or
+        $smoke.simulated -ne $true -or $smoke.panels -lt 6) {
+        throw 'UI checks did not verify a packaged No-Comm session.'
+    }
+    foreach ($helper in @('af_tuner', 'data_viewer', 'gaussmeter_control', 'updown_control', 'vrm_logger', 'webcam_viewer')) {
+        if ($smoke.helpers.$helper -ne $true) { throw "UI checks did not verify packaged helper: $helper" }
+    }
+    if ($report.inventory.full_inventory -and $smoke.transverse_probe -ne $true) {
+        throw 'UI checks did not exercise the transverse probe scan.'
+    }
+    $after = Test-RapidPyBundle -Bundle $Bundle -RequireFullInventory:$RequireFullInventory
+    if ($after.manifest_sha256 -cne $report.inventory.manifest_sha256) {
+        throw 'The portable build manifest changed during verification.'
+    }
+    $report.passed = $true
+    Write-Output "Portable startup and offline UI checks passed. Evidence: $reportPath"
+} catch {
+    $report.error = $_.Exception.Message
+    throw "Portable verification failed. $($report.error) Evidence: $reportPath"
 } finally {
-    $env:RAPID_CONFIG = $savedConfig
-    $env:PYTHONPATH = $savedPythonPath
-    $env:QT_QPA_PLATFORM = $savedPlatform
+    $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportPath -Encoding utf8
 }

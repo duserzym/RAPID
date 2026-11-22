@@ -1,12 +1,15 @@
 # Build with installer/build_rapid_main.ps1. Both entry points share one payload.
 from pathlib import Path
+import os
 import sys
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 ROOT = Path(SPECPATH).parent
-PACKAGES = ROOT / ".tmp" / "portable-packages"
-if not (PACKAGES / "rapid_main").is_dir():
+if not os.environ.get("RAPIDPY_RELEASE_PACKAGES"):
     raise RuntimeError("Run installer/build_rapid_main.ps1 to stage the release wheel first.")
+PACKAGES = Path(os.environ["RAPIDPY_RELEASE_PACKAGES"]).resolve(strict=True)
+if not (PACKAGES / "rapid_main").is_dir():
+    raise RuntimeError("The current build did not stage the RapidPy release wheel.")
 sys.path.insert(0, str(PACKAGES))
 modules = ["rapid_main", "rapidpy_common", "af_tuner", "data_viewer",
            "gaussmeter_control", "updown_control", "vrm_logger", "webcam_viewer"]
