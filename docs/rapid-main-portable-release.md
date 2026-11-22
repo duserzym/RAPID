@@ -42,6 +42,10 @@ ownership leases and handoff environment.
 6. Review results in Plots/Data Review. Simulation output stays in `SIMULATED`.
    Run bundles retain scientific outputs, provenance, workflow summaries,
    communication evidence, and a hashed artifact index.
+   For specimens with orientation headers, use **Core**, **Geographic**, or
+   **Bedding** to review the corresponding direction. RAPID uses the `.sam`
+   magnetic declination when supplied. New CIT rows use moment per volume
+   (emu/cm³), while the live moment and MagIC use the measured moment.
 7. After a native interruption, open **Diagnostics > Recover Interrupted Queue**.
    RAPID can retry an interrupted field cutoff, stop and check axes in place for
    pending motion, measurement, treatment or vacuum stages, or publish a shutdown

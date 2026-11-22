@@ -13,15 +13,20 @@ from typing import Optional
 
 
 def _looks_like_coordinate_header(line: str) -> bool:
-    """Return True when a SAM line looks like a lat/lon[/azimuth] header."""
+    """Return True for the locality coordinates and optional orientation fields."""
     parts = line.split()
-    if len(parts) not in (2, 3):
+    if not 2 <= len(parts) <= 7:
         return False
     try:
         [float(part) for part in parts]
     except ValueError:
         return False
     return True
+
+
+def locality_header_index(rows: list[str]) -> Optional[int]:
+    index = 2 if rows and rows[0].strip().upper() in {"CIT", "2G", "APP", "JRA"} else 1
+    return index if len(rows) > index and _looks_like_coordinate_header(rows[index]) else None
 
 
 def read_sam(sam_path: str | Path) -> list[str]:
@@ -41,8 +46,9 @@ def read_sam(sam_path: str | Path) -> list[str]:
                 continue
             entries.append(line)
 
-    if len(entries) >= 2 and _looks_like_coordinate_header(entries[1]):
-        return entries[2:]
+    header = locality_header_index(entries)
+    if header is not None:
+        return entries[header + 1:]
     return entries
 
 

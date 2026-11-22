@@ -16,6 +16,7 @@ from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.specimen_metadata import resolve_specimen_meta, validate_specimen_provenance
 from rapid_main.device_ownership import DeviceOwnershipError
 from rapid_main.dialogs.plots import build_quicklook_summary, write_quicklook_json
+from rapid_main.geometry import Angular3D, Cartesian3D, angular3d_to_cartesian3d
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
 from rapid_main.io.measurement_bundle import SIMULATED_SUBDIR, validate_measurement_output
 from rapid_main.specimen_paths import specimen_run_directory
@@ -261,6 +262,7 @@ class MeasurementPanel(QtWidgets.QWidget):
         self._coord_core.setChecked(True)
         for rb in (self._coord_core, self._coord_geo, self._coord_bed):
             cl.addWidget(rb)
+            rb.toggled.connect(self._on_coordinate_changed)
 
         cl.addSpacing(10)
         disp_hdr = QtWidgets.QLabel("DISPLAY")
@@ -479,10 +481,17 @@ class MeasurementPanel(QtWidgets.QWidget):
     def _apply_completed_steps_to_plots(self, dialog: object) -> bool:
         if not self._completed_steps or not hasattr(dialog, "set_data"):
             return False
+        vectors = []
+        for step in self._completed_steps:
+            if self._coord_core.isChecked() and step.core_orientation_available is None:
+                vectors.append(Cartesian3D(step.sdx, step.sdy, step.sdz))
+            else:
+                dec, inc = self._selected_direction(step)
+                vectors.append(angular3d_to_cartesian3d(Angular3D(dec, inc, step.moment)))
         dialog.set_data(
-            [step.sdx for step in self._completed_steps],
-            [step.sdy for step in self._completed_steps],
-            [step.sdz for step in self._completed_steps],
+            [vector.x for vector in vectors],
+            [vector.y for vector in vectors],
+            [vector.z for vector in vectors],
             [step.demag_label for step in self._completed_steps],
             simulated=self._current_run_simulated,
             provenance_statement=(
@@ -736,6 +745,12 @@ class MeasurementPanel(QtWidgets.QWidget):
     @QtCore.Slot(object)
     def _on_step_complete(self, result: StepResult) -> None:
         step = result.step
+        if step.core_orientation_available is False:
+            self._coord_core.setChecked(True)
+        for control in (self._coord_geo, self._coord_bed):
+            available = step.core_orientation_available is not False
+            control.setEnabled(available)
+            control.setToolTip('' if available else 'Requires a specimen orientation header.')
         self._completed_steps.append(step)
         # Update raw SQUID display (scaled to 1e-7)
         scale = 1e7
@@ -746,9 +761,10 @@ class MeasurementPanel(QtWidgets.QWidget):
         )
         # Update calculated values
         moment_Am2 = step.magn_moment_Am2()
+        dec, inc = self._selected_direction(step)
         self.update_calculated(
-            dec=f"{step.gdec:.1f}",
-            inc=f"{step.ginc:.1f}",
+            dec=f"{dec:.1f}",
+            inc=f"{inc:.1f}",
             moment=f"{moment_Am2:.3e}",
             csd=f"{step.error_angle:.1f}°",
         )
@@ -760,6 +776,32 @@ class MeasurementPanel(QtWidgets.QWidget):
             collection_stats=getattr(result, "collection_stats", None),
         )
         self._plot_step_complete(result, moment_Am2=moment_Am2)
+
+    def _selected_direction(self, step: MeasurementStep) -> tuple[float, float]:
+        if self._coord_geo.isChecked():
+            return step.gdec, step.ginc
+        if self._coord_bed.isChecked():
+            return step.sdec, step.sinc
+        return step.crdec, step.crinc
+
+    @QtCore.Slot(bool)
+    def _on_coordinate_changed(self, checked: bool) -> None:
+        if not checked or not self._completed_steps:
+            return
+        dec, inc = self._selected_direction(self._completed_steps[-1])
+        self._calc_dec.setText(f'{dec:.1f}')
+        self._calc_inc.setText(f'{inc:.1f}')
+        self._avg_dec.setText(f'{dec:.1f} deg')
+        self._avg_inc.setText(f'{inc:.1f} deg')
+        count = len(self._plot_traces['step'])
+        if count:
+            self._plot_traces['dec'].clear()
+            self._plot_traces['inc'].clear()
+            for step in self._completed_steps[-count:]:
+                dec, inc = self._selected_direction(step)
+                self._plot_traces['dec'].append(dec)
+                self._plot_traces['inc'].append(inc)
+            self._refresh_measurement_plot()
 
     def _update_measurement_stats(
         self,
@@ -774,8 +816,9 @@ class MeasurementPanel(QtWidgets.QWidget):
         stats = cycle_stats or reading_cycle_statistics([(step.sdx, step.sdy, step.sdz)])
         moment = float(step.moment)
         self._avg_moment.setText(f"{moment:.3e} emu")
-        self._avg_dec.setText(f"{step.sdec:.1f} deg")
-        self._avg_inc.setText(f"{step.sinc:.1f} deg")
+        dec, inc = self._selected_direction(step)
+        self._avg_dec.setText(f"{dec:.1f} deg")
+        self._avg_inc.setText(f"{inc:.1f} deg")
         self._avg_csd.setText(
             "N/A" if stats.directional_spread_deg is None else f"{stats.directional_spread_deg:.2f} deg"
         )
@@ -869,8 +912,9 @@ class MeasurementPanel(QtWidgets.QWidget):
     def _plot_step_complete(self, result: StepResult, *, moment_Am2: float) -> None:
         self._plot_traces["step"].append(float(result.step_idx + 1))
         self._plot_traces["moment"].append(moment_Am2)
-        self._plot_traces["dec"].append(float(result.step.gdec))
-        self._plot_traces["inc"].append(float(result.step.ginc))
+        dec, inc = self._selected_direction(result.step)
+        self._plot_traces["dec"].append(float(dec))
+        self._plot_traces["inc"].append(float(inc))
         self._plot_traces["susceptibility"].append(float(result.susceptibility))
         self._refresh_measurement_plot()
 
@@ -907,6 +951,9 @@ class MeasurementPanel(QtWidgets.QWidget):
 
     def _clear_measurement_plot(self) -> None:
         self._completed_steps.clear()
+        for control in (self._coord_geo, self._coord_bed):
+            control.setEnabled(True)
+            control.setToolTip('')
         for trace in self._plot_traces.values():
             trace.clear()
         for curve in self._plot_curves.values():

@@ -396,6 +396,35 @@ class TestMeasurementPanelHolderStats(unittest.TestCase):
     def _panel(self) -> MeasurementPanel:
         return MeasurementPanel()
 
+    def test_coordinate_controls_replot_and_refresh_direction_readouts(self):
+        from dataclasses import replace
+        panel = self._panel()
+        self.addCleanup(panel.deleteLater)
+        step = MeasurementStep('NRM', gdec=150., ginc=10., sdec=175., sinc=20., moment=2.,
+            error_angle=0., crdec=30., crinc=0., sdx=2., sdy=0., sdz=0., core_orientation_available=True)
+        panel._on_step_complete(StepResult(step, 0., 0, 1))
+        self.assertEqual(panel._calc_dec.text(), '30.0')
+        panel._coord_geo.click()
+        self.assertEqual((panel._calc_dec.text(), panel._avg_inc.text()), ('150.0', '10.0 deg'))
+        self.assertEqual(list(panel._plot_traces['dec']), [150.])
+        panel._coord_bed.click()
+        self.assertEqual(list(panel._plot_traces['inc']), [20.])
+
+        class Plot:
+            def set_data(self, *vectors, **kwargs):
+                self.data = vectors
+
+        plot = Plot()
+        self.assertTrue(panel._apply_completed_steps_to_plots(plot))
+        self.assertLess(plot.data[0][0], 0.)
+        self.assertGreater(plot.data[2][0], 0.)
+
+        panel._clear_measurement_plot()
+        panel._on_step_complete(StepResult(replace(step, core_orientation_available=False), 0., 0, 1))
+        self.assertTrue(panel._coord_core.isChecked())
+        self.assertFalse(panel._coord_geo.isEnabled())
+        self.assertFalse(panel._coord_bed.isEnabled())
+
     def test_collection_quality_overrides_last_block_and_resets_for_tuple_steps(self):
         from rapid_main.block_statistics import block_collection_statistics
         from rapid_main.magnetometer import BracketedMeasurementBlock

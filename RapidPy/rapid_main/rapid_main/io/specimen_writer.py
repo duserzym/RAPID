@@ -15,9 +15,9 @@ def write_header(path, meta: SpecimenMeta) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     comment = (meta.comment or "")[:79]
     line2 = " " * 8
-    line2 += _fmt5(meta.core_plate_strike)
+    line2 += _fmt5(meta.core_plate_strike) if meta.has_core_orientation else " " * 5
     line2 += " "
-    line2 += _fmt5(meta.core_plate_dip)
+    line2 += _fmt5(meta.core_plate_dip) if meta.has_core_orientation else " " * 5
     line2 += " "
     line2 += _fmt5(meta.bedding_strike)
     line2 += " "
@@ -39,7 +39,9 @@ def append_step(path, step: MeasurementStep) -> None:
     path = Path(path)
     ts_str = step.timestamp.strftime("%Y-%m-%d %H:%M:%S")
     operator = (step.operator or "")[:8].ljust(8)
-    moment_str = f"{step.moment:.2E}"
+    intensity = step.intensity_emu_per_cm3 if step.intensity_emu_per_cm3 is not None else step.moment
+    moment_str = f"{intensity:.2E}"
+    sx, sy, sz = step.axis_sd_raw if step.axis_sd_raw is not None else (step.sdx, step.sdy, step.sdz)
     line = (
         f"{step.demag_label:<7} "
         f"{step.gdec:7.1f} "
@@ -50,9 +52,9 @@ def append_step(path, step: MeasurementStep) -> None:
         f"{step.error_angle:6.1f} "
         f"{step.crdec:7.1f} "
         f"{step.crinc:6.1f} "
-        f"{step.sdx:.4E} "
-        f"{step.sdy:.4E} "
-        f"{step.sdz:.4E} "
+        f"{sx:.4E} "
+        f"{sy:.4E} "
+        f"{sz:.4E} "
         f"{operator} "
         f"{ts_str}"
     )

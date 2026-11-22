@@ -50,7 +50,8 @@ def capture_specimen_metadata(name: str, *, sample_dir: Path,
 def validate_specimen_provenance(provenance: dict, meta: SpecimenMeta) -> None:
     snapshot = provenance.get('specimen')
     if (provenance.get('schema') != 'rapidpy.queue_specimen_source.v1'
-            or not isinstance(snapshot, dict) or snapshot.get('meta') != asdict(meta)):
+            or not isinstance(snapshot, dict) or not isinstance(snapshot.get('meta'), dict)
+            or SpecimenMeta(**snapshot['meta']) != meta):
         raise ValueError('Specimen provenance must match the original resolved metadata.')
     json.dumps(provenance, allow_nan=False)
 
@@ -152,6 +153,7 @@ def resolve_specimen_meta(
 
     registration = find_registration(specimen_name, registrations)
     if registration is not None:
+        meta = replace(meta, magnetic_declination_e=registration.magnetic_declination_e)
         if not meta.site:
             meta = replace(meta, site=registration.formation or registration.sample_set or "")
         if not meta.location:
@@ -176,8 +178,10 @@ def resolve_specimen_meta(
         defaulted.append("comment")
     if meta.volume in (0.0, 1.0):
         defaulted.append("volume")
-    if (meta.core_plate_strike, meta.core_plate_dip) == (0.0, 0.0):
+    if not meta.has_core_orientation:
         defaulted.append("core_plate_orientation")
+    elif meta.magnetic_declination_e is None:
+        defaulted.append("magnetic_declination")
     if (meta.bedding_strike, meta.bedding_dip) == (0.0, 0.0):
         defaulted.append("bedding_orientation")
 

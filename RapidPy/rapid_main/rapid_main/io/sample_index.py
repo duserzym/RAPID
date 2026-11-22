@@ -2,10 +2,11 @@ from __future__ import annotations
 """Utilities for VB6-style sample index files (.sam) and queue registry rows."""
 from pathlib import Path
 import csv
+import math
 from typing import Iterable
 
 from rapid_main.data_model import SampleIndexRegistration, SampleIndexRegistrations
-from rapid_main.io.sam_reader import _looks_like_coordinate_header
+from rapid_main.io.sam_reader import locality_header_index
 
 
 def _build_rows(raw_lines: Iterable[str]) -> list[str]:
@@ -15,8 +16,29 @@ def _build_rows(raw_lines: Iterable[str]) -> list[str]:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        rows.append(line)
+        rows.append(raw.rstrip('\r\n'))
     return rows
+
+
+def _site_declination(line: str) -> float | None:
+    # CIT has a six-character stride. Preserve an empty third field even
+    # when optional fold and bedding fields follow it.
+    fixed = (len(line) >= 17 and line[5].isspace() and line[11].isspace()
+             and (len(line) == 17 or line[17].isspace()))
+    if fixed:
+        try:
+            float(line[:5])
+            float(line[6:11])
+        except ValueError:
+            fixed = False
+    fields = line.split()
+    text = line[12:17].strip() if fixed else (fields[2] if len(fields) >= 3 else '')
+    if not text:
+        return None
+    declination = float(text)
+    if not math.isfinite(declination):
+        raise ValueError('Sample index magnetic declination must be finite.')
+    return declination
 
 
 def read_sample_index_registrations(
@@ -58,10 +80,13 @@ def read_sample_index_registrations(
     formation = ""
     location = str(sam_path.parent)
 
-    if len(rows) >= 2 and _looks_like_coordinate_header(rows[1]):
-        sample_set = rows[0]
-        location = rows[1]
-        data_start = 2
+    magnetic_declination = None
+    header = locality_header_index(rows)
+    if header is not None:
+        sample_set = rows[header - 1].strip()
+        location = rows[header].strip()
+        data_start = header + 1
+        magnetic_declination = _site_declination(rows[header])
     
     registrations: list[SampleIndexRegistration] = []
     for idx, line in enumerate(rows[data_start:], start=1):
@@ -83,6 +108,7 @@ def read_sample_index_registrations(
                 depth_cm=depth_cm,
                 order=idx,
                 source_file=str(sam_path.resolve()),
+                magnetic_declination_e=magnetic_declination,
             )
         )
 

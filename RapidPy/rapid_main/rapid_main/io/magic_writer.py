@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
+from rapid_main.geometry import Angular3D, angular3d_to_cartesian3d
 from rapid_main.io.magic_method_codes import label_to_method_codes
 
 
@@ -72,10 +73,9 @@ def _step_to_row(
     meas_name = f"{meta.name}-{step.demag_label}"
     method_code = label_to_method_codes(step.demag_label)
     magn_moment = step.magn_moment_Am2()
-    # Cartesian in A·m² (emu → A·m² same factor ×1e-3)
-    magn_x = step.sdx * 1e-3
-    magn_y = step.sdy * 1e-3
-    magn_z = step.sdz * 1e-3
+    # Use the same frame as dir_dec/dir_inc. Raw instrument components stay
+    # in the measurement evidence and live analysis.
+    vector = angular3d_to_cartesian3d(Angular3D(step.gdec, step.ginc, magn_moment))
 
     return [
         meas_name,                            # measurement
@@ -88,9 +88,9 @@ def _step_to_row(
         _fmt(step.treat_dc_field_T()),        # treat_dc_field (T)
         _fmt(step.treat_temp_K()),            # treat_temp (K)
         _fmt(magn_moment),                    # magn_moment (A·m²)
-        _fmt(magn_x),                         # magn_x
-        _fmt(magn_y),                         # magn_y
-        _fmt(magn_z),                         # magn_z
+        _fmt(vector.x),                       # magn_x
+        _fmt(vector.y),                       # magn_y
+        _fmt(vector.z),                       # magn_z
         _fmt(step.gdec),                      # dir_dec (geographic)
         _fmt(step.ginc),                      # dir_inc (geographic)
         "4",                                  # meas_n_orient (4-position standard)

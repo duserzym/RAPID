@@ -208,6 +208,8 @@ class MeasurementBundleWriter:
             "bedding_dip": self.meta.bedding_dip,
             "fold_axis": self.meta.fold_axis,
             "fold_plunge": self.meta.fold_plunge,
+            "magnetic_declination_e": self.meta.magnetic_declination_e,
+            "core_orientation_available": self.meta.has_core_orientation,
             "simulated": self.simulated,
             "labels": list(self._existing_labels) + list(self._appended_labels),
             "resumed_labels": list(self._existing_labels),

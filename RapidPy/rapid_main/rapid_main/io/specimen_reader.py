@@ -39,9 +39,12 @@ def _parse_header_line(line: str) -> dict:
         except (ValueError, IndexError):
             return None
 
+    strike = _col(line, 9, 13)
+    dip = _col(line, 15, 19)
     return {
-        "core_plate_strike": _col(line, 9, 13) or 0.0,
-        "core_plate_dip":    _col(line, 15, 19) or 0.0,
+        "core_plate_strike": strike or 0.0,
+        "core_plate_dip":    dip or 0.0,
+        "core_orientation_available": strike is not None and dip is not None,
         "bedding_strike":    _col(line, 21, 25) or 0.0,
         "bedding_dip":       _col(line, 27, 31) or 0.0,
         "volume":            _col(line, 33, 37) or 1.0,

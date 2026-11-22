@@ -2616,3 +2616,24 @@ locally under `.tmp/legacy-up-release/dist/RapidPyMain`.
 
 Stage-specific queue reentry, remaining scientific and VB6 workflow parity,
 fresh-machine deployment, performance, and physical station qualification remain open.
+
+Specimen directions and CIT intensity checkpoint (2026-11-22). The native and
+simulated measurement worker uses the specimen plate orientation and the
+original `.sam` magnetic declination. It calculates core, geographic, and
+structural directions from the accepted measurement, including the VB6 aTAF
+axis mapping and optional fold correction. The live coordinate controls update
+the readouts and plots. With no core orientation header, RAPID exposes the
+core direction and identifies the missing correction in provenance.
+
+Native bracketed CIT output uses moment per volume and the three raw component
+standard deviations. Live measurement retains emu and MagIC retains A·m².
+MagIC directional and Cartesian fields use the same frame. Specimen provenance
+keeps the original metadata and effective volume. RMG field parity, staged
+bundle publication recovery, full station qualification, and comparison against
+matched physical VB6 runs remain open.
+
+The staged source passed 1,426 tests in 677.013 seconds with process exit 0.
+Reference fixtures cover the VB6 equations, folded bedding, optional registry
+fields, published units, and live coordinate controls. The packaged Windows
+startup and offline smoke checks passed for six panels and six helpers. The
+bundle is available locally under `.tmp/coordinate-release/dist/RapidPyMain`.

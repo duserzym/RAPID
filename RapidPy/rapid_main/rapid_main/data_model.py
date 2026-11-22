@@ -31,6 +31,14 @@ class SpecimenMeta:
     sample: str = ""
     site: str = ""
     location: str = ""
+    magnetic_declination_e: Optional[float] = None  # °, from the registry locality line
+    core_orientation_available: Optional[bool] = None
+
+    @property
+    def has_core_orientation(self) -> bool:
+        if self.core_orientation_available is not None:
+            return self.core_orientation_available
+        return (self.core_plate_strike, self.core_plate_dip) != (0., 0.)
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +61,7 @@ class SampleIndexRegistration:
     depth_cm: str = ""
     order: int = 0
     source_file: str = ""
+    magnetic_declination_e: Optional[float] = None
 
 
 @dataclass
@@ -77,8 +86,8 @@ class MeasurementStep:
     demag_label: str          # e.g. "NRM", "AF20", "TT400", "IRM1000", "ARM"
     gdec: float               # geographic declination (°)
     ginc: float               # geographic inclination (°)
-    sdec: float               # specimen declination (°)
-    sinc: float               # specimen inclination (°)
+    sdec: float               # structurally corrected declination (°)
+    sinc: float               # structurally corrected inclination (°)
     moment: float             # moment in emu
     error_angle: float        # CSD / error angle (°)
     crdec: float              # core declination (°)
@@ -88,6 +97,9 @@ class MeasurementStep:
     sdz: float                # specimen Cartesian Z (emu)
     operator: str = ""        # operator name (≤ 8 chars)
     timestamp: datetime = field(default_factory=datetime.now)
+    intensity_emu_per_cm3: Optional[float] = None
+    axis_sd_raw: Optional[tuple[float, float, float]] = None
+    core_orientation_available: Optional[bool] = None
 
     # -----------------------------------------------------------------------
     # Derived MagIC fields

@@ -58,7 +58,7 @@ from rapid_main.specimen_paths import contained_path
 from rapid_main.measurement_progress import MeasurementProgress
 from rapid_main.queue_pair import QueueSide
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
-from rapid_main.geometry import Cartesian3D, cartesian3d_to_angular3d
+from rapid_main.specimen_orientation import specimen_directions
 from rapid_main.magnetometer import (
     BlockAudit,
     BracketedMeasurementBlock,
@@ -541,7 +541,9 @@ class MeasurementWorker(QtCore.QThread):
                         *self._cycle_readings])
                 step = _build_step(label, sdx, sdy, sdz, self._operator, datetime.now(),
                     error_angle=(self._last_collection_stats.fischer_sd_deg
-                                 if self._last_collection_stats is not None else 0.0))
+                                 if self._last_collection_stats is not None else 0.0),
+                    meta=self._meta, collection=self._last_collection_stats,
+                    range_factor=self._cycle_blocks[0].range_factor if self._cycle_blocks else None)
                 self._validate_step(step)
                 self._emit_phase(WorkflowPhase.SAVING)
                 if bundle is not None and not bundle.append_step(step, susceptibility=susc):
@@ -771,7 +773,9 @@ class MeasurementWorker(QtCore.QThread):
             raise ValueError(f"position validation failed: {detail}")
 
     def _validate_step(self, step: MeasurementStep) -> None:
-        if not math.isfinite(step.sdx + step.sdy + step.sdz):
+        if not all(math.isfinite(value) for value in (step.sdx, step.sdy, step.sdz, step.moment,
+                step.gdec, step.ginc, step.crdec, step.crinc, step.sdec, step.sinc,
+                step.intensity_emu_per_cm3)):
             raise ValueError("measurement step contains non-finite values")
         if step.moment <= 0:
             raise ValueError("measurement step has non-positive moment")
@@ -1064,6 +1068,13 @@ class MeasurementWorker(QtCore.QThread):
             "transport_recoveries": len(transport_recoveries),
             "transport_recovery_records": transport_recoveries,
             "block_collection_statistics": deepcopy(self._collection_statistics),
+            "coordinate_correction": {
+                "method": "vb6_measure_unfold" if self._meta.has_core_orientation else "core_only",
+                "magnetic_declination_e": self._meta.magnetic_declination_e,
+                "volume_cm3_used": self._meta.volume if self._meta.volume > 0 else 1.,
+                "cit_intensity_unit": "emu/cm^3",
+                "magic_cartesian_frame": "geographic" if self._meta.has_core_orientation else "core",
+            },
             "acquisition_progress": self._progress.reference if self._progress is not None else None,
             "up_acquisition": self._up_reference,
             "queue_side": self._queue_side.context if self._queue_side is not None else None,
@@ -1548,31 +1559,37 @@ def _build_step(
     operator: str,
     timestamp: datetime,
     error_angle: float = 0.0,
+    *,
+    meta: SpecimenMeta | None = None,
+    collection: BlockCollectionStatistics | None = None,
+    range_factor: float | None = None,
 ) -> MeasurementStep:
     """Convert raw SQUID Cartesian readings to a ``MeasurementStep``."""
-    moment = (sdx**2 + sdy**2 + sdz**2) ** 0.5
-
-    direction = cartesian3d_to_angular3d(
-        vector=Cartesian3D(sdx, sdy, sdz)
-    )
-    sdec = direction.dec
-    sinc = direction.inc
-    gdec = sdec
-    ginc = sinc
+    vector = (sdx, sdy, sdz)
+    moment = math.hypot(*vector)
+    # VB6's core-inclination epsilon is in calibrated SQUID units, before
+    # RangeFact converts the reading to emu.
+    direction_vector = tuple(component / range_factor for component in vector) if range_factor else vector
+    directions = specimen_directions(direction_vector, meta or SpecimenMeta(''),
+                                     label=label, raw_squid=range_factor is not None)
+    volume = meta.volume if meta is not None and meta.volume > 0 else 1.
 
     return MeasurementStep(
         demag_label=label,
-        gdec=gdec,
-        ginc=ginc,
-        sdec=sdec,
-        sinc=sinc,
+        gdec=directions.geographic.dec,
+        ginc=directions.geographic.inc,
+        sdec=directions.structural.dec,
+        sinc=directions.structural.inc,
         moment=moment,
         error_angle=error_angle,
-        crdec=gdec,
-        crinc=ginc,
+        crdec=directions.core.dec,
+        crinc=directions.core.inc,
         sdx=sdx,
         sdy=sdy,
         sdz=sdz,
         operator=operator[:8] if operator else "",
         timestamp=timestamp,
+        intensity_emu_per_cm3=moment / volume,
+        axis_sd_raw=collection.axis_sd_raw if collection is not None else None,
+        core_orientation_available=meta.has_core_orientation if meta is not None else None,
     )
