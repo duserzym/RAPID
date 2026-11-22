@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
+from rapid_main.io.bundle_history import HISTORY_DIRECTORY, archive_previous_bundle
 from rapid_main.io.bundle_publication import BundlePublication, JOURNAL, _digest
 from rapidpy_common.hardware_safety import _replace_snapshot
 from rapid_main.io.magic_specimen_writer import append_specimen
@@ -41,6 +42,8 @@ STEP_LEDGER_FILE = ".rapidpy-steps.json"
 STAGING_PREFIX = ".rapidpy-pending"
 _SIDECARS = (STEP_LEDGER_FILE, 'provenance.json', SIMULATION_MARKER_FILE, 'susceptibility.json',
              'artifact_index.json')
+_RUN_DIAGNOSTICS = ('workflow_summary.json', 'quicklook.json', 'communication.tsv', 'rockmag_run.json',
+                    'thermal_run.json')
 
 
 class BundleNotCommittedError(RuntimeError):
@@ -221,6 +224,13 @@ class MeasurementBundleWriter:
         try:
             destinations = validate_measurement_output(self.publish_dir, self.meta.name)
             staged = _paths_for(self.staging_dir, self.meta.name)
+            mutable = tuple(contained_path(self.publish_dir, name, output=True)
+                            for name in (*_SIDECARS, *_RUN_DIAGNOSTICS))
+            previous, previous_files = archive_previous_bundle(
+                self.publish_dir, self.meta.name, astuple(destinations), mutable, self.staging_dir,
+            )
+            if previous is not None:
+                self._provenance["previous_publication"] = previous
             _write_json_atomic(contained_path(self.staging_dir, STEP_LEDGER_FILE, output=True), dict(
                 schema='rapidpy.measurement.step_ledger.v1', specimen=self.meta.name,
                 labels=list(self._existing_labels) + list(self._appended_labels)))
@@ -243,7 +253,7 @@ class MeasurementBundleWriter:
                 index = contained_path(self.staging_dir, 'artifact_index.json', output=True)
                 prepare_index(index, {target: source for source, target in files})
                 files.append((index, contained_path(self.publish_dir, index.name, output=True)))
-            self._publication.publish(files)
+            self._publication.publish(files, archived_previous=previous_files)
             self._committed = True
             if finalize_diagnostics is not None:
                 finalize_diagnostics()
@@ -345,9 +355,8 @@ def validate_measurement_output(directory: str | Path, name: str, *, simulated: 
     paths = _paths_for(publish, name)
     contained_path(publish, f'{STAGING_PREFIX}-{os.getpid()}', output=True)
     contained_path(publish, JOURNAL, output=True)
-    for filename in (STEP_LEDGER_FILE, 'provenance.json', SIMULATION_MARKER_FILE,
-                     'artifact_index.json', 'workflow_summary.json', 'quicklook.json',
-                     'communication.tsv', 'susceptibility.json', 'rockmag_run.json', 'thermal_run.json'):
+    contained_path(publish, HISTORY_DIRECTORY, output=True)
+    for filename in (*_SIDECARS, *_RUN_DIAGNOSTICS):
         contained_path(publish, filename, output=True)
     return paths
 

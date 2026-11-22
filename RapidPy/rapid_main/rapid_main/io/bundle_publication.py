@@ -141,7 +141,7 @@ class BundlePublication:
         _sync_directory(self.directory)
         return status
 
-    def publish(self, files):
+    def publish(self, files, *, archived_previous=None):
         """Publish already prepared files under the caller's exclusive lease."""
         if not files or len({path for _, path in files}) != len(files):
             raise ValueError('Measurement publication needs distinct output files.')
@@ -154,6 +154,8 @@ class BundlePublication:
                 name = path.relative_to(self.directory).as_posix()
                 target = self._target(name)
                 old = _digest(target)
+                if archived_previous is not None and name in archived_previous and old != archived_previous[name]:
+                    raise ValueError(f'Measurement output changed after its archive was written: {name}')
                 if _SEAL.fullmatch(name) and old is not None:
                     raise ValueError('This acquisition already has an acceptance seal.')
                 new = _digest(staged)

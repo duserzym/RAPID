@@ -908,13 +908,15 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, "Load Error", str(exc))
 
     def _open_directory(self) -> None:
-        path = QtWidgets.QFileDialog.getExistingDirectory(self, "Open MagIC directory", "")
+        path = QtWidgets.QFileDialog.getExistingDirectory(self, "Open MagIC directory or RAPID archive", "")
         if not path:
             return
         try:
             source_path = Path(path)
-            self._apply_dataset(load_magic_directory(source_path), dataset_name=source_path.name, load_request=("magic_dir", source_path))
-            self.statusBar().showMessage(f"Loaded MagIC directory from {Path(path).name}")
+            dataset = load_magic_directory(source_path)
+            self._apply_dataset(dataset, dataset_name=source_path.name, load_request=("magic_dir", source_path))
+            kind = "measurement archive" if dataset.source_kind == "measurement_archive" else "MagIC directory"
+            self.statusBar().showMessage(f"Loaded {kind} from {source_path.name}")
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "Load Error", str(exc))
 

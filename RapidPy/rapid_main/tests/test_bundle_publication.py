@@ -8,10 +8,12 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from zipfile import ZipFile
 
+from data_viewer.data_loading import load_magic_directory
 from rapid_main.data_model import SpecimenMeta
 from rapid_main.hardware_contracts import NoCommBackend
-from rapid_main.io import bundle_publication
+from rapid_main.io import bundle_history, bundle_publication, measurement_bundle
 from rapid_main.io.measurement_bundle import MeasurementBundleWriter, recover_measurement_output
 from rapid_main.measurement_worker import MeasurementWorker
 from rapidpy_common.hardware_safety import HardwareSafetyError
@@ -86,6 +88,72 @@ with patch.object(bundle_publication, '_replace_snapshot', crash):
         self.assertEqual(self.snapshot(), before)
         self.assertFalse(writer.append_step(_step('NRM')))
         self.assertFalse((self.root / bundle_publication.JOURNAL).exists())
+        archives = list((self.root / bundle_history.HISTORY_DIRECTORY).iterdir())
+        self.assertEqual(len(archives), 1)
+        with bundle_history.open_bundle_archive(archives[0]) as archive:
+            for name, data in before.items():
+                self.assertEqual(archive.read(name), data)
+
+    def test_replacement_archives_the_old_science_and_acquisition_for_data_review(self):
+        first = MeasurementWorker(SpecimenMeta('A'), ['NRM'], self.root, NoCommBackend(), run_id='original')
+        first.run()
+        output = self.root / 'SIMULATED'
+        old_index = (output / 'artifact_index.json').read_bytes()
+        old_rmg = (output / 'A.rmg').read_bytes()
+        files = [entry for entry in json.loads(old_index)['artifacts'] if entry['exists']]
+        second = MeasurementWorker(SpecimenMeta('A'), ['AF20'], self.root, NoCommBackend(), run_id='replacement')
+        second.run()
+        self.assertIs(second._pending_run_result, False)
+        provenance = json.loads((output / 'provenance.json').read_bytes())
+        ref = provenance['previous_publication']
+        manifest = output / ref['relative_path']
+        self.assertEqual(ref['sha256'], hashlib.sha256(manifest.read_bytes()).hexdigest())
+        with bundle_history.open_bundle_archive(manifest.parent, expected_id=ref['archive_id']) as archive:
+            self.assertEqual(archive.read('artifact_index.json'), old_index)
+            self.assertEqual(archive.read('A.rmg'), old_rmg)
+            for entry in files:
+                self.assertEqual(hashlib.sha256(archive.read(entry['relative_path'])).hexdigest(),
+                                 entry['sha256'], entry['name'])
+            members = {name: archive.read(name) for name in archive.namelist()}
+        previous = load_magic_directory(manifest.parent)
+        self.assertEqual(previous.source_kind, 'measurement_archive')
+        self.assertEqual([step.demag_label for step in previous.specimens[0].steps], ['NRM'])
+        self.assertEqual(load_magic_directory(output).specimens[0].steps[0].demag_label, 'AF20')
+        members['measurements.txt'] = b'changed archive'
+        with ZipFile(manifest.parent / bundle_history.ARCHIVE_PAYLOAD, 'w') as archive:
+            for name, data in members.items():
+                archive.writestr(name, data)
+        with self.assertRaisesRegex(ValueError, 'Archived measurement file changed'):
+            load_magic_directory(manifest.parent)
+
+    def test_archive_failure_keeps_the_previous_publication(self):
+        before = self.original()
+        writer = MeasurementBundleWriter(self.root, SpecimenMeta('A'))
+        writer.append_step(_step('AF20'))
+        with patch.object(ZipFile, 'write', side_effect=OSError('archive disk full')):
+            with self.assertRaisesRegex(OSError, 'archive disk full'):
+                writer.commit()
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse((self.root / bundle_publication.JOURNAL).exists())
+
+    def test_edit_after_archive_is_preserved_and_blocks_scientific_replacement(self):
+        before = self.original()
+        writer = MeasurementBundleWriter(self.root, SpecimenMeta('A'))
+        writer.append_step(_step('AF20'))
+        capture = measurement_bundle.archive_previous_bundle
+
+        def edit_after_capture(*args):
+            result = capture(*args)
+            (self.root / 'A.rmg').write_bytes(b'operator edit')
+            return result
+
+        with patch.object(measurement_bundle, 'archive_previous_bundle', side_effect=edit_after_capture):
+            with self.assertRaisesRegex(ValueError, 'changed after its archive was written'):
+                writer.commit()
+        self.assertEqual(self.snapshot(), {**before, 'A.rmg': b'operator edit'})
+        only_archive, = (self.root / bundle_history.HISTORY_DIRECTORY).iterdir()
+        with bundle_history.open_bundle_archive(only_archive) as archived:
+            self.assertEqual(archived.read('A.rmg'), before['A.rmg'])
 
     def test_conflicting_edit_retains_the_recovery_journal_and_all_current_bytes(self):
         self.original()

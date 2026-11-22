@@ -2895,3 +2895,9 @@ separate Windows job for qualification and retains the report.
 Qt Multimedia for USB devices and supported network streams. Offline startup
 verification decodes a generated clip through the monitor and checks the PNG
 snapshot. H11 covers station camera, orientation, and disconnect acceptance.
+
+**Specimen publication history checkpoint (2026-11-22).** Remeasurements and
+thermal appends preserve an earlier publication and its indexed acquisition
+evidence in a verified ZIP before committing current results. Data Review
+opens the archive directly. Paired-holder evidence retains its original
+relative paths inside the ZIP.

@@ -1,6 +1,7 @@
 """Offline release check with temporary configuration and Qt preferences."""
 from __future__ import annotations
 
+from dataclasses import replace
 from importlib import import_module
 import json
 import os
@@ -102,6 +103,28 @@ def _check_webcam_decode(window, app, root):
         app.processEvents()
 
 
+def _check_measurement_archive(root):
+    from data_viewer.data_loading import load_magic_directory
+    from rapid_main.data_model import MeasurementStep, SpecimenMeta
+    from rapid_main.io.measurement_bundle import MeasurementBundleWriter
+
+    specimen = SpecimenMeta("offline-specimen")
+    step = MeasurementStep(demag_label="NRM", gdec=10.0, ginc=30.0, sdec=10.0, sinc=30.0,
+                           moment=1e-6, error_angle=2.0, crdec=10.0, crinc=30.0,
+                           sdx=0.0, sdy=0.0, sdz=0.0)
+    for measurement in (step, replace(step, demag_label="AF20")):
+        with MeasurementBundleWriter(root / "data", specimen, simulated=True) as writer:
+            writer.append_step(measurement)
+    output = writer.publish_dir
+    provenance = json.loads((output / "provenance.json").read_text(encoding="utf-8"))
+    archive = output / provenance["previous_publication"]["relative_path"]
+    previous = load_magic_directory(archive.parent)
+    current = load_magic_directory(output)
+    return (previous.source_kind == "measurement_archive"
+            and [item.demag_label for item in previous.specimens[0].steps] == ["NRM"]
+            and [item.demag_label for item in current.specimens[0].steps] == ["AF20"])
+
+
 def run_smoke_test() -> int:
     from PySide6 import QtCore, QtWidgets
     from rapid_main.config import AppConfig
@@ -140,11 +163,14 @@ def run_smoke_test() -> int:
                 helpers[name] = callable(import_module(f"{name}.app").main)
             transverse_probe = _check_transverse_probe(window, app)
             webcam_decode = _check_webcam_decode(window, app, root)
+            measurement_archive = _check_measurement_archive(root)
             report = {
                 "schema": "rapidpy.release_smoke.v1", "simulated": True,
-                "ok": window.config.general.nocomm and all(helpers.values()) and transverse_probe and webcam_decode,
+                "ok": (window.config.general.nocomm and all(helpers.values()) and transverse_probe
+                       and webcam_decode and measurement_archive),
                 "transverse_probe": transverse_probe,
                 "webcam_decode": webcam_decode,
+                "measurement_archive": measurement_archive,
                 "panels": window._stack.count(), "helpers": helpers,
                 "width": window.width(), "height": window.height(),
             }

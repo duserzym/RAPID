@@ -3,13 +3,16 @@ from __future__ import annotations
 import csv
 import math
 import sys
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime
+from io import TextIOWrapper
 from pathlib import Path
 from typing import Iterable
 
 try:
     from rapid_main.data_model import MeasurementStep, SpecimenMeta
+    from rapid_main.io.bundle_history import ARCHIVE_MANIFEST, ARCHIVE_PAYLOAD, open_bundle_archive
     from rapid_main.io.sam_reader import read_sam, specimen_path
     from rapid_main.io.specimen_reader import read_specimen
 except ModuleNotFoundError:
@@ -19,6 +22,7 @@ except ModuleNotFoundError:
         sys.path.insert(0, str(rapid_main_root))
     sys.modules.pop("rapid_main", None)
     from rapid_main.data_model import MeasurementStep, SpecimenMeta
+    from rapid_main.io.bundle_history import ARCHIVE_MANIFEST, ARCHIVE_PAYLOAD, open_bundle_archive
     from rapid_main.io.sam_reader import read_sam, specimen_path
     from rapid_main.io.specimen_reader import read_specimen
 
@@ -141,12 +145,20 @@ def load_csv_dataset(path: str | Path) -> ViewerDataset:
 
 def load_magic_directory(path: str | Path) -> ViewerDataset:
     root = Path(path)
-    measurements_path = root / "measurements.txt"
-    if not measurements_path.exists():
-        raise ValueError(f"Could not find measurements.txt in {root}")
-
+    archived = (root / ARCHIVE_MANIFEST).exists()
+    source_kind = "measurement_archive" if archived else "magic_dir"
+    source_file = root / (ARCHIVE_PAYLOAD if archived else "measurements.txt")
     specimens_by_name: dict[str, ViewerSpecimen] = {}
-    with measurements_path.open("r", encoding="utf-8-sig", newline="") as handle:
+    with ExitStack() as stack:
+        if archived:
+            archive = stack.enter_context(open_bundle_archive(root))
+            if "measurements.txt" not in archive.namelist():
+                raise ValueError(f"Could not find measurements.txt in the archive at {root}")
+            handle = stack.enter_context(TextIOWrapper(archive.open("measurements.txt"), encoding="utf-8-sig", newline=""))
+        else:
+            if not source_file.exists():
+                raise ValueError(f"Could not find measurements.txt in {root}")
+            handle = stack.enter_context(source_file.open("r", encoding="utf-8-sig", newline=""))
         header_line = handle.readline().strip().lower()
         if "measurements" not in header_line:
             raise ValueError("measurements.txt does not start with a MagIC measurements header.")
@@ -169,26 +181,28 @@ def load_magic_directory(path: str | Path) -> ViewerDataset:
                     meta=meta,
                     steps=[],
                     experiment_type="Unknown",
-                    source_kind="magic_dir",
+                    source_kind=source_kind,
                     source_path=root,
-                    data_path=measurements_path,
+                    data_path=source_file,
                 )
                 specimens_by_name[specimen_name] = specimen
             specimen.steps.append(_measurement_row_to_step(row, specimen_name))
 
     specimens = sorted(specimens_by_name.values(), key=lambda specimen: specimen.name)
     if not specimens:
-        raise ValueError(f"No specimen rows were found in {measurements_path}")
+        raise ValueError(f"No specimen rows were found in {source_file}")
     for specimen in specimens:
         specimen.experiment_type = detect_experiment_type(specimen.steps)
         specimen.paleointensity_points = build_paleointensity_points(specimen.steps)
-    return ViewerDataset("magic_dir", root, specimens)
+    return ViewerDataset(source_kind, root, specimens)
 
 
 def watch_paths_for_dataset(dataset: ViewerDataset) -> list[Path]:
     paths: list[Path] = []
     if dataset.source_path is not None:
         paths.append(Path(dataset.source_path))
+        if dataset.source_kind == "measurement_archive":
+            paths.append(Path(dataset.source_path) / ARCHIVE_MANIFEST)
     for specimen in dataset.specimens:
         if specimen.data_path is not None:
             paths.append(Path(specimen.data_path))

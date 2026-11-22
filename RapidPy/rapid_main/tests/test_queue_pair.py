@@ -242,6 +242,7 @@ class QueuePairTests(unittest.TestCase):
         from dataclasses import replace
         from rapid_main.acquisition import BlockContext
         from rapid_main.hardware_contracts import PreflightResult
+        from rapid_main.io.bundle_history import open_bundle_archive
         from test_acquisition import ARCHIVED_CALIBRATION, _build_service
         from tests.acquisition_fakes import counts_for
 
@@ -294,6 +295,8 @@ class QueuePairTests(unittest.TestCase):
             self.assertTrue(all(len(block['observations']) == 6 for block in evidence['blocks']))
         data = json.loads((self.output / 'provenance.json').read_text())
         self.assertEqual(data['block_collection_statistics'][0]['position_count'], 16)
+        original_acquisition, = worker._progress.directory.glob('*.UP')
+        original_acquisition_bytes = original_acquisition.read_bytes()
 
         historical = self.legacy_side(range_factor=evidence['blocks'][0]['range_factor'])
         backend = InjectedStation(historical)
@@ -306,6 +309,11 @@ class QueuePairTests(unittest.TestCase):
         data = json.loads((self.output / 'provenance.json').read_text())
         self.assertFalse(data['up_acquisition']['audited'])
         self.assertEqual(data['block_collection_statistics'][0]['position_count'], 8)
+        previous = data['previous_publication']
+        archive_dir = (self.output / previous['relative_path']).parent
+        with open_bundle_archive(archive_dir, expected_id=previous['archive_id']) as archive:
+            path = original_acquisition.relative_to(self.output).as_posix()
+            self.assertEqual(archive.read(path), original_acquisition_bytes)
 
     def test_main_window_runs_both_passes_and_publishes_one_result(self):
         from rapid_main.app import MainWindow

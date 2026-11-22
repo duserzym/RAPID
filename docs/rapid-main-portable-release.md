@@ -236,6 +236,20 @@ acquisition record. Duplicate, out-of-order, and unverifiable existing
 bundles are rejected before SQUID preflight. The normal **No-Comm**
 thermal plan run remains a simulation.
 
+## Review an earlier publication
+
+When a successful run replaces or extends a specimen's saved results, RAPID
+first saves the earlier publication under `.rapidpy-history` in that specimen's
+output folder. The current `provenance.json` gives the location of the prior
+`archive_manifest.json` in `previous_publication.relative_path`. The neighboring
+`bundle.zip` contains the earlier legacy and MagIC files, run diagnostics, and
+saved acquisition evidence listed in its artifact index.
+
+In **Data Review**, use **Open MagIC Directory** and select the folder that
+contains `archive_manifest.json`. Data Review checks the ZIP members against the
+recorded SHA-256 hashes and opens the earlier MagIC results without extraction.
+Archives from No-Comm runs stay inside the `SIMULATED` output.
+
 ## Rebuild and test
 
 Use an environment with the declared RapidPy dependencies, setuptools, wheel,
