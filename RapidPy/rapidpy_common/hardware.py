@@ -783,10 +783,7 @@ class MotorSerialClient:
         self.poll_motor(updown_axis)
         self.clear_poll_status(updown_axis)
 
-        if use_xy_table:
-            target = int(self.config.sample_bottom + (self.config.sample_height - 0.1 * self.config.sample_height))
-        else:
-            target = int(self.config.sample_bottom + 1.1 * self.config.sample_height)
+        target = sample_dropoff_position(self.config.sample_bottom, self.config.sample_height, use_xy_table=use_xy_table)
 
         result = self.move_motor(
             updown_axis,
@@ -822,6 +819,12 @@ class MotorSerialClient:
         # Backward-compatible shim for existing app code paths.
         result = self.move_motor(axis, position, speed, wait_for_stop=True)
         return f"target={result.target} final={result.final_position} success={result.success}"
+
+
+def sample_dropoff_position(sample_bottom: int, sample_height: int, *, use_xy_table: bool) -> int:
+    """VB6 passes the scaled drop-off count to MoveMotor as a Long."""
+    tenths = 10 * sample_bottom + (9 if use_xy_table else 11) * sample_height
+    return round(tenths / 10)
 
 
 def convert_hole_to_chain_position(hole: float, one_step: int) -> int:

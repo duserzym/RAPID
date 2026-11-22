@@ -2704,3 +2704,30 @@ VB6 INI import check retained fractional alignment and constructed three
 motor routes without opening a port. The Windows package passed offline
 startup and smoke checks for all six panels and six helpers. It is available
 locally under `.tmp/chain-queue-release/dist/RapidPyMain`.
+
+Native DC Motors diagnostics checkpoint (2026-11-22). Diagnostics now opens
+the accepted three-axis chain or four-axis XY profile and follows its slot
+geometry. The chain origin is operator-confirmed and recorded. XY uses its
+original home and verifies both target coordinates. Both references expire
+on reconnect. Lateral motion requires live lift clearance, and pickup and
+drop-off require a stopped specimen slot. The queue and diagnostics share
+VB6 drop-off count rounding. Stop recovery uses the persisted axes without
+relabeling or replaying movement. Physical chain and XY qualification remain
+open.
+
+The final staged source passed 1,455 tests in 737.536 seconds with process
+exit 0. Nine new tests cover the configured station modes, reference,
+readback and clearance, VB6 drop-off rounding, malformed routing settings,
+and stop recovery. An offscreen dialog check exercised the real Qt workers
+against injected serial replies. The Windows package passed offline startup
+and smoke checks for six panels and six helpers and is available locally
+under `.tmp/native-dc-release/dist/RapidPyMain`.
+
+The offscreen No-Comm queue completed 40 specimens and 80 steps in 38.304
+seconds with simulated pump power enabled. All 40 bundles included
+provenance and an artifact index, and the device lease was released. The
+33 ms Qt timer showed a 1,462 ms first interval during 1.459 seconds of
+synchronous queue admission. Its longest later interval was 221 ms.
+This records an admission responsiveness gap on the development host.
+Tests ran concurrently on that host. Physical endurance and the supported
+workstation matrix remain open.

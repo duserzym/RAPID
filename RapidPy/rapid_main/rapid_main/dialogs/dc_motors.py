@@ -225,6 +225,11 @@ class DCMotorDialog(QtWidgets.QDialog):
             bool(availability_check()) if callable(availability_check) else True
         )
         self._axes = self._discover_axes()
+        wiring = getattr(self._backend, 'wiring_summary', '')
+        self._fixed_wiring = isinstance(wiring, str) and bool(wiring)
+        self._chain_station = getattr(self._backend, 'use_xy_table', None) is False
+        slots = getattr(self._backend, 'slot_range', None)
+        self._station_slots = slots if isinstance(slots, tuple) else None
         self._connected = False
         self._default_port = port
         self._default_baud = baud
@@ -353,6 +358,7 @@ class DCMotorDialog(QtWidgets.QDialog):
         self.spin_btn.clicked.connect(self._spin_turning)
         self.goto_hole_btn.clicked.connect(self._goto_hole)
         self.read_hole_btn.clicked.connect(self._read_hole)
+        self.reference_chain_btn.clicked.connect(self._reference_chain_slot)
         self.home_top_btn.clicked.connect(self._home_to_top)
         self.home_xy_btn.clicked.connect(self._home_xy_to_center)
         self.corner_btn.clicked.connect(self._move_xy_to_corner)
@@ -375,9 +381,10 @@ class DCMotorDialog(QtWidgets.QDialog):
             (self.move_btn, "Move selected motor axis", "Moves physical hardware when a live backend is connected."),
             (self.spin_rps, "Turning motor rotations per second", "Requested turning speed."),
             (self.spin_btn, "Spin turning motor", "Moves physical turning hardware for the configured duration when connected."),
-            (self.hole_spin, "Target sample changer hole", "Target changer position from hole 1 through 101."),
+            (self.hole_spin, "Target sample changer hole", "Select a target from the displayed changer slot range."),
             (self.goto_hole_btn, "Move changer to target hole", "Moves physical changer hardware when connected."),
             (self.read_hole_btn, "Read current changer hole", "Reads changer encoder position without commanding motion."),
+            (self.reference_chain_btn, "Set the physical chain reference", "Records the marked slot under the empty rod."),
             (self.home_top_btn, "Home vertical axis to top", "Homes physical vertical hardware when connected."),
             (self.home_xy_btn, "Home XY axes to center", "Homes physical XY hardware when connected."),
             (self.corner_btn, "Move XY axes to corner", "Moves physical XY hardware when connected."),
@@ -544,12 +551,11 @@ class DCMotorDialog(QtWidgets.QDialog):
         self._baud_row.addWidget(self.baud_combo)
         self._baud_row.addStretch(1)
         conn_layout.addLayout(self._baud_row)
-        wiring = getattr(self._backend, "wiring_summary", "")
-        if isinstance(wiring, str) and wiring:
+        if self._fixed_wiring:
             self.port_edit.setReadOnly(True)
             self.baud_combo.setCurrentText(str(self._backend._station_baud))
             self.baud_combo.setEnabled(False)
-            wiring_label = QtWidgets.QLabel(wiring)
+            wiring_label = QtWidgets.QLabel(self._backend.wiring_summary)
             wiring_label.setWordWrap(True)
             conn_layout.addWidget(wiring_label)
 
@@ -581,19 +587,24 @@ class DCMotorDialog(QtWidgets.QDialog):
         motion_layout.addLayout(spin_form)
 
         self.hole_spin = QtWidgets.QDoubleSpinBox()
-        self.hole_spin.setRange(1.0, 101.0)
-        self.hole_spin.setDecimals(1)
+        self.hole_spin.setRange(*(self._station_slots or (1, 101)))
+        self.hole_spin.setDecimals(0 if self._station_slots else 1)
         self.goto_hole_btn = QtWidgets.QPushButton("Changer Motor To Hole")
         self.read_hole_btn = QtWidgets.QPushButton("Read Changer Hole")
+        self.reference_chain_btn = QtWidgets.QPushButton('Set Chain Reference')
+        self.reference_chain_btn.setVisible(self._chain_station)
         hole_form = QtWidgets.QFormLayout()
         hole_form.addRow("Target Hole", self.hole_spin)
         hole_form.addRow("", self.goto_hole_btn)
         hole_form.addRow("", self.read_hole_btn)
+        hole_form.addRow(self.reference_chain_btn)
         motion_layout.addLayout(hole_form)
 
         self.home_top_btn = QtWidgets.QPushButton("Home Z to Top")
         self.home_xy_btn = QtWidgets.QPushButton("Home XY to Center")
         self.corner_btn = QtWidgets.QPushButton("Move XY to Corner")
+        self.home_xy_btn.setVisible(not self._chain_station)
+        self.corner_btn.setVisible(not self._chain_station)
         self.pickup_btn = QtWidgets.QPushButton("Sample Pickup")
         self.dropoff_btn = QtWidgets.QPushButton("Sample Dropoff")
 
@@ -1024,20 +1035,21 @@ class DCMotorDialog(QtWidgets.QDialog):
         self.connect_btn.setEnabled(self._backend_available and not self._connected)
         self.disconnect_btn.setEnabled(self._connected)
         self.port_edit.setEnabled(self._backend_available and not self._connected)
-        self.baud_combo.setEnabled(self._backend_available and not self._connected)
+        self.baud_combo.setEnabled(self._backend_available and not self._connected and not self._fixed_wiring)
         self.axis_combo.setEnabled(self._connected)
         for widget in (
             self.move_btn,
             self.spin_btn,
-            self.goto_hole_btn,
-            self.read_hole_btn,
             self.home_top_btn,
-            self.home_xy_btn,
-            self.corner_btn,
-            self.pickup_btn,
-            self.dropoff_btn,
         ):
             widget.setEnabled(self._connected)
+        slot_ok = self._connected and getattr(self._backend, 'can_address_slots', True) is True
+        for widget in (self.goto_hole_btn, self.read_hole_btn, self.pickup_btn, self.dropoff_btn):
+            widget.setEnabled(slot_ok)
+        xy_controls = self._connected and not self._chain_station and (not self._fixed_wiring or self._station_slots is not None)
+        self.home_xy_btn.setEnabled(xy_controls)
+        self.corner_btn.setEnabled(xy_controls and slot_ok)
+        self.reference_chain_btn.setEnabled(self._connected and self._chain_station and self._station_slots is not None)
         if not self._backend_available:
             self._set_status(self._backend.status(), "unavailable")
         elif self._connected and self._backend.is_connected():
@@ -1051,11 +1063,11 @@ class DCMotorDialog(QtWidgets.QDialog):
             for widget in (self.connect_btn, self.disconnect_btn, self.port_edit, self.baud_combo,
                            self.axis_combo, self.move_btn, self.spin_btn, self.goto_hole_btn,
                            self.read_hole_btn, self.home_top_btn, self.home_xy_btn, self.corner_btn,
-                           self.pickup_btn, self.dropoff_btn):
+                           self.pickup_btn, self.dropoff_btn, self.reference_chain_btn):
                 widget.setEnabled(False)
         if recovery_required:
             for widget in (self.move_btn, self.spin_btn, self.goto_hole_btn, self.home_top_btn,
-                           self.home_xy_btn, self.corner_btn, self.pickup_btn, self.dropoff_btn):
+                           self.home_xy_btn, self.corner_btn, self.pickup_btn, self.dropoff_btn, self.reference_chain_btn):
                 widget.setEnabled(False)
         self.stop_motion_btn.setEnabled(self._command_thread is not None or active)
         self.recover_stop_btn.setEnabled(self._connected and not busy)
@@ -1093,12 +1105,31 @@ class DCMotorDialog(QtWidgets.QDialog):
         self.axis_combo.setCurrentText('Changer (X)')
         self._start_command('Read changer hole', lambda: self._backend.read_hole('Changer (X)'))
 
+    def _reference_chain_slot(self) -> None:
+        hole = int(self.hole_spin.value())
+        if QtWidgets.QMessageBox.question(self, 'Set Chain Reference',
+                f'Confirm that the rod is empty and clear and that marked chain slot {hole} is physically under it.',
+                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No) != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        self._start_command('Set chain reference',
+            lambda: self._backend.reference_chain_slot(hole=hole, empty_rod_confirmed=True))
+
     def _home_to_top(self) -> None:
         self.axis_combo.setCurrentText('Up/Down')
         self._start_command('Home to top', self._backend.home_to_top)
 
     def _home_xy_to_center(self) -> None:
-        self._start_command('Home XY to center', self._backend.home_xy_to_center)
+        action = self._backend.home_xy_to_center
+        if self._fixed_wiring:
+            if QtWidgets.QMessageBox.question(self, 'Home the XY Station',
+                    'Confirm that the rod is empty and the changer is mechanically clear.',
+                    QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                    QtWidgets.QMessageBox.StandardButton.No) != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+            self._start_command('Home XY to center', lambda: action(empty_rod_confirmed=True))
+        else:
+            self._start_command('Home XY to center', action)
 
     def _move_xy_to_corner(self) -> None:
         self._start_command('Move XY to corner', self._backend.move_xy_to_corner)
@@ -1107,7 +1138,7 @@ class DCMotorDialog(QtWidgets.QDialog):
         self._start_command('Sample pickup', self._backend.sample_pickup)
 
     def _sample_dropoff(self) -> None:
-        self._start_command('Sample dropoff', lambda: self._backend.sample_dropoff(use_xy_table=True))
+        self._start_command('Sample dropoff', self._backend.sample_dropoff)
 
     @QtCore.Slot(object)
     def _on_telemetry(self, sample: object) -> None:

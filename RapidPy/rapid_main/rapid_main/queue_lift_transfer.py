@@ -5,6 +5,7 @@ import math
 import json
 import time
 
+from rapidpy_common.hardware import sample_dropoff_position
 from rapidpy_common.hardware_safety import HardwareSafetyError
 from .queue_station import _integer
 from .queue_table_motion import QueueTableMoveRecord
@@ -97,11 +98,9 @@ class QueueLiftTransfer:
 
     def _dropoff_target(self, state):
         bottom = self.table.motor.config.sample_bottom
-        if self.table.geometry.use_xy_table:
-            return int(bottom + .9 * state.sample_height)
-        target = round(bottom + 1.1 * state.sample_height)
+        target = sample_dropoff_position(bottom, state.sample_height, use_xy_table=self.table.geometry.use_xy_table)
         if not bottom < target < 0:
-            raise HardwareSafetyError('Measured specimen height places chain dropoff outside the lift envelope.')
+            raise HardwareSafetyError('Measured specimen height places dropoff outside the lift envelope.')
         return target
 
     def _delay(self, seconds):

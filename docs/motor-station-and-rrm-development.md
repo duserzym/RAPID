@@ -29,6 +29,17 @@ leaves its motor transport unavailable. The Settings and manual motor panels
 show imported wiring; percentage speed and single-port controls cannot silently
 override the imported native station profile.
 
+The integrated DC Motors panel uses the same calibrated slot geometry for
+its manual controls. XY references require stopped counts and both positive
+limit switches at the accepted home. XY slot commands use both imported
+coordinates. Chain diagnostics use one changer axis and an explicit physical
+slot reference. Both references last for the current connection. Changer
+motion verifies the lift top switch and stopped count clearance, including
+direct lateral moves. Pickup verifies specimen contact and drop-off uses the
+appropriate XY or chain height. Both routes use the legacy signed count
+rounding. **Recover Verify Stopped** uses the original persisted motor axes
+and issues stop and readback commands.
+
 ## RRM
 
 Executable labels carry both AF field and signed spin speed:

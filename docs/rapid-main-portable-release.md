@@ -96,6 +96,15 @@ initial loading and tray flips. The optional return commands park at the
 first specimen slot in the selected order. After an interruption, use the
 same recovery and shutdown commands described above.
 
+In **Diagnostics > DC Motors**, imported stations show their participating
+axes and fixed wiring. To use calibrated slots on an XY station, confirm the
+empty rod and use **Home XY to Center**. On a chain station, select the marked
+slot currently under the empty rod and use **Set Chain Reference**. Repeat
+the reference after reconnecting. Changer movement verifies lift clearance.
+Pickup and drop-off use the current verified specimen slot, with drop-off
+height calculated for the imported station mode. This panel moves motors.
+The native queue manages vacuum grip and specimen release.
+
 Calibration Center records proposals, approval, expiry/invalidation, and
 rollback. Review/approve calibration before using its coefficients. Help →
 “Where did this VB6 control go?” supplies the searchable transition map.

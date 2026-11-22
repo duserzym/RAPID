@@ -26,6 +26,7 @@ from rapidpy_common.hardware import (
     MotorTelemetry,
     MotorControllerConfig,
     convert_position_to_hole,
+    sample_dropoff_position,
 )
 from rapid_main.config import (
     AfDemagConfig,
@@ -1603,14 +1604,9 @@ class DCMotorNoCommBackend(_BaseBackend, DCMotorBackend):
 def _guard_dc_motor_motion(method):
     @wraps(method)
     def guarded(self, *args, **kwargs):
-        names = {'move_motor': (args[0] if args else kwargs.get('axis'),),
-                 'spin_turning': ('Turning',), 'goto_hole': ('Changer (X)',),
-                 'home_to_top': ('Up/Down',), 'sample_pickup': ('Up/Down',), 'sample_dropoff': ('Up/Down',),
-                 'home_xy_to_center': ('Changer (X)', 'Changer (Y)', 'Up/Down'),
-                 'move_xy_to_corner': ('Changer (X)', 'Changer (Y)', 'Up/Down')}
+        names = {'spin_turning': ('Turning',), 'home_to_top': ('Up/Down',)}
         return self._run_motion(method.__name__, names[method.__name__],
-            {'args': list(args), 'kwargs': kwargs}, lambda: method(self, *args, **kwargs),
-            asynchronous=method.__name__ == 'move_motor' and kwargs.get('wait_for_stop') is False)
+            {'args': list(args), 'kwargs': kwargs}, lambda _observations: method(self, *args, **kwargs))
     return guarded
 
 
@@ -1639,17 +1635,41 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         }
         self.wiring_summary = ""
         self._station_baud = None
+        self.use_xy_table = None
+        self._slot_geometry = None
+        self._slot_error = ''
+        self._reference_connection_id = None
         if config is not None and config.motor_station.calibration_source:
             from .hardware_contracts import _build_motor_controller_config
+            from .queue_station import QueueStationGeometry
             from rapidpy_common.motor_routing import RoutedMotorSerialClient
             station = config.motor_station
+            if type(station.baud) is not int or station.baud <= 0:
+                raise HardwareUnavailableError('Restore the accepted motor station baud rate.')
+            self.use_xy_table = station.use_xy_table
+            axis_keys = station.motor_axis_keys()
+            bindings = {}
             for label, key in (("Changer (X)", "changer_x"), ("Turning", "turning"), ("Up/Down", "updown"), ("Changer (Y)", "changer_y")):
+                if key not in axis_keys:
+                    self._axes.pop(label)
+                    continue
                 axis = self._axes[label]
                 axis.port = station.ports.get(key, "")
                 axis.address = station.addresses.get(key, 0)
+                bindings[key] = axis
+            if not station.routing_matches(bindings):
+                raise HardwareUnavailableError('Restore the accepted DC motor station wiring.')
             self._client = RoutedMotorSerialClient(_build_motor_controller_config(config), list(self._axes.values()), trace=self._trace)
             self._station_baud = station.baud
             self.wiring_summary = "; ".join(f"{label}: {axis.port} @{axis.address}" for label, axis in self._axes.items())
+            try:
+                geometry = QueueStationGeometry.from_config(config, use_xy_table=self.use_xy_table)
+                if not geometry.use_xy_table and (abs(self._client.config.sample_hole_alignment_offset) >= .5
+                        or abs(geometry.one_step) * geometry.slot_max >= 2**31):
+                    raise ValueError('Chain alignment or full-loop travel exceeds the calibrated count envelope.')
+                self._slot_geometry = geometry
+            except ValueError as exc:
+                self._slot_error = str(exc)
         self._port = ""
         self._baud = 9600
         self._connected = False
@@ -1669,6 +1689,17 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
     @property
     def operation_active(self):
         return self._operation_active
+
+    @property
+    def slot_range(self):
+        geometry = self._slot_geometry
+        return (geometry.slot_min, geometry.slot_max) if geometry is not None else None
+
+    @property
+    def can_address_slots(self):
+        return self._station_baud is None or (
+            self._slot_geometry is not None and self._reference_connection_id is not None
+            and self._reference_connection_id == self._client._connection_id)
 
     @property
     def can_recover_pending(self):
@@ -1711,7 +1742,7 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         try:
             observations = manager.__enter__()
             entered = True
-            result = call()
+            result = call(observations)
             observations.append({'result': result})
             if self._client._motion_cancel_check():
                 raise HardwareError('DC motor command stopped or its operation deadline expired.')
@@ -1816,6 +1847,7 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
     def connect(self, port: str, baudrate: int) -> None:
         if self.operation_active:
             raise HardwareError('Wait for DC motor cleanup before changing connections.')
+        self._reference_connection_id = None
         self._port = str(port)
         self._baud = int(baudrate)
         if self._station_baud is not None:
@@ -1836,6 +1868,7 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
     def disconnect(self) -> None:
         if self.operation_active:
             raise HardwareError('Wait for verified DC motor cleanup before disconnecting.')
+        self._reference_connection_id = None
         try:
             self._client.disconnect()
         finally:
@@ -1851,17 +1884,25 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         if not self.is_connected():
             raise HardwareError("Motor controller is not connected.")
 
-    @_guard_dc_motor_motion
     def move_motor(self, axis: str, *, target: int, speed: int, wait_for_stop: bool = True) -> tuple[int, int, bool]:
         axis_cfg = self._axes.get(axis)
         if axis_cfg is None:
             raise ValueError(f"Unknown axis '{axis}'.")
-        self._require_connected()
-        result = self._client.move_motor(axis_cfg, target, int(speed), wait_for_stop=bool(wait_for_stop))
-        self._require_move_success(f"move {axis}", result)
-        if wait_for_stop:
-            self._require_target(result)
-        return (result.target, result.final_position, result.success)
+        lateral = self._station_baud is not None and axis in ('Changer (X)', 'Changer (Y)')
+        names = (axis, 'Up/Down') if lateral else (axis,)
+
+        def move(observations):
+            if lateral:
+                self._require_lift_clearance(self._observe_stopped(names, observations, 'before_move'))
+            result = self._client.move_motor(axis_cfg, target, int(speed), wait_for_stop=bool(wait_for_stop))
+            self._require_move_success(f"move {axis}", result)
+            if wait_for_stop:
+                self._require_target(result)
+            return result.target, result.final_position, result.success
+
+        return self._run_motion('move_motor', names,
+            {'args': [axis], 'kwargs': dict(target=target, speed=speed, wait_for_stop=wait_for_stop)},
+            move, asynchronous=wait_for_stop is False)
 
     @_guard_dc_motor_motion
     def spin_turning(self, *, speed_rps: float, duration_s: float = 60.0) -> tuple[int, int, bool]:
@@ -1878,30 +1919,159 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
             raise HardwareError('Turning spin stopped short of the requested target.')
         return (result.target, position, True)
 
-    @_guard_dc_motor_motion
+    def _require_slot_geometry(self):
+        if self._slot_geometry is None:
+            raise HardwareError(self._slot_error or 'Import the original changer geometry before using calibrated slots.')
+        return self._slot_geometry
+
+    def _require_slot_reference(self):
+        self._require_slot_geometry()
+        if not self.can_address_slots:
+            raise HardwareError('Establish the changer reference on this connection before using calibrated slots.')
+
+    def _changer_labels(self):
+        return ('Changer (X)', 'Changer (Y)') if self.use_xy_table else ('Changer (X)',)
+
+    def _observe_stopped(self, names, observations, phase):
+        from rapidpy_common.motor_diagnostic_safety import verify_stopped_in_place
+        stopped, errors = {}, []
+        for name in names:
+            samples, failure = verify_stopped_in_place(self._client, self._axes[name])
+            stopped[name] = samples
+            if failure:
+                errors.append(f'{name}: {failure}')
+        observations.append(dict(phase=phase, axes=stopped))
+        if errors:
+            raise HardwareError('Stationary readbacks are unverified: ' + '; '.join(errors))
+        return {name: samples[-1]['position_raw'] for name, samples in stopped.items()}
+
+    def _require_lift_clearance(self, positions):
+        bottom = self._client.config.sample_bottom
+        if (bottom >= 0 or abs(positions['Up/Down']) > abs(bottom) * .1
+                or self._client.check_internal_status(self._axes['Up/Down'], 4) != 1):
+            raise HardwareError('Verify lift clearance and the live top switch before moving the changer.')
+
+    def _slot_from_readbacks(self, readbacks):
+        geometry = self._require_slot_geometry()
+        if geometry.use_xy_table:
+            return geometry.slot_from_xy_counts(readbacks['Changer (X)'], readbacks['Changer (Y)'])
+        return geometry.slot_from_counts(readbacks['Changer (X)'],
+            alignment_offset=self._client.config.sample_hole_alignment_offset)
+
+    def _run_changer_motion(self, action, parameters, call):
+        geometry = self._require_slot_geometry()
+        return self._run_motion(action, (*self._changer_labels(), 'Up/Down'),
+                                {**parameters, 'geometry': asdict(geometry)}, call)
+
+    def _observe_xy_limits(self, observations, phase):
+        limits = {}
+        for name, negative, positive in (('Changer (X)', 4, 5), ('Changer (Y)', 5, 6)):
+            limits[name] = tuple(self._client.check_internal_status(self._axes[name], bit) for bit in (negative, positive))
+        observations.append(dict(phase=phase, switches=limits))
+        if any(value not in {(0, 1), (1, 1), (1, 0)} for value in limits.values()):
+            raise HardwareError('The original XY limit switches must give consistent binary readbacks.')
+        return limits
+
+    def _legacy_hole_from_counts(self, counts):
+        return float(convert_position_to_hole(counts, self._client.config.slot_min,
+                                             self._client.config.slot_max, self._client.config.one_step))
+
     def goto_hole(self, *, hole: float) -> float:
-        self._require_connected()
-        result = self._client.changer_motor_to_hole(self._axes["Changer (X)"], float(hole), wait_for_stop=True)
-        self._require_move_success(f"move changer to hole {hole}", result)
-        self._require_target(result)
-        return float(convert_position_to_hole(
-            result.final_position,
-            slot_min=self._client.config.slot_min,
-            slot_max=self._client.config.slot_max,
-            one_step=self._client.config.one_step,
-        ))
+        if self._station_baud is None:
+            def move_legacy(_observations):
+                result = self._client.changer_motor_to_hole(self._axes['Changer (X)'], float(hole), wait_for_stop=True)
+                self._require_move_success(f'move changer to hole {hole}', result)
+                self._require_target(result)
+                return self._legacy_hole_from_counts(result.final_position)
+            return self._run_motion('goto_hole', ('Changer (X)',), {'kwargs': {'hole': hole}, 'args': []}, move_legacy)
+
+        self._require_slot_reference()
+        geometry = self._slot_geometry
+        if isinstance(hole, bool) or not isinstance(hole, (int, float)) or not math.isfinite(hole) or int(hole) != hole:
+            raise HardwareError('Select a whole numbered station slot.')
+        slot = int(hole)
+        labels = self._changer_labels()
+        names = (*labels, 'Up/Down')
+        offset = self._client.config.sample_hole_alignment_offset
+        if geometry.use_xy_table:
+            targets_xy = dict(zip(labels, geometry.xy_target(slot)))
+            if self._slot_from_readbacks(targets_xy) != slot:
+                raise HardwareError('The XY targets must identify the selected calibrated slot.')
+        else:
+            geometry.chain_reference_counts(slot, offset)
+            targets_xy = None
+
+        def move(observations):
+            self._require_slot_reference()
+            initial = self._observe_stopped(names, observations, 'before_move')
+            self._require_lift_clearance(initial)
+            targets = targets_xy
+            if targets is None:
+                counts = geometry.chain_target(slot, initial['Changer (X)'], offset)
+                targets = {'Changer (X)': counts}
+                if self._slot_from_readbacks(targets) != slot:
+                    raise HardwareError('The chain target must identify the selected calibrated slot.')
+            observations.append(dict(phase='command_targets', counts=targets))
+            for name, target in targets.items():
+                result = self._client.move_motor(self._axes[name], target, self._client.config.changer_speed,
+                                                wait_for_stop=False)
+                self._require_move_success(f'move {name} to slot {slot}', result)
+            for name in targets:
+                self._client.wait_for_motor_stop(self._axes[name])
+            final = self._observe_stopped(names, observations, 'after_move')
+            self._require_lift_clearance(final)
+            if (self._slot_from_readbacks(final) != slot
+                    or any(abs(final[name] - target) > abs(geometry.one_step) * .02 for name, target in targets.items())):
+                raise HardwareError('Stopped changer readbacks do not match the selected calibrated slot.')
+            return float(slot)
+
+        try:
+            return self._run_changer_motion('goto_hole', {'slot': slot, 'xy_targets': targets_xy}, move)
+        except Exception:
+            self._reference_connection_id = None
+            raise
 
     def read_hole(self, axis: str) -> float:
         self._require_connected()
         if axis != "Changer (X)":
             raise ValueError(f"Reading hole is only supported on Changer (X), got '{axis}'.")
-        pos = self._client.read_position(self._axes["Changer (X)"])
-        return float(convert_position_to_hole(
-            pos,
-            slot_min=self._client.config.slot_min,
-            slot_max=self._client.config.slot_max,
-            one_step=self._client.config.one_step,
-        ))
+        if self._station_baud is None:
+            return self._legacy_hole_from_counts(self._client.read_position(self._axes[axis]))
+        with self._state_lock:
+            if self._operation_active:
+                raise HardwareError('Wait for the active diagnostic motion before reading the slot.')
+            self._require_slot_reference()
+            with self._client._io_lock:
+                positions = {name: self._client.read_position(self._axes[name]) for name in self._changer_labels()}
+            return float(self._slot_from_readbacks(positions))
+
+    def reference_chain_slot(self, *, hole: int, empty_rod_confirmed: bool = False) -> int:
+        geometry = self._require_slot_geometry()
+        if geometry.use_xy_table or empty_rod_confirmed is not True or type(hole) is not int:
+            raise HardwareError('Confirm the empty rod and physical chain slot before establishing the chain reference.')
+        offset = self._client.config.sample_hole_alignment_offset
+        target = geometry.chain_reference_counts(hole, offset)
+        connection_id = self._client._connection_id
+        if self._slot_from_readbacks({'Changer (X)': target}) != hole:
+            raise HardwareError('The chain reference counts must identify the confirmed slot.')
+        names = ('Changer (X)', 'Up/Down')
+        self._reference_connection_id = None
+
+        def reference(observations):
+            initial = self._observe_stopped(names, observations, 'before_reference')
+            self._require_lift_clearance(initial)
+            tolerance = abs(geometry.one_step) * .02
+            self._client.relabel_pos(self._axes['Changer (X)'], target, tolerance=min(10, tolerance))
+            final = self._observe_stopped(names, observations, 'after_reference')
+            self._require_lift_clearance(final)
+            if abs(final['Changer (X)'] - target) > tolerance or self._slot_from_readbacks(final) != hole:
+                raise HardwareError('Stopped chain counts do not verify the confirmed reference slot.')
+            return hole
+
+        result = self._run_changer_motion('reference_chain_slot',
+            dict(slot=hole, target_counts=target, empty_rod_confirmed=True), reference)
+        self._reference_connection_id = connection_id
+        return result
 
     @_guard_dc_motor_motion
     def home_to_top(self) -> None:
@@ -1909,45 +2079,119 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
         result = self._client.home_to_top(self._axes["Up/Down"])
         self._require_move_success("home Up/Down to top", result)
 
-    @_guard_dc_motor_motion
-    def home_xy_to_center(self) -> tuple[int, int]:
-        self._require_connected()
-        x_res, y_res = self._client.home_xy_to_center(
-            self._axes["Changer (X)"],
-            self._axes["Changer (Y)"],
-            self._axes["Up/Down"],
-        )
-        self._require_move_success("home Changer (X) to center", x_res)
-        self._require_move_success("home Changer (Y) to center", y_res)
-        return (int(x_res.final_position), int(y_res.final_position))
+    def home_xy_to_center(self, *, empty_rod_confirmed: bool = False) -> tuple[int, int]:
+        names = ('Changer (X)', 'Changer (Y)', 'Up/Down')
 
-    @_guard_dc_motor_motion
+        def home(_observations):
+            x_res, y_res = self._client.home_xy_to_center(*(self._axes[name] for name in names))
+            self._require_move_success('home Changer (X) to center', x_res)
+            self._require_move_success('home Changer (Y) to center', y_res)
+            return int(x_res.final_position), int(y_res.final_position)
+
+        if self._station_baud is None:
+            return self._run_motion('home_xy_to_center', names, {'args': [], 'kwargs': {}}, home)
+        geometry = self._require_slot_geometry()
+        if not geometry.use_xy_table or empty_rod_confirmed is not True:
+            raise HardwareError('Confirm the empty rod before referencing the imported XY station.')
+        connection_id = self._client._connection_id
+        self._reference_connection_id = None
+
+        def reference(observations):
+            self._observe_stopped(names, observations, 'before_home')
+            self._observe_xy_limits(observations, 'before_home_limits')
+            home(observations)
+            stopped = self._observe_stopped(names, observations, 'after_home')
+            self._require_lift_clearance(stopped)
+            positions = tuple(stopped[name] for name in names[:2])
+            switches = self._observe_xy_limits(observations, 'home_limits')
+            if any(value != (1, 0) for value in switches.values()) or any(
+                    abs(actual - expected) > abs(geometry.one_step) * .02
+                    for actual, expected in zip(positions, geometry.xy_home)):
+                raise HardwareError('XY limits and stopped counts must match the original calibrated home.')
+            return positions
+
+        result = self._run_changer_motion('home_xy_to_center', {'empty_rod_confirmed': True}, reference)
+        self._reference_connection_id = connection_id
+        return result
+
     def move_xy_to_corner(self) -> tuple[int, int]:
-        self._require_connected()
-        x_res, y_res = self._client.move_xy_to_corner(
-            self._axes["Changer (X)"],
-            self._axes["Changer (Y)"],
-            self._axes["Up/Down"],
-        )
-        self._require_move_success("move Changer (X) to corner", x_res)
-        self._require_move_success("move Changer (Y) to corner", y_res)
-        return (int(x_res.final_position), int(y_res.final_position))
+        names = ('Changer (X)', 'Changer (Y)', 'Up/Down')
 
-    @_guard_dc_motor_motion
+        def corner(_observations):
+            x_res, y_res = self._client.move_xy_to_corner(*(self._axes[name] for name in names))
+            self._require_move_success('move Changer (X) to corner', x_res)
+            self._require_move_success('move Changer (Y) to corner', y_res)
+            return int(x_res.final_position), int(y_res.final_position)
+
+        if self._station_baud is None:
+            return self._run_motion('move_xy_to_corner', names, {'args': [], 'kwargs': {}}, corner)
+        if self.use_xy_table is not True:
+            raise HardwareError('The loading corner requires the original XY station.')
+        self._require_slot_reference()
+
+        def move(observations):
+            self._require_slot_reference()
+            self._require_lift_clearance(self._observe_stopped(names, observations, 'before_corner'))
+            self._observe_xy_limits(observations, 'before_corner_limits')
+            corner(observations)
+            stopped = self._observe_stopped(names, observations, 'after_corner')
+            self._require_lift_clearance(stopped)
+            limits = self._observe_xy_limits(observations, 'corner_limits')
+            if any(value != (0, 1) for value in limits.values()):
+                raise HardwareError('Both stopped XY axes must remain at their negative loading-corner limits.')
+            return tuple(stopped[name] for name in names[:2])
+
+        return self._run_changer_motion('move_xy_to_corner', {}, move)
+
+    def _run_sample_lift(self, action, parameters, command, *, pickup=False):
+        if self._station_baud is None:
+            def legacy(_observations):
+                result = command()
+                self._require_move_success(action, result)
+                self._require_target(result)
+                return result.target, result.final_position, result.success
+            return self._run_motion(action, ('Up/Down',), parameters, legacy)
+        self._require_slot_reference()
+        names = (*self._changer_labels(), 'Up/Down')
+
+        def lift(observations):
+            self._require_slot_reference()
+            initial = self._observe_stopped(names, observations, 'before_lift')
+            self._require_lift_clearance(initial)
+            slot = self._slot_geometry.specimen_slot(self._slot_from_readbacks(initial))
+            result = command()
+            self._require_move_success(action, result)
+            final = self._observe_stopped(names, observations, 'after_lift')
+            position = final['Up/Down']
+            if self._slot_from_readbacks(final) != slot or self._client.check_internal_status(self._axes['Up/Down'], 4) != 0:
+                raise HardwareError('The original specimen slot and lowered lift must remain verified.')
+            if pickup:
+                # Pickup stops on specimen contact, above the programmed bottom.
+                if not self._client.config.sample_bottom < position < 0 or abs(position - result.final_position) > 150:
+                    raise HardwareError('Pickup contact was outside the calibrated specimen lift range.')
+            elif abs(position - result.target) > 150:
+                raise HardwareError('Lift stopped short of the calibrated drop-off target.')
+            return result.target, position, True
+
+        return self._run_changer_motion(action, parameters, lift)
+
     def sample_pickup(self) -> tuple[int, int, bool]:
-        self._require_connected()
-        result = self._client.sample_pickup(self._axes["Up/Down"])
-        self._require_move_success("sample pickup", result)
-        self._require_target(result)
-        return (result.target, result.final_position, result.success)
+        return self._run_sample_lift('sample_pickup', {'args': [], 'kwargs': {}},
+                                     lambda: self._client.sample_pickup(self._axes['Up/Down']), pickup=True)
 
-    @_guard_dc_motor_motion
-    def sample_dropoff(self, use_xy_table: bool = True) -> tuple[int, int, bool]:
-        self._require_connected()
-        result = self._client.sample_dropoff(self._axes["Up/Down"], use_xy_table=bool(use_xy_table))
-        self._require_move_success("sample dropoff", result)
-        self._require_target(result)
-        return (result.target, result.final_position, result.success)
+    def sample_dropoff(self, use_xy_table: bool | None = None) -> tuple[int, int, bool]:
+        mode = self.use_xy_table if self._station_baud is not None else use_xy_table
+        if self._station_baud is not None and (type(mode) is not bool or
+                (use_xy_table is not None and use_xy_table is not mode)):
+            raise HardwareError('The drop-off mode must match the imported station.')
+        use_xy = bool(mode) if mode is not None else True
+        if self._station_baud is not None:
+            config = self._client.config
+            target = sample_dropoff_position(config.sample_bottom, config.sample_height, use_xy_table=use_xy)
+            if not config.sample_bottom < target < 0:
+                raise HardwareError('The configured specimen height places drop-off outside the lift envelope.')
+        return self._run_sample_lift('sample_dropoff', {'use_xy_table': use_xy},
+            lambda: self._client.sample_dropoff(self._axes['Up/Down'], use_xy_table=use_xy))
 
     def read_telemetry(self, axis: str) -> MotorTelemetry:
         axis_cfg = self._axes.get(axis)
@@ -1976,7 +2220,11 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
                 return 'Recovery required: verify the original motor axes stopped.'
             if self._status.startswith('Asynchronous move'):
                 return self._status
-            return f"Connected to {self.wiring_summary or self._port}:{self._baud}"
+            connected = f"Connected to {self.wiring_summary or self._port}:{self._baud}"
+            if self._station_baud is not None and not self.can_address_slots:
+                reference = 'Set the physical chain reference.' if self.use_xy_table is False else 'Home the XY station.'
+                return f'{connected}. {self._slot_error or reference}'
+            return connected
         return "DC motor adapter ready (disconnected)"
 
 
