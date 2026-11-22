@@ -63,6 +63,7 @@ from rapid_main.manual_run_recovery import (clear_manual_run, has_interrupted_ru
 from rapid_main.measurement_progress import MeasurementProgress
 from rapid_main.queue_pair import QueueSide
 from rapid_main.io.rmg_writer import RmgTreatment, describe_rmg_treatment
+from rapid_main.quicklook import publish_measurement_quicklook
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend, config_fingerprint
 from rapid_main.io.bundle_publication import _digest
 from rapid_main.io.specimen_reader import read_specimen
@@ -249,6 +250,8 @@ class MeasurementWorker(QtCore.QThread):
         self._holder_recorded_iso = ""
         self._skipped_labels: list[str] = []
         self._completed_labels: list[str] = []
+        self._quicklook_steps: list[MeasurementStep] = []
+        self.quicklook_error = ""
         self._error_messages: list[str] = []
         self._recovery_count = 0
         self._published_paths: dict[str, str] = {}
@@ -330,7 +333,16 @@ class MeasurementWorker(QtCore.QThread):
         except Exception as exc:
             self._record_worker_failure(exc)
         finally:
-            self.run_finished.emit(self._pending_run_result is not False or bool(self._error_messages))
+            aborted = self._pending_run_result is not False or bool(self._error_messages)
+            # Finish the optional diagnostic before the UI can advance the queue or back up this bundle.
+            if not aborted and self._quicklook_steps:
+                try:
+                    publish_measurement_quicklook(
+                        self._publish_dir, self._quicklook_steps, simulated=self._simulated,
+                    )
+                except Exception as exc:
+                    self.quicklook_error = str(exc) or type(exc).__name__
+            self.run_finished.emit(aborted)
 
     def _record_worker_failure(self, exc):
         phase = WorkflowPhase.PREFLIGHT if self._pending_run_result is None else WorkflowPhase.RETURNING
@@ -427,6 +439,7 @@ class MeasurementWorker(QtCore.QThread):
             susceptibility_records.extend(checkpoint['susceptibility'])
             bundle.set_provenance(**self._base_provenance())
             _, retained_steps = read_specimen(bundle._staged.specimen_file, specimen_name=self._meta.name)
+            self._quicklook_steps.extend(retained_steps)
             self.checkpoint_loaded.emit(retained_steps)
             self._emit_warning(f'Continuing at step {self._restored_count + 1}. The saved steps will not be repeated.')
 
@@ -723,6 +736,7 @@ class MeasurementWorker(QtCore.QThread):
                 holder_status=self._backend_holder_status(),
                 collection_stats=self._last_collection_stats,
             )
+            self._quicklook_steps.append(step)
             self.step_complete.emit(result)
             self._completed_labels.append(label)
 
@@ -1707,8 +1721,8 @@ class MeasurementWorker(QtCore.QThread):
                     "quicklook_summary",
                     self._artifact_path("quicklook.json"),
                     required=False,
-                    producer="MeasurementPanel",
-                    description="Panel-level quicklook plot contract, written after completed UI runs.",
+                    producer="MeasurementWorker",
+                    description="Quicklook plot data from the successfully completed measurement.",
                 ),
             ],
             "hardware_validation_required": True,

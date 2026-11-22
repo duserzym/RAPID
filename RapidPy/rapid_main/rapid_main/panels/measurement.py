@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime
-import hashlib
-import json
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -18,7 +16,6 @@ from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.specimen_metadata import resolve_specimen_meta, validate_specimen_provenance
 from rapid_main.device_ownership import DeviceOwnershipError
 from rapid_main.dialogs.external_thermal import ExternalThermalDialog
-from rapid_main.dialogs.plots import build_quicklook_summary, write_quicklook_json
 from rapid_main.geometry import Angular3D, Cartesian3D, angular3d_to_cartesian3d
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend, config_fingerprint
 from rapid_main.io.measurement_bundle import SIMULATED_SUBDIR, validate_measurement_output
@@ -1155,58 +1152,6 @@ class MeasurementPanel(QtWidgets.QWidget):
         if self._plot_fallback is not None:
             self._plot_fallback.clear()
 
-    def _write_quicklook_sidecar(self) -> Path | None:
-        if self._current_output_dir is None or not self._completed_steps:
-            return None
-        summary = build_quicklook_summary(
-            [step.sdx for step in self._completed_steps],
-            [step.sdy for step in self._completed_steps],
-            [step.sdz for step in self._completed_steps],
-            [step.demag_label for step in self._completed_steps],
-        )
-        summary["provenance"] = {
-            "kind": "simulated" if self._current_run_simulated else "measurement",
-            "simulated": self._current_run_simulated,
-            "statement": (
-                "Current run used a simulated backend; not hardware evidence."
-                if self._current_run_simulated
-                else "Measurement quicklook data."
-            ),
-        }
-        written = write_quicklook_json(
-            self._current_output_dir / "quicklook.json",
-            summary,
-        )
-        self._refresh_quicklook_artifact_index(written)
-        return written
-
-    def _refresh_quicklook_artifact_index(self, quicklook_path: Path) -> None:
-        """Reconcile the worker index after the UI publishes its quicklook."""
-
-        index_path = quicklook_path.parent / "artifact_index.json"
-        if not index_path.exists():
-            return
-        payload = json.loads(index_path.read_text(encoding="utf-8"))
-        artifacts = payload.get("artifacts")
-        if not isinstance(artifacts, list):
-            raise ValueError("Artifact index does not contain an artifacts list.")
-        matching = [
-            entry
-            for entry in artifacts
-            if isinstance(entry, dict) and entry.get("name") == "quicklook_summary"
-        ]
-        if len(matching) != 1:
-            raise ValueError(
-                "Artifact index must contain exactly one quicklook_summary entry."
-            )
-        entry = matching[0]
-        entry["relative_path"] = quicklook_path.name
-        entry["exists"] = True
-        entry["size_bytes"] = quicklook_path.stat().st_size
-        with quicklook_path.open("rb") as stream:
-            entry["sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
-        write_quicklook_json(index_path, payload)
-
     @QtCore.Slot(bool)
     def _on_run_finished(self, aborted: bool) -> None:
         self._pending_run_finished = aborted
@@ -1223,6 +1168,7 @@ class MeasurementPanel(QtWidgets.QWidget):
         aborted, self._pending_run_finished = self._pending_run_finished, None
         sample_name = self._current_sample
         saved_checkpoint = getattr(self._worker, 'checkpoint_saved', False)
+        sidecar_error = getattr(self._worker, 'quicklook_error', '')
         if self._worker is not None:
             self._worker.deleteLater()
         self._worker = None
@@ -1231,20 +1177,14 @@ class MeasurementPanel(QtWidgets.QWidget):
         self._continue_run_btn.setEnabled(True)
         self._review_run_btn.setEnabled(True)
         self._release_measurement_ownership()
-        sidecar_error: Exception | None = None
-        if not aborted:
-            try:
-                self._write_quicklook_sidecar()
-            except Exception as exc:  # pragma: no cover - filesystem failure path
-                sidecar_error = exc
-            if self._current_backup_dir and self._current_output_dir is not None:
-                self._backups.submit(sample_name, self._current_output_dir, self._current_backup_dir)
+        if not aborted and self._current_backup_dir and self._current_output_dir is not None:
+            self._backups.submit(sample_name, self._current_output_dir, self._current_backup_dir)
         mw = self.window()
         if hasattr(mw, "stop_run"):
             mw.stop_run()
         msg = ('Run saved. Use Continue Saved Run to start the next step.' if saved_checkpoint
                else 'Run halted.' if aborted else 'Sequence complete!')
-        if sidecar_error is not None:
+        if sidecar_error:
             msg = f"{msg} Quicklook sidecar not written: {sidecar_error}"
         if hasattr(mw, "set_status"):
             mw.set_status(msg)

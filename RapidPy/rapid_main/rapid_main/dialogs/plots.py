@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import csv
-import json
 import math
-import os
 from pathlib import Path
-import tempfile
 from typing import Sequence
 
 try:
@@ -15,7 +12,7 @@ except ImportError:
 
 from PySide6 import QtCore, QtGui, QtWidgets
 from rapidpy_common.ui import clamp_window_geometry
-from rapid_main.analysis import fit_principal_axis, moment_value_statistics
+from rapid_main.quicklook import _atomic_write_text, build_quicklook_summary, write_quicklook_json
 from rapid_main.glass_theme import set_semantic_status
 
 try:
@@ -32,104 +29,6 @@ def _equal_area(inc_deg: float, dec_deg: float) -> tuple[float, float]:
     dec = math.radians(dec_deg)
     r = math.sqrt(2.0) * math.sin((math.pi / 2.0 - inc) / 2.0)
     return r * math.sin(dec), r * math.cos(dec)
-
-
-def _cart_to_inc_dec(x: float, y: float, z: float) -> tuple[float, float]:
-    """Convert Cartesian (N, E, Up) to (Inc, Dec) in degrees."""
-    h = math.hypot(x, y)
-    inc = math.degrees(math.atan2(-z, h))  # positive = below horizontal
-    dec = math.degrees(math.atan2(y, x)) % 360.0
-    return inc, dec
-
-
-def build_quicklook_summary(
-    north: Sequence[float],
-    east: Sequence[float],
-    up: Sequence[float],
-    labels: Sequence[str],
-) -> dict[str, object]:
-    """Build the backend-independent quicklook payload without creating a dialog."""
-
-    n = list(north)
-    e = list(east)
-    u = list(up)
-    step_labels = list(labels)
-    lengths = {len(n), len(e), len(u), len(step_labels)}
-    if len(lengths) != 1:
-        raise ValueError(
-            "Quicklook north/east/up vectors and labels must have equal lengths "
-            f"(got {len(n)}, {len(e)}, {len(u)}, {len(step_labels)})."
-        )
-    for axis, values in (("north", n), ("east", e), ("up", u)):
-        for index, value in enumerate(values, start=1):
-            if not math.isfinite(float(value)):
-                raise ValueError(f"Quicklook {axis} value {index} is not finite.")
-    down = [-z for z in u]
-    intensity = [math.sqrt(x**2 + y**2 + z**2) for x, y, z in zip(n, e, u)]
-    inc: list[float] = []
-    dec: list[float] = []
-    for x, y, z in zip(n, e, u):
-        i, d = _cart_to_inc_dec(x, y, z)
-        inc.append(i)
-        dec.append(d)
-    principal = fit_principal_axis(zip(n, e, down))
-    moment_stats = moment_value_statistics(intensity)
-    decay = moment_stats.decay
-    return {
-        "step_count": len(step_labels),
-        "labels": step_labels,
-        "vectors": {
-            "north": n,
-            "east": e,
-            "up": u,
-            "down": down,
-        },
-        "intensity": intensity,
-        "inclination": inc,
-        "declination": dec,
-        "analysis": {
-            "principal_axis": {
-                "coordinate_convention": "north_east_down",
-                "count": principal.count,
-                "centroid": list(principal.centroid),
-                "axis": list(principal.axis),
-                "declination_deg": principal.declination_deg,
-                "inclination_deg": principal.inclination_deg,
-                "primary_variance": principal.primary_variance,
-                "total_variance": principal.total_variance,
-                "variance_fraction": principal.variance_fraction,
-                "rms_perpendicular": principal.rms_perpendicular,
-                "degenerate": principal.is_degenerate,
-            },
-            "moment_statistics": {
-                "count": moment_stats.count,
-                "minimum": moment_stats.minimum,
-                "maximum": moment_stats.maximum,
-                "mean": moment_stats.mean,
-                "median": moment_stats.median,
-                "population_stdev": moment_stats.population_stdev,
-            },
-            "decay": {
-                "initial": decay.initial,
-                "final": decay.final,
-                "final_ratio": decay.final_ratio,
-                "percent_loss": decay.percent_loss,
-                "per_step_ratios": list(decay.per_step_ratios),
-                "monotonic_nonincreasing": decay.monotonic_nonincreasing,
-                "log_decay_slope": decay.log_decay_slope,
-            },
-        },
-    }
-
-
-def write_quicklook_json(path: str | Path, summary: dict[str, object]) -> Path:
-    """Write a quicklook summary as a deterministic JSON sidecar artifact."""
-
-    target = Path(path)
-    return _atomic_write_text(
-        target,
-        json.dumps(summary, indent=2, sort_keys=True) + "\n",
-    )
 
 
 def write_quicklook_csv(path: str | Path, summary: dict[str, object]) -> Path:
@@ -213,30 +112,6 @@ def write_quicklook_csv(path: str | Path, summary: dict[str, object]) -> Path:
             ]
         )
     return _atomic_write_text(Path(path), output.getvalue())
-
-
-def _atomic_write_text(target: Path, text: str) -> Path:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            newline="",
-            prefix=f".{target.name}.",
-            suffix=".tmp",
-            dir=target.parent,
-            delete=False,
-        ) as handle:
-            temporary = Path(handle.name)
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, target)
-    finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
-    return target
 
 
 def _format_analysis_value(value: object, suffix: str = "") -> str:

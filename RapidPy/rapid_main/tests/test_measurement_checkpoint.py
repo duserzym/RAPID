@@ -66,6 +66,7 @@ class MeasurementCheckpointTests(unittest.TestCase):
         self.assertTrue(original.checkpoint_saved, original._error_messages)
         self.assertEqual(backend.treatments, ['NRM'])
         self.assertFalse((self.output / 'measurements.txt').exists())
+        self.assertFalse((self.output / 'quicklook.json').exists())
         checkpoint = pending_checkpoint(self.output)
 
         resumed_backend = RecordingBackend()
@@ -82,6 +83,8 @@ class MeasurementCheckpointTests(unittest.TestCase):
         self.assertEqual([step['label'] for step in continued._progress.accepted_steps()], self.labels)
         self.assertIsNone(pending_checkpoint(self.output))
         self.assertEqual([step.demag_label for step in load_magic_directory(self.output).specimens[0].steps], self.labels)
+        quicklook = json.loads((self.output / 'quicklook.json').read_bytes())
+        self.assertEqual(quicklook['labels'], self.labels)
         provenance = json.loads((self.output / 'provenance.json').read_bytes())
         self.assertEqual(provenance['continued_from_saved_step'], 2)
         index = json.loads((self.output / 'artifact_index.json').read_bytes())

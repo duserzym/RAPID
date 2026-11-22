@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -234,41 +235,42 @@ class TestMeasurementPanelHelpers(unittest.TestCase):
         self.assertIn("Current measurement run", dialog.quicklook_summary()["provenance"]["statement"])
         dialog.deleteLater()
 
-    def test_successful_run_writes_quicklook_sidecar_to_output_bundle(self) -> None:
-        panel = MeasurementPanel()
+    def test_successful_run_publishes_quicklook_before_notifying_completion(self) -> None:
+        window = QtWidgets.QMainWindow()
+        self.addCleanup(self._dispose_window, window)
+        panel = MeasurementPanel(window)
+        window._sequence_labels = ['NRM']
+        window.config = AppConfig()
+        window.measurement_backend = NoCommBackend
+        completed = []
         with tempfile.TemporaryDirectory() as td:
-            bundle_dir = Path(td) / "SAMPLE_A"
-            panel._current_sample = "SAMPLE_A"
-            panel._current_output_dir = bundle_dir
-            panel._completed_steps = [
-                MeasurementStep(
-                    demag_label="NRM",
-                    gdec=0.0,
-                    ginc=0.0,
-                    sdec=0.0,
-                    sinc=0.0,
-                    crdec=0.0,
-                    crinc=0.0,
-                    moment=1.0,
-                    error_angle=0.0,
-                    sdx=1.0,
-                    sdy=0.0,
-                    sdz=0.0,
-                    timestamp=datetime(2026, 7, 15, 12, 0, 0),
-                ),
-            ]
+            window.config.general.data_dir = td
+            bundle = Path(td) / 'SAMPLE_A' / 'SIMULATED'
+            quicklook = bundle / 'quicklook.json'
+            panel.sample_run_finished.connect(
+                lambda aborted, sample: completed.append(
+                    (aborted, sample, quicklook.exists())
+                )
+            )
 
-            panel._on_run_finished(False)
-            payload = json.loads((bundle_dir / "quicklook.json").read_text(encoding="utf-8"))
+            self.assertTrue(panel.start_measurement_for_sample('SAMPLE_A'))
+            deadline = QtCore.QElapsedTimer()
+            deadline.start()
+            while panel.is_active() and deadline.elapsed() < 15_000:
+                self._app.processEvents()
+                QtCore.QThread.msleep(5)
+            self.assertEqual(completed, [(False, 'SAMPLE_A', True)])
+            payload = json.loads(quicklook.read_text(encoding='utf-8'))
+            index = json.loads((bundle / 'artifact_index.json').read_text(encoding='utf-8'))
+            entry, = [artifact for artifact in index['artifacts'] if artifact['name'] == 'quicklook_summary']
+            self.assertEqual(entry['size_bytes'], quicklook.stat().st_size)
+            self.assertEqual(entry['sha256'], hashlib.sha256(quicklook.read_bytes()).hexdigest())
 
-        self.assertEqual(payload["step_count"], 1)
-        self.assertEqual(payload["labels"], ["NRM"])
-        self.assertEqual(payload["vectors"]["north"], [1.0])
-        self.assertEqual(payload["intensity"], [1.0])
-        self.assertFalse(payload["provenance"]["simulated"])
-        panel.deleteLater()
+        self.assertEqual(payload['step_count'], 1)
+        self.assertEqual(payload['labels'], ['NRM'])
+        self.assertTrue(payload['provenance']['simulated'])
 
-    def test_simulated_run_quicklook_is_marked_in_dialog_and_sidecar(self) -> None:
+    def test_simulated_run_quicklook_is_marked_in_dialog(self) -> None:
         panel = MeasurementPanel()
         panel._current_run_simulated = True
         panel._completed_steps = [
@@ -293,68 +295,9 @@ class TestMeasurementPanelHelpers(unittest.TestCase):
             self.assertTrue(panel._apply_completed_steps_to_plots(dialog))
             self.assertEqual(dialog._demo_lbl.property("status"), "simulated")
             self.assertIn("not hardware evidence", dialog._demo_lbl.text())
-
-            with tempfile.TemporaryDirectory() as td:
-                panel._current_output_dir = Path(td)
-                path = panel._write_quicklook_sidecar()
-                self.assertIsNotNone(path)
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            self.assertTrue(payload["provenance"]["simulated"])
-            self.assertIn("not hardware evidence", payload["provenance"]["statement"])
         finally:
             dialog.deleteLater()
             panel.deleteLater()
-
-    def test_quicklook_publish_reconciles_artifact_index(self) -> None:
-        panel = MeasurementPanel()
-        panel._completed_steps = [
-            MeasurementStep(
-                demag_label="NRM",
-                gdec=0.0,
-                ginc=0.0,
-                sdec=0.0,
-                sinc=0.0,
-                crdec=0.0,
-                crinc=0.0,
-                moment=1.0,
-                error_angle=0.0,
-                sdx=1.0,
-                sdy=0.0,
-                sdz=0.0,
-                timestamp=datetime(2026, 7, 15, 12, 0, 0),
-            )
-        ]
-        with tempfile.TemporaryDirectory() as td:
-            output = Path(td)
-            panel._current_output_dir = output
-            (output / "artifact_index.json").write_text(
-                json.dumps(
-                    {
-                        "schema": "rapidpy.measurement.artifact_index.v1",
-                        "artifacts": [
-                            {
-                                "name": "quicklook_summary",
-                                "relative_path": "quicklook.json",
-                                "exists": False,
-                                "size_bytes": 0,
-                            }
-                        ],
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-            written = panel._write_quicklook_sidecar()
-            index = json.loads(
-                (output / "artifact_index.json").read_text(encoding="utf-8")
-            )
-
-        self.assertIsNotNone(written)
-        entry = index["artifacts"][0]
-        self.assertTrue(entry["exists"])
-        self.assertGreater(entry["size_bytes"], 0)
-        self.assertEqual(entry["relative_path"], "quicklook.json")
-        panel.deleteLater()
 
     def test_completed_cycle_populates_live_stats_grid(self) -> None:
         panel = MeasurementPanel()

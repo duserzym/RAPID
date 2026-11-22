@@ -7,6 +7,7 @@ import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from PySide6 import QtCore
 
@@ -840,6 +841,25 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
         self.assertIn("measuring", phases)
         allowed = {phase.value for phase in WorkflowPhase}
         self.assertTrue(set(phases).issubset(allowed))
+
+    def test_quicklook_write_failure_preserves_successful_measurement(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "QUICKLOOK"
+            worker = MeasurementWorker(_meta("QUICKLOOK"), ["NRM"], output,
+                                       backend=DeterministicBackend([("NRM", 1.0, 2.0, 3.0)]))
+            finished: list[bool] = []
+            worker.run_finished.connect(finished.append)
+            with patch("rapid_main.measurement_worker.publish_measurement_quicklook",
+                       side_effect=OSError("quicklook destination denied")):
+                worker.run()
+
+            self.assertEqual(finished, [False])
+            self.assertEqual(worker.quicklook_error, "quicklook destination denied")
+            self.assertTrue((output / "measurements.txt").is_file())
+            index = json.loads((output / "artifact_index.json").read_text(encoding="utf-8"))
+            entry, = [item for item in index["artifacts"] if item["name"] == "quicklook_summary"]
+            self.assertFalse(entry["exists"])
+            self.assertFalse(entry["required"])
 
     def test_requested_susceptibility_failure_aborts_without_publishing_run(self) -> None:
         class _FailingSusceptibilityBackend(DeterministicBackend):

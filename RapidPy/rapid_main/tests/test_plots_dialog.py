@@ -199,7 +199,7 @@ class PlotsDialogTests(unittest.TestCase):
         summary = build_quicklook_summary([1.0], [0.0], [0.0], ["NRM"])
         with tempfile.TemporaryDirectory() as td:
             target = Path(td) / "quicklook.json"
-            with mock.patch("rapid_main.dialogs.plots.os.replace", side_effect=OSError("denied")):
+            with mock.patch("rapid_main.quicklook.os.replace", side_effect=OSError("denied")):
                 with self.assertRaisesRegex(OSError, "denied"):
                     write_quicklook_json(target, summary)
             self.assertFalse(target.exists())
