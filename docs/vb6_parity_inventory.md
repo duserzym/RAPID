@@ -74,7 +74,7 @@ Phase-1 inventory closure.
 | `modVector3d` | Module | Mapped | `RapidPy/rapid_main/rapid_main/geometry.py`; `measurement_worker.py`; `io/specimen_reader.py` |
 | `modMotor` | Module | Stand-alone implemented | `updown_control` / `dc_motor_control` launcher path |
 | `frmChangerSampOrder` | Form | Mapped | `rapid_main/rapid_main/queue_compiler.py`, sample-queue panel UI | Duplicate position and invalid sample-step validation are now tracked in the compiler contract (`QueueValidationResult`) with regression tests. |
-| `modChanger` | Module | Stand-alone implemented | `changer_xy_control`/`updown_control` |
+| `modChanger` | Module | Native queue integrated, physical acceptance pending | `queue_station.py`, `queue_chain_reference.py`, `queue_table_motion.py`, and `queue_transfer_coordinator.py` route XY and chain queues. The chain route records the physical starting slot, uses periodic empty holes and checks stopped counts for the original slot and return. The injected three-axis tests cover routing, wraparound, pickup/drop-off, and interrupted shutdown. |
 | `frmMeasure` | Form | Mapped | `panels.measurement` |
 | `frmStats` | Form | Integrated foundation | `panels/measurement.py`, `measurement_worker.py`, `analysis.py`, `tests/test_measurement_panel.py` | Live cycle mean, X/Y/Z ranges, range-to-moment ratios, directional spread, and signal-to-drift are rendered from configured SQUID reads. Sig/Holder and Sig/Induced now come from the reduced bracketed block, and holder identity, magnitude, and age are shown; they stay `N/A` when no bracketed block or valid holder exists. |
 | `modPrint` | Module | Mapped | `rapid_main/io/measurement_bundle.py`, `measurement_worker.py`, `measurement output writers` |
@@ -103,7 +103,7 @@ Phase-1 inventory closure.
 | `Samples` | Class | Mapped | specimen model in `data_model.py` |
 | `Sample` | Class | Mapped | specimen model in `data_model.py` |
 | `Cartesian3D` | Class | Mapped | `RapidPy/rapid_main/rapid_main/geometry.py`; `measurement_worker.py`; `io/specimen_reader.py` |
-| `frmChanger` | Form | Stand-alone implemented | `changer_xy_control` |
+| `frmChanger` | Form | Queue setup integrated | Sample Queue selects the imported station mode. Native startup records the empty rod and, for chain drive, the physically observed slot. The standalone XY control remains available for manual XY operations. |
 | `frmRerunSamples` | Form | Mapped | queue sample rerun/skip control and persistence now live in `panels.sample_queue` with failure-state resets (`Error`→`Pending`) and `QSettings` row restoration. |
 | `frmSampleSelect` | Form | Mapped | sample queue/panel behavior |
 | `modSusceptibility` | Module | Implemented; pending coil/standard acceptance | `Susceptibility_Measure`/`Susceptibility_Standardize` are reproduced by `SusceptibilityAcquisitionService` and `QueueHardwareBackend.read_susceptibility`: coil-side target check, zero, slow move, measure, holder subtraction, moment factor, plus verified safe return. Holder susceptibility is persisted with evidence identity. The Bartington calibration scan (`frmCalRod.RunSusceSeq`) remains a separate calibration workflow. |

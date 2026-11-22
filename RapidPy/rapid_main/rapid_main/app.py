@@ -1338,23 +1338,35 @@ class MainWindow(QtWidgets.QMainWindow):
             if options.use_xy_table is not self.config.motor_station.use_xy_table:
                 raise ValueError('Queue options must match the accepted physical table mode.')
             from .queue_station import QueueStationGeometry
-            station = QueueStationGeometry.from_config(self.config, use_xy_table=True)
+            station = QueueStationGeometry.from_config(self.config, use_xy_table=options.use_xy_table)
             for sample in samples:
                 station.specimen_slot(sample.hole)
-                station.xy_target(sample.hole)
+                if station.use_xy_table:
+                    station.xy_target(sample.hole)
             if not self._prepare_legacy_up_sources():
                 return False
             self._queue_lease = self.acquire_devices(
                 ('measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptibility'), 'queue_workflow',
                 allow_reentrant=False)
             if QtWidgets.QMessageBox.question(self, 'Confirm empty control rod',
-                    'Remove every specimen from the control rod and verify that the table is mechanically clear.\n\n'
+                    'Remove every specimen from the control rod and verify that the changer is mechanically clear.\n\n'
                     'Confirm the rod is empty before native motor and vacuum startup?',
                     QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
                     QtWidgets.QMessageBox.StandardButton.No) != QtWidgets.QMessageBox.StandardButton.Yes:
                 self._release_queue_lease()
                 self.set_flow_state('idle')
                 return False
+            startup_options = {}
+            if not station.use_xy_table:
+                slot, confirmed = QtWidgets.QInputDialog.getInt(self, 'Confirm Physical Chain Slot',
+                    'Enter the numbered chain slot currently under the rod. Check the physical slot marking before continuing.',
+                    station.slot_min - 1, station.slot_min - 1, station.slot_max)
+                if not confirmed or not station.slot_min <= slot <= station.slot_max:
+                    self._release_queue_lease()
+                    self.set_flow_state('idle')
+                    self.set_status('Queue canceled before physical chain slot confirmation.')
+                    return False
+                startup_options['chain_slot'] = slot
             directions = {}
             for sample in samples:
                 if sample.file_id in directions and directions[sample.file_id] is not sample.do_up:
@@ -1367,7 +1379,7 @@ class MainWindow(QtWidgets.QMainWindow):
                      samples=[asdict(sample) for sample in samples], options=asdict(options), file_directions=directions,
                      source_indexes=self._queue_source_indexes, legacy_up_sources=self._legacy_up_plan()),
                 run_id='queue-' + uuid.uuid4().hex, operator=self.config.general.operator,
-                empty_rod_confirmed=True)
+                empty_rod_confirmed=True, **startup_options)
             self._queue_native_startup, self._queue_native_session = startup, startup.session
             self._queue_active = True
             self._queue_loaded_command = None
@@ -1886,7 +1898,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 if command_type == 'Holder':
                     action = lambda: backend.measure_queue_holder(command.hole, **command_kwargs)
                 elif command_type == 'Goto':
-                    action = backend.park_queue_station
+                    action = (backend.park_queue_station if self.config.motor_station.use_xy_table
+                              else lambda: backend.park_queue_station(command.hole))
                 elif command_type == 'Flip':
                     action = backend.park_queue_station
                 else:

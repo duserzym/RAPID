@@ -96,9 +96,8 @@ class QueueBlankHolderMotion:
         return field_proof
 
     def _at_hole(self, samples, hole):
-        x, y = (samples[key][-1]['position_raw'] for key in ('changer_x', 'changer_y'))
-        if self.table.geometry.slot_from_xy_counts(x, y) != hole:
-            raise HardwareSafetyError('Both XY readbacks must verify the calibrated empty hole.')
+        if self.table.slot_from_samples(samples) != hole:
+            raise HardwareSafetyError('Changer readbacks must verify the calibrated empty hole.')
 
     def prepare(self, session, hole, *, reference_verified=False, field_outputs_off_verified=False):
         field_proof = self._validate(session, field_outputs_off_verified)

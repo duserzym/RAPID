@@ -8,6 +8,7 @@ from rapidpy_common.hardware_safety import HardwareSafetyError
 from rapidpy_common.motor_routing import RoutedMotorSerialClient
 from .queue_lift_transfer import QueueSpecimenState
 from .queue_station import QueueStationGeometry
+from .queue_table_motion import QueueChainTableMotion, QueueXYTableMotion
 
 
 def _snapshot(value):
@@ -33,18 +34,18 @@ class QueueSpecimenGeometry:
         self.session.child_store._owned()
         root = self.session.store._queue(self.session.token)
         station = QueueStationGeometry.from_config(self.config, use_xy_table=self.config.motor_station.use_xy_table)
+        motion_class = QueueXYTableMotion if station.use_xy_table else QueueChainTableMotion
         acquisition_profile = dict(helper='rapid_main_queue_acquisition',
             **{name: asdict(getattr(self.config, name)) for name in ('motion', 'squid', 'calibration', 'susceptibility')})
         if (self.session.is_recovery or self.config.general.nocomm is not False
                 or root['profile'].get('helper') != 'rapid_main_queue'
                 or root['profile']['stage_profiles'].get('motion') != self.profile
                 or root['profile']['stage_profiles'].get('acquisition') != _snapshot(acquisition_profile)
-                or self.profile.get('helper') != 'rapid_main_queue_xy'
+                or self.profile.get('helper') != motion_class.helper
                 or self.profile.get('geometry') != _snapshot(asdict(station))
                 or self.profile.get('controller') != _snapshot(asdict(self.motor.config))
                 or self.profile.get('controller') != _snapshot(asdict(_build_motor_controller_config(self.config)))
-                or self.config.motor_station.ports != {key: axis.port for key, axis in self.axes.items()}
-                or self.config.motor_station.addresses != {key: axis.address for key, axis in self.axes.items()}
+                or not self.config.motor_station.routing_matches(self.axes)
                 or self.profile.get('axes') != _snapshot({key: asdict(axis) for key, axis in self.axes.items()})):
             raise HardwareSafetyError('Measured specimen geometry requires the original live queue station binding.')
         for axis in self.axes.values():
@@ -78,3 +79,10 @@ class QueueSpecimenGeometry:
         height = self.height(sample_id, own_stage_token=own_stage_token)
         return (math.floor(self.config.motion.zero_pos + height / 2),
                 math.floor(self.config.motion.meas_pos + height / 2))
+
+    def require_empty_chain_slot(self, samples):
+        expected = self.context.hole if getattr(self, 'is_holder', False) else self.station.nearest_empty(self.context.original_slot)
+        offset = self.motor.config.sample_hole_alignment_offset
+        if len(samples) != 2 or any(self.station.slot_from_counts(sample['position_raw'], alignment_offset=offset) != expected
+                                    for sample in samples):
+            raise HardwareSafetyError('Both stopped chain readbacks must verify the original calibrated empty hole.')

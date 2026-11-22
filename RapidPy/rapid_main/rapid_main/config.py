@@ -291,6 +291,20 @@ class MotorStationConfig:
     xy_home: list[int] = field(default_factory=list)
     lift_counts_per_cm: float | None = None  # legacy UpDownMotor1cm, used for exported specimen height
 
+    def motor_axis_keys(self):
+        keys = ('changer_x', 'turning', 'updown')
+        return keys if self.use_xy_table is False else (*keys, 'changer_y')
+
+    def routing_matches(self, axes):
+        ignored = {'changer_y'} if self.use_xy_table is False else set()
+        return (
+            set(axes) == set(self.motor_axis_keys())
+            and {key: port for key, port in self.ports.items() if key not in ignored}
+            == {key: axis.port for key, axis in axes.items()}
+            and {key: address for key, address in self.addresses.items() if key not in ignored}
+            == {key: axis.address for key, axis in axes.items()}
+        )
+
 
 @dataclass
 class ChangerConfig:

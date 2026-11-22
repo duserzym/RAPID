@@ -1,5 +1,6 @@
 """Compose native specimen transfer phases on the original queue worker."""
 from rapidpy_common.hardware_safety import HardwareSafetyError
+from .queue_chain_reference import QueueChainReference
 from .queue_field_outputs import QueueFieldOutputs
 from .queue_lift_transfer import QueueLiftTransfer
 from .queue_xy_reference import QueueXYReference
@@ -7,9 +8,10 @@ from .queue_xy_reference import QueueXYReference
 
 class QueueTransferCoordinator:
     def __init__(self, session, lift, reference, fields):
-        if (not isinstance(lift, QueueLiftTransfer) or not isinstance(reference, QueueXYReference)
+        if (not isinstance(lift, QueueLiftTransfer) or not isinstance(reference, (QueueXYReference, QueueChainReference))
                 or not isinstance(fields, QueueFieldOutputs) or reference.table is not lift.table
-                or reference.vacuum is not lift.vacuum):
+                or reference.vacuum is not lift.vacuum
+                or lift.table.geometry.use_xy_table is not isinstance(reference, QueueXYReference)):
             raise HardwareSafetyError('Transfer coordination requires the original native station services.')
         self.session, self.lift, self.reference, self.fields = session, lift, reference, fields
         self.table, self.vacuum = lift.table, lift.vacuum

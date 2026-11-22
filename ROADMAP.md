@@ -2682,3 +2682,25 @@ The staged source passed 1,437 tests in 690.864 seconds, including all seven
 publication recovery cases. The portable Windows build passed offline startup
 and smoke checks for all six panels and all six helpers. The candidate is
 available locally under `.tmp/bundle-recovery-release/dist/RapidPyMain`.
+
+Native chain queue checkpoint (2026-11-22). An imported chain profile now
+routes three motor axes through the native queue. Before connecting, RAPID
+records the named operator's physical slot and empty-rod confirmation.
+It relabels the stopped chain controller at verified lift clearance and
+binds the reference to the original connection. The queue journals each
+target before moving, verifies stopped readbacks, uses periodic empty
+slots for acquisition, and restores the original specimen slot using
+the VB6 chain drop-off geometry. Startup, loading, flips, return, and
+interrupted shutdown use the same ownership model as the XY route.
+The chain origin depends on the operator's observed slot. Calibrated
+mechanical clearance, alignment, grip, release and controller readbacks
+still require qualification on the physical chain station.
+
+The staged application passed 1,446 tests in 785.261 seconds with process
+exit 0. Nine new tests cover chain reference, three-axis routing, slot
+wraparound, tray confirmation, pickup and supported release, rejection of
+wrong-slot acquisition and treatment, and interrupted shutdown. An offline
+VB6 INI import check retained fractional alignment and constructed three
+motor routes without opening a port. The Windows package passed offline
+startup and smoke checks for all six panels and six helpers. It is available
+locally under `.tmp/chain-queue-release/dist/RapidPyMain`.

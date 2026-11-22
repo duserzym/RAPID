@@ -101,8 +101,14 @@ thermal, susceptibility:
 | M5 | Rotate the turning axis to 0/90/180/270/360 and read the encoder each time | Each within 5 degrees; `MotorTurn_360` equivalent re-labels 360 as 0 |
 | M6 | Obstruct or stall the turn (safely) | Motion reports `ok = false`; block aborts |
 | M7 | Changer move to several holes, plus pickup/drop-off with a dummy | Positions within 0.02 hole; pickup reports success |
-| M8 | Trigger emergency halt mid-motion | All four axes halt; RapidPy returns to the safe-state path |
+| M8 | Trigger emergency halt mid-motion | Each participating axis halts. XY uses four axes and chain uses three. RAPID enters the safe-state path. |
 | M9 | Vacuum interlock: force a high-pressure condition | Queue blocks or halts through the safe-state path |
+
+On a chain station, record the physically marked starting slot alongside the
+journaled attestation and stopped counts. In M7 include a short move across the
+loop boundary, a periodic empty hole and return to the original marked slot.
+Compare controller counts with the physical positions and record clearance and
+grip through the dummy specimen release.
 
 ---
 

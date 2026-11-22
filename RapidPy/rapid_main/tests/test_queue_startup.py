@@ -26,10 +26,27 @@ class QueueStartupFixture(backend_fixture.QueueBackendCoordinatorFixture):
             self.daq, self.af, sleep=self.clock.sleep, monotonic=self.clock.monotonic)
         self.backend._queue_startup = None
 
-    def prepare(self, **kwargs):
+    def use_chain_station(self):
+        from rapid_main.hardware_contracts import QueueHardwareBackend
+        station = self.backend._config.motor_station
+        station.use_xy_table = False
+        station.hole_slot = 10
+        station.controller['sample_hole_alignment_offset'] = -.02
+        # Exercise production wiring construction, while retaining the fixture's
+        # injected scientific and field circuits.
+        with patch.object(QueueHardwareBackend, '_build_component', return_value=None):
+            routed = QueueHardwareBackend(self.backend._config, safety_store=self.store)
+        self.assertFalse(routed._backend_errors, routed._backend_errors)
+        self.motor = self.backend._client = routed._client
+        self.axes = self.backend._axes = routed._axes
+        self.backend._motor_config = routed._motor_config
+        self.backend._direction_up = True
+        self.addCleanup(self.motor.disconnect)
+
+    def prepare(self, *, plan=None, **kwargs):
         arguments = dict(run_id='new-run', operator='Operator', empty_rod_confirmed=True)
         arguments.update(kwargs)
-        startup = self.backend.prepare_queue_lifetime(self.vacuum, {'samples': ['S1']}, **arguments)
+        startup = self.backend.prepare_queue_lifetime(self.vacuum, plan or {'samples': ['S1']}, **arguments)
         self.addCleanup(startup.session.release)
         self.session = startup.session
         # Use deterministic clocks for native verification; commands remain real

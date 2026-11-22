@@ -92,10 +92,17 @@ class QueueLiftTransfer:
         return state
 
     def _at_slot(self, observations, slot):
-        x = observations['changer_x'][-1]['position_raw']
-        y = observations['changer_y'][-1]['position_raw']
-        if self.table.geometry.slot_from_xy_counts(x, y) != slot:
-            raise HardwareSafetyError('The specimen lift requires its original registered XY slot.')
+        if self.table.slot_from_samples(observations) != slot:
+            raise HardwareSafetyError('The specimen lift requires its original registered slot.')
+
+    def _dropoff_target(self, state):
+        bottom = self.table.motor.config.sample_bottom
+        if self.table.geometry.use_xy_table:
+            return int(bottom + .9 * state.sample_height)
+        target = round(bottom + 1.1 * state.sample_height)
+        if not bottom < target < 0:
+            raise HardwareSafetyError('Measured specimen height places chain dropoff outside the lift envelope.')
+        return target
 
     def _delay(self, seconds):
         deadline = self.monotonic() + seconds
@@ -171,8 +178,7 @@ class QueueLiftTransfer:
                 if abs(actual) > 150:
                     raise HardwareSafetyError('Released specimen rod clearance is unverified.')
             else:
-                target = (state.pickup_position_raw if state.phase == 'picked'
-                          else int(self.table.motor.config.sample_bottom + .9 * state.sample_height))
+                target = state.pickup_position_raw if state.phase == 'picked' else self._dropoff_target(state)
                 tolerance = 0 if state.phase == 'picked' else 150
                 if (abs(actual - target) > tolerance
                         or self.table.motor.check_internal_status(self.table.axes['updown'], 4) != 0):
@@ -253,9 +259,7 @@ class QueueLiftTransfer:
         if self.vacuum.is_valve_connected() is not True:
             raise HardwareSafetyError('Returning lift requires the original acknowledged specimen grip.')
         def empty(samples):
-            x = samples['changer_x'][-1]['position_raw']
-            y = samples['changer_y'][-1]['position_raw']
-            slot = self.table.geometry.slot_from_xy_counts(x, y)
+            slot = self.table.slot_from_samples(samples)
             if not self.table.geometry.is_empty(slot):
                 raise HardwareSafetyError('Raise the measured specimen only above a verified empty table location.')
         def after(result, samples):
@@ -272,7 +276,7 @@ class QueueLiftTransfer:
         state = self._state(session, 'lifted')
         if self.vacuum.is_valve_connected() is not True:
             raise HardwareSafetyError('Dropoff requires the original acknowledged specimen grip.')
-        target = int(self.table.motor.config.sample_bottom + .9 * state.sample_height)
+        target = self._dropoff_target(state)
         def before(samples):
             self._at_slot(samples, state.original_slot)
             self.table._clearance(samples)
@@ -290,7 +294,7 @@ class QueueLiftTransfer:
         state = self._state(session, 'supported')
         if self.vacuum.is_valve_connected() is not False:
             raise HardwareSafetyError('Lift clearance requires acknowledged original-slot valve release.')
-        target = int(self.table.motor.config.sample_bottom + .9 * state.sample_height)
+        target = self._dropoff_target(state)
         def before(samples):
             self._at_slot(samples, state.original_slot)
             if abs(samples['updown'][-1]['position_raw'] - target) > 150:

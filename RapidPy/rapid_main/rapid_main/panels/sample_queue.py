@@ -469,6 +469,9 @@ class SampleQueuePanel(QtWidgets.QWidget):
         )
         owner = self.window()
         if hasattr(owner, "start_queue_run"):
+            station = getattr(getattr(owner, 'config', None), 'motor_station', None)
+            if station is not None and station.use_xy_table is False:
+                options.use_xy_table = False
             owner.start_queue_run(rows, options)
         else:
             QtWidgets.QMessageBox.critical(

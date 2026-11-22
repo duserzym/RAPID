@@ -49,6 +49,8 @@ class QueueStationGeometry:
             raise ValueError("Legacy chain geometry requires SlotMin = 1.")
         elif self.hole_slot > self.slot_max:
             raise ValueError("The chain has no calibrated empty holes.")
+        elif self.slot_max > 32767:
+            raise ValueError("Chain slot labels must fit the legacy signed 16-bit slot range.")
         positions = []
         for entry in self.xy_positions:
             if not isinstance(entry, (tuple, list)) or len(entry) != 3:
@@ -128,21 +130,13 @@ class QueueStationGeometry:
             raise ValueError("Holder measurement requires a calibrated empty hole.")
         return marker
 
-    def slot_from_counts(self, counts):
+    def slot_from_counts(self, counts, *, alignment_offset=0):
         if self.use_xy_table:
             raise ValueError('XY slot verification requires both calibrated axis readbacks.')
         counts = _integer(counts, "changer position")
         if not -(2 ** 31) <= counts < 2 ** 31:
             raise ValueError("Changer readback exceeds signed 32-bit controller limits.")
-        raw = counts / self.one_step
-        if not math.isfinite(raw):
-            raise ValueError("Changer calibration cannot resolve this readback.")
-        raw %= self.slot_max
-        slot = round(raw) % self.slot_max or self.slot_max
-        error = min(abs(raw - slot), abs(raw - slot + self.slot_max), abs(raw - slot - self.slot_max))
-        if error > 0.02 or not self.slot_min <= slot <= self.slot_max:
-            raise ValueError("Changer readback is not aligned with a registered slot.")
-        return slot
+        return self._aligned_chain_slot(counts, alignment_offset)
 
     def xy_target(self, slot):
         slot = _integer(slot, 'XY slot')
@@ -183,3 +177,56 @@ class QueueStationGeometry:
         if actual != target:
             raise ValueError("Changer readback does not match the requested empty hole.")
         return actual
+
+    def chain_reference_counts(self, slot, alignment_offset):
+        """Controller coordinates for an operator-identified physical chain slot."""
+        return self._chain_target_counts(self._chain_slot_position(slot, alignment_offset))
+
+    def _chain_slot_position(self, slot, alignment_offset):
+        slot = _integer(slot, 'chain slot')
+        if self.use_xy_table or not self.slot_min <= slot <= self.slot_max:
+            raise ValueError('A registered chain slot is required.')
+        counts = (slot % self.slot_max) * self.one_step
+        if not self.is_empty(slot):
+            counts += alignment_offset * self.one_step
+        return counts
+
+    @staticmethod
+    def _chain_target_counts(counts):
+        # Relabel uses the opposite count as a controller parameter.
+        if not math.isfinite(counts) or not -2**31 < math.floor(counts) < 2**31:
+            raise ValueError('Chain target exceeds the signed controller count range.')
+        return math.floor(counts)
+
+    def chain_target(self, slot, current_position, alignment_offset):
+        """Seek the closest equivalent position on the calibrated chain loop."""
+        target = self._chain_slot_position(slot, alignment_offset)
+        current_position = _integer(current_position, 'chain position')
+        self._chain_target_counts(current_position)
+        loop = abs(self.slot_max * self.one_step)
+        if not math.isfinite(loop):
+            raise ValueError('Chain travel exceeds the controller count range.')
+        travel = math.fmod(target - current_position, loop)
+        if abs(travel) > loop / 2:
+            travel -= math.copysign(loop, travel)
+        return self._chain_target_counts(current_position + travel)
+
+    def _aligned_chain_slot(self, counts, alignment_offset):
+        nominal = counts / self.one_step
+        if not math.isfinite(nominal):
+            raise ValueError('Changer calibration cannot resolve this readback.')
+        candidates = []
+        for shift, expect_empty in ((0, True), (alignment_offset, False)):
+            unshifted = (nominal - shift) % self.slot_max
+            nearest = round(unshifted)
+            slot = nearest % self.slot_max or self.slot_max
+            if abs(unshifted - nearest) <= .02 and self.is_empty(slot) is expect_empty:
+                candidates.append(slot)
+        if len(candidates) != 1:
+            raise ValueError('Chain readback must identify exactly one calibrated slot.')
+        return candidates[0]
+
+    def slot_from_positions(self, positions, *, alignment_offset=0):
+        if self.use_xy_table:
+            return self.slot_from_xy_counts(positions['changer_x'], positions['changer_y'])
+        return self.slot_from_counts(positions['changer_x'], alignment_offset=alignment_offset)

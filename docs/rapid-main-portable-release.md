@@ -81,6 +81,21 @@ ownership leases and handoff environment.
    the Up pass record. RAPID measures Down without reapplying the treatment and
    links the original bytes and operator confirmation to the combined result.
 
+For a chain-drive queue, import the original profile with
+`XYTable.UseXYTableAPS=False`, the chain motor's port and address, slot range,
+empty-hole interval, counts per slot, and the accepted lift and turning
+calibration. Start the queue in Sample Queue. After confirming the empty rod,
+enter the number physically marked on the chain slot under it. RAPID records
+this observation before connecting, then checks lift clearance and relabels the
+stopped chain controller. The chain has no independent absolute-slot sensor
+in this workflow. The readback checks use the origin you entered.
+
+RAPID uses the nearest calibrated empty slot for each blank or specimen and
+the original specimen slot for drop-off. The chain parks at its origin for
+initial loading and tray flips. The optional return commands park at the
+first specimen slot in the selected order. After an interruption, use the
+same recovery and shutdown commands described above.
+
 Calibration Center records proposals, approval, expiry/invalidation, and
 rollback. Review/approve calibration before using its coefficients. Help →
 “Where did this VB6 control go?” supplies the searchable transition map.

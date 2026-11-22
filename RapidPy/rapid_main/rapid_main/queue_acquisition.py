@@ -30,10 +30,13 @@ class QueueAcquisitionRecord:
         return asdict(self)
 
 
-def _holder_xy(geometry, observations):
-    positions = {item['axis']: item['samples'][-1]['position_raw'] for item in observations}
-    if geometry.station.slot_from_xy_counts(positions['changer_x'], positions['changer_y']) != geometry.context.hole:
-        raise HardwareSafetyError('Blank-holder acquisition requires the original calibrated empty hole.')
+def _require_acquisition_slot(geometry, observations):
+    samples = {item['axis']: item['samples'] for item in observations}
+    if not geometry.station.use_xy_table:
+        geometry.require_empty_chain_slot(samples['changer_x'])
+    elif geometry.station.slot_from_xy_counts(samples['changer_x'][-1]['position_raw'],
+                                              samples['changer_y'][-1]['position_raw']) != geometry.context.hole:
+        raise HardwareSafetyError('Queue acquisition requires the original calibrated empty hole.')
 
 
 def _evidence(kind, backend, result, operation):
@@ -96,6 +99,7 @@ def run_queue_acquisition(backend, kind, acquire):
     operation = dict(action=kind, sample_id=backend._sample_name, run_id=backend._run_id,
                      is_holder=getattr(geometry, 'is_holder', False),
                      specimen_geometry=geometry.context.to_dict(), positions=list(positions))
+    verify_slot = operation['is_holder'] or not geometry.station.use_xy_table
     if instruments is not None:
         operation['instruments'] = copy.deepcopy(instruments.profile)
     profile = backend._acquisition_safety_profile()
@@ -108,7 +112,7 @@ def run_queue_acquisition(backend, kind, acquire):
     evidence, error, result, cleanup, failures, initial = None, '', None, [], [], []
     try:
         try:
-            if operation['is_holder']:
+            if verify_slot:
                 initial_errors = []
                 for key, axis in axes.items():
                     samples, failure = verify_stopped_in_place(backend._client, axis)
@@ -117,7 +121,7 @@ def run_queue_acquisition(backend, kind, acquire):
                         initial_errors.append(f'{key}: {failure}')
                 if initial_errors:
                     raise HardwareSafetyError('; '.join(initial_errors))
-                _holder_xy(geometry, initial)
+                _require_acquisition_slot(geometry, initial)
                 geometry.height(backend._sample_name, own_stage_token=token)
             result = acquire()
             if kind == 'susceptibility' and len(backend._susceptibility_records) != previous_susc_count + 1:
@@ -150,8 +154,8 @@ def run_queue_acquisition(backend, kind, acquire):
         if not error:
             try:
                 geometry.height(backend._sample_name, own_stage_token=token)
-                if operation['is_holder'] and not failures:
-                    _holder_xy(geometry, cleanup)
+                if verify_slot and not failures:
+                    _require_acquisition_slot(geometry, cleanup)
             except Exception as exc:
                 error = str(exc) or type(exc).__name__
         record = QueueAcquisitionRecord(operation, evidence, tuple(cleanup), error,

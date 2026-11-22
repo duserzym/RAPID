@@ -46,14 +46,18 @@ def plan_rrm_treatment(label, config, *, sample_height=None):
         raise ValueError("RRM requires a positive AF field and nonzero spin within +/-40 rps.")
     from .hardware_contracts import _build_motor_controller_config
     station = config.motor_station
-    if not station.calibration_source or set(station.ports) != {"changer_x", "changer_y", "turning", "updown"}:
+    axis_keys = station.motor_axis_keys()
+    if not station.calibration_source or not set(axis_keys).issubset(station.ports):
         raise ValueError("RRM requires imported native motor calibration and all axis ports.")
     motor = _build_motor_controller_config(config)
     from rapidpy_common.hardware import MotorAxisConfig
     from rapidpy_common.motor_routing import RoutedMotorSerialClient
     # Constructor validation is read-only, including duplicate port/address checks.
-    RoutedMotorSerialClient(motor, [MotorAxisConfig(axis, index, station.addresses.get(axis, 0), port)
-                                   for index, (axis, port) in enumerate(station.ports.items(), 1)])
+    bindings = {axis: MotorAxisConfig(axis, index, station.addresses.get(axis, 0), station.ports[axis])
+                for index, axis in enumerate(axis_keys, 1)}
+    if not station.routing_matches(bindings):
+        raise ValueError("RRM requires the original station motor bindings.")
+    RoutedMotorSerialClient(motor, list(bindings.values()))
     cfg = config.af_demag
     height = config.motion.sample_height if sample_height is None else sample_height
     if isinstance(height, bool) or not isinstance(height, (int, float)) or not math.isfinite(height) or int(height) != height:

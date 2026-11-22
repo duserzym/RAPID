@@ -227,10 +227,10 @@ class QueueRestartRecovery:
         serial = getattr(controller, '_serial', None)
         vacuum_handles = (binding, controller, serial)
         if (state['profile']['stage_profiles']['motion'] != startup.table.profile
-                or startup.table.geometry != QueueStationGeometry.from_config(backend._config, use_xy_table=True)
+                or startup.table.geometry != QueueStationGeometry.from_config(
+                    backend._config, use_xy_table=backend._config.motor_station.use_xy_table)
                 or startup.table.motor.config != _build_motor_controller_config(backend._config)
-                or backend._config.motor_station.ports != {key: axis.port for key, axis in startup.table.axes.items()}
-                or backend._config.motor_station.addresses != {key: axis.address for key, axis in startup.table.axes.items()}
+                or not backend._config.motor_station.routing_matches(startup.table.axes)
                 or backend._config.motor_station.baud != 57600
                 or asdict(backend._config.vacuum) != asdict(self._vacuum._cfg)
                 or self._vacuum.queue_station_binding() != state['profile']['stage_profiles']['vacuum']

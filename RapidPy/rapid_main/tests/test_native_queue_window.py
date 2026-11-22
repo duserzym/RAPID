@@ -343,6 +343,28 @@ class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestC
         question.assert_not_called()
         self.assertEqual((self.store.read(), len(self.commands)), before)
 
+    def test_native_chain_slot_confirmation_precedes_start_and_handoff(self):
+        self.use_chain_station()
+        original = self.store.read(), len(self.commands), list(self.vacuum_serial.writes)
+        specimen = QueueSample('S1', 'F1', 1)
+        options = QueueOptions(use_xy_table=False)
+        with (patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.StandardButton.Yes),
+              patch.object(QtWidgets.QMessageBox, 'critical', return_value=None) as error,
+              patch.object(QtWidgets.QInputDialog, 'getInt', side_effect=[(0, False), (99, True)])):
+            self.assertFalse(self.window.start_queue_run([specimen], options))
+            self.assertEqual((self.store.read(), len(self.commands), self.vacuum_serial.writes), original)
+            self.assertTrue(all(not self.window._ownership.is_owned(item) for item in RESOURCES))
+            self.assertTrue(self.window.start_queue_run([specimen], options))
+            self.wait_for(lambda: bool(self.started) or not self.window._queue_active, timeout=30)
+            self.assertTrue(self.started, self.window._sb_status.text())
+            error.assert_not_called()
+        self.assertEqual(self.started, [('S1', 1, 'F1', 2800, True, 'queue_workflow')])
+        root = self.store.read()
+        self.assertEqual(root['plan']['startup']['chain_slot'], 99)
+        self.assertFalse(root['plan']['commands']['options']['use_xy_table'])
+        self.assertEqual(root['profile']['stage_profiles']['motion']['helper'], 'rapid_main_queue_chain')
+        self.assertNotIn('COM4', self.motor._connections)
+
     def test_ui_shutdown_retry_settles_original_close_without_replaying_outputs(self):
         self.assertTrue(self.start(), self.window._sb_status.text())
         session = self.window._queue_native_session

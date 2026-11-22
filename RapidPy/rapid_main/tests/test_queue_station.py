@@ -51,6 +51,18 @@ class QueueStationTests(unittest.TestCase):
         for counts, expected in ((-10005, 10), (-110055, 10), (90045, 10), (0, 100)):
             self.assertEqual(geometry.slot_from_counts(counts), expected)
 
+    def test_chain_targets_use_signed_shortest_travel_and_specimen_only_offset(self):
+        for step in (-1010.1010101, 1010.1010101):
+            geometry = self.geometry(one_step=step)
+            for origin, slot in ((99, 1), (1, 100), (14, 10), (14, 20), (50, 100), (100, 99)):
+                with self.subTest(step=step, origin=origin, slot=slot):
+                    current = geometry.chain_reference_counts(origin, -.02)
+                    target = geometry.chain_target(slot, current, -.02)
+                    self.assertLessEqual(abs(target - current), abs(step) * 50 + 1)
+                    self.assertEqual(geometry.slot_from_positions({'changer_x': target}, alignment_offset=-.02), slot)
+            self.assertEqual(geometry.chain_reference_counts(20, -.02), geometry.chain_reference_counts(20, 0))
+            self.assertNotEqual(geometry.chain_reference_counts(21, -.02), geometry.chain_reference_counts(21, 0))
+
     def test_xy_readback_does_not_wrap_out_of_range_into_valid_hole(self):
         geometry = self.geometry(use_xy_table=True, hole_slot=46, one_step=-1000,
                                  xy_positions=((46, 0, 39), (1, 9590, -11916)))

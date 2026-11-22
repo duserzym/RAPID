@@ -6,10 +6,11 @@ import json
 
 from rapidpy_common.hardware_safety import HardwareSafetyError
 from rapidpy_common.queue_safety import QueueSafetyStore, QueueWorkflowSession
+from .queue_chain_reference import QueueChainReference
 from .queue_field_outputs import QueueFieldOutputs, field_outputs_proof
 from .queue_lift_transfer import QueueLiftTransfer
 from .queue_station import QueueStationGeometry
-from .queue_table_motion import QueueTableMoveRecord, QueueXYTableMotion
+from .queue_table_motion import QueueChainTableMotion, QueueTableMoveRecord, QueueXYTableMotion
 from .queue_transfer_coordinator import QueueTransferCoordinator
 from .queue_xy_reference import QueueXYReference
 
@@ -34,7 +35,7 @@ class QueueEmptyRodStopProof:
 class QueueNativeStartup:
     """Original live startup only; an interrupted startup cannot replay its motion."""
     @classmethod
-    def prepare(cls, backend, vacuum, plan, *, run_id, operator, empty_rod_confirmed=False):
+    def prepare(cls, backend, vacuum, plan, *, run_id, operator, empty_rod_confirmed=False, chain_slot=None):
         if (backend._config.general.nocomm is not False or empty_rod_confirmed is not True
                 or not isinstance(operator, str) or not operator.strip()
                 or not isinstance(run_id, str) or not run_id.strip() or not isinstance(plan, dict)):
@@ -42,6 +43,16 @@ class QueueNativeStartup:
         table, fields, instruments, profile = cls.station_bindings(backend, vacuum)
         attestation = dict(schema='rapidpy.queue_empty_rod_attestation.v1', operator=operator.strip(),
             empty_rod_confirmed=True, timestamp_iso=datetime.now(timezone.utc).isoformat())
+        if not table.geometry.use_xy_table:
+            if type(chain_slot) is not int:
+                raise HardwareSafetyError('Confirm the original physical chain slot before native startup.')
+            offset = table.motor.config.sample_hole_alignment_offset
+            counts = table.geometry.chain_reference_counts(chain_slot, offset)
+            if table.geometry.slot_from_positions({'changer_x': counts}, alignment_offset=offset) != chain_slot:
+                raise HardwareSafetyError('The confirmed chain slot lacks unambiguous calibrated counts.')
+            attestation['chain_slot'] = chain_slot
+        elif chain_slot is not None:
+            raise HardwareSafetyError('A chain slot cannot establish an XY table reference.')
         original_plan = json.loads(json.dumps(dict(commands=plan, startup=attestation), allow_nan=False))
         store = QueueSafetyStore(backend._safety_store.path)
         session = QueueWorkflowSession.start(store, original_plan, profile, run_id=run_id)
@@ -74,16 +85,16 @@ class QueueNativeStartup:
                     and not retained_restart_vacuum)
                 or vacuum._safety_store.path.resolve() != backend._safety_store.path.resolve()):
             raise HardwareSafetyError('Startup requires the idle original native vacuum and the same fixed safety journal.')
-        geometry = QueueStationGeometry.from_config(backend._config, use_xy_table=True)
         from .hardware_contracts import _build_motor_controller_config
         station = backend._config.motor_station
+        geometry = QueueStationGeometry.from_config(backend._config, use_xy_table=station.use_xy_table)
         if (asdict(backend._client.config) != asdict(_build_motor_controller_config(backend._config))
-                or station.ports != {key: axis.port for key, axis in backend._axes.items()}
-                or station.addresses != {key: axis.address for key, axis in backend._axes.items()}
+                or not station.routing_matches(backend._axes)
                 or station.baud != 57600 or asdict(backend._config.vacuum) != asdict(vacuum._cfg)
                 or getattr(backend, '_backend_errors', ())):
             raise HardwareSafetyError('Restore the accepted native motor/vacuum calibration and available components before startup.')
-        table = QueueXYTableMotion(backend._client, backend._axes, geometry,
+        table_class = QueueXYTableMotion if geometry.use_xy_table else QueueChainTableMotion
+        table = table_class(backend._client, backend._axes, geometry,
             should_cancel=lambda: getattr(backend, '_halt_check', None) is not None and backend._halt_check(),
             transfer_settings=dict(grip_settle_s=.3, dropoff_delay_s=backend._config.vacuum.dropoff_delay_s))
         pulse = getattr(backend, '_pulse_irm', None)
@@ -96,7 +107,7 @@ class QueueNativeStartup:
             raise HardwareSafetyError('Restore the original accepted ARM and pulse configuration before startup.')
         from .queue_instruments import QueueInstrumentLifetime
         instruments = QueueInstrumentLifetime(backend)
-        motor_ports = {instruments.port_key(port) for port in station.ports.values()}
+        motor_ports = {instruments.port_key(axis.port) for axis in backend._axes.values()}
         vacuum_port = instruments.port_key(vacuum._cfg.port)
         scientific_ports = {instruments.port_key(backend._config.squid.port)}
         if instruments.bridge_client is not None:
@@ -249,7 +260,8 @@ class QueueNativeStartup:
         self.vacuum.queue_set_outputs(self.session, pump_enabled=True, valve_connected=False,
             transfer_pose=pose, field_outputs_off_verified=fields)
         self._home_empty_lift(fields)
-        reference = QueueXYReference(self.table, self.vacuum)
+        reference_class = QueueXYReference if self.table.geometry.use_xy_table else QueueChainReference
+        reference = reference_class(self.table, self.vacuum)
         reference.home(self.session, empty_rod_confirmed=True, field_outputs_off_verified=fields)
         lift = QueueLiftTransfer(self.table, self.vacuum)
         coordinator = QueueTransferCoordinator(self.session, lift, reference, self.fields)

@@ -26,23 +26,36 @@ class QueueOperatorStages:
         self.backend._validate_queue_bindings(self.coordinator)
         return self.coordinator._validate()
 
-    def _corner(self, samples):
+    def _park_pose(self, samples):
         vacuum = self.coordinator.vacuum
         if (vacuum._queue_binding is None or vacuum._queue_binding.session is not self.session
                 or vacuum.output_state_known is not True or vacuum.is_pump_on() is not True):
             raise HardwareSafetyError('Original acknowledged queue vacuum ownership must remain unchanged.')
         vacuum._queue_binding._validate_owner()
         self.table._clearance(samples)
+        if self.coordinator.vacuum.is_valve_connected() is not False:
+            raise HardwareSafetyError('The original valve must remain OFF during tray handling.')
+        if not self.table.geometry.use_xy_table:
+            slot = self.table.slot_from_samples(samples)
+            if self.last_park is None or slot != self.last_park.operation['slot']:
+                raise HardwareSafetyError('The physical chain slot changed after parking for tray handling.')
+            return dict(phase='chain_park', slot=slot)
         state = self.coordinator.reference._switches('loading_corner')
         if any(value['negative'] != 0 for value in state['switches'].values()):
             raise HardwareSafetyError('Both original negative XY edges must verify the loading corner.')
-        if self.coordinator.vacuum.is_valve_connected() is not False:
-            raise HardwareSafetyError('The original valve must remain OFF during tray handling.')
         return state
 
-    def park(self):
+    def park(self, hole=None):
         reference = self._idle()
+        if self.coordinator.vacuum.is_valve_connected() is not False:
+            raise HardwareSafetyError('Park only with the acknowledged original valve OFF.')
         fields = self.coordinator.fields.verify_off(self.session)
+        if not self.table.geometry.use_xy_table:
+            # VB6 Flip uses slot 0, the chain origin. Goto uses its compiled slot.
+            slot = self.table.geometry.slot_max if hole is None or hole == 0 else hole
+            self.last_park = self.table.move_to_slot(self.session, slot,
+                reference_verified=reference, field_outputs_off_verified=fields)
+            return self.last_park
         # VB6 MoveToCorner uses one -3,000,000 count sweep per negative edge;
         # never enlarge a smaller accepted native homing envelope.
         distance = -min(3_000_000, abs(self.table.motor.config.xy_neg_homing_distance))
@@ -72,7 +85,7 @@ class QueueOperatorStages:
                 self.backend._validate_queue_bindings(self.coordinator)
                 if self.table.motor._connection_id != operation['connection_id']:
                     raise HardwareSafetyError('Original motor connection changed during loading-corner motion.')
-                observations.append(self._corner(cleanup))
+                observations.append(self._park_pose(cleanup))
             except Exception as exc:
                 error = str(exc) or type(exc).__name__
         record = QueueTableMoveRecord(copy.deepcopy(operation), copy.deepcopy(self.table.profile),
@@ -128,7 +141,7 @@ class QueueOperatorStages:
         if not error:
             try:
                 self.table._check_cancel()
-                observations.append(self._corner(samples))
+                observations.append(self._park_pose(samples))
                 if self.table.motor._connection_id != operation['connection_id']:
                     raise HardwareSafetyError('Original motor connection changed during operator confirmation.')
             except Exception as exc:

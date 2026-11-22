@@ -113,6 +113,9 @@ def _build_motor_controller_config(config: AppConfig) -> MotorControllerConfig:
         if any(values[key] <= 0 for key in positive) or values["pickup_torque_throttle"] > 1 or values["updown_torque_factor"] > 100 or values["updown_max_torque"] > 32767:
             raise ValueError("Invalid native motor speed/torque calibration.")
         fractional = {"one_step", "pickup_torque_throttle"}
+        if config.motor_station.use_xy_table is False:
+            fractional.add("sample_hole_alignment_offset")
+            values = {"sample_hole_alignment_offset": -.02, **values}
         if any(not float(value).is_integer() for key, value in values.items() if key not in fractional):
             raise ValueError("Native motor integer settings must not contain fractional units.")
         values = dict(values, meas_pos=config.motion.meas_pos, sample_bottom=config.motion.sample_bottom,
@@ -384,6 +387,7 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             if config.motor_station.calibration_source:
                 from rapidpy_common.motor_routing import RoutedMotorSerialClient
                 station = config.motor_station
+                self._axes = {key: self._axes[key] for key in station.motor_axis_keys()}
                 for key, axis in self._axes.items():
                     axis.port = station.ports.get(key, "")
                     axis.address = station.addresses.get(key, 0)
@@ -620,6 +624,12 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             previous = getattr(self, '_geometry_stage_token', None)
             self._geometry_stage_token = token
             try:
+                if geometry is not None and not geometry.station.use_xy_table:
+                    from rapidpy_common.motor_diagnostic_safety import verify_stopped_in_place
+                    samples, failure = verify_stopped_in_place(self._client, self._axes['changer_x'])
+                    if failure:
+                        raise HardwareError('Chain stop before treatment remains unverified: ' + failure)
+                    geometry.require_empty_chain_slot(samples)
                 yield token
             finally:
                 self._geometry_stage_token = previous
@@ -722,11 +732,11 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         with claim:
             yield
 
-    def prepare_queue_lifetime(self, vacuum, plan, *, run_id, operator, empty_rod_confirmed=False):
+    def prepare_queue_lifetime(self, vacuum, plan, *, run_id, operator, empty_rod_confirmed=False, chain_slot=None):
         """Create the original durable owner without opening ports or changing outputs."""
         from .queue_startup import QueueNativeStartup
         return QueueNativeStartup.prepare(self, vacuum, plan, run_id=run_id, operator=operator,
-            empty_rod_confirmed=empty_rod_confirmed)
+            empty_rod_confirmed=empty_rod_confirmed, chain_slot=chain_slot)
 
     def start_queue_lifetime(self):
         startup = getattr(self, '_queue_startup', None)
@@ -771,8 +781,8 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         from .queue_operator import QueueOperatorStages
         self._queue_operator_stages = QueueOperatorStages(self, coordinator)
 
-    def park_queue_station(self):
-        return self._queue_operator_stages.park()
+    def park_queue_station(self, hole=None):
+        return self._queue_operator_stages.park(hole)
 
     def record_queue_tray_confirmation(self, kind, file_id='', *, operator):
         return self._queue_operator_stages.confirm(kind, file_id, operator=operator)
@@ -845,13 +855,12 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                 and self._safety_store is not session.child_store):
             raise HardwareError('Restore the original borrowed queue stage store before I/O.')
         root = session.store._queue(session.token)
-        station = QueueStationGeometry.from_config(self._config, use_xy_table=True)
+        station = QueueStationGeometry.from_config(self._config, use_xy_table=self._config.motor_station.use_xy_table)
         snapshot = lambda value: json.loads(json.dumps(value, allow_nan=False))
         if (station != coordinator.table.geometry
                 or self._client is not coordinator.table.motor or self._axes != coordinator.table.axes
                 or self._config.general.nocomm is not False
-                or self._config.motor_station.ports != {key: axis.port for key, axis in self._axes.items()}
-                or self._config.motor_station.addresses != {key: axis.address for key, axis in self._axes.items()}
+                or not self._config.motor_station.routing_matches(self._axes)
                 or snapshot(dataclasses.asdict(_build_motor_controller_config(self._config)))
                     != coordinator.table.profile['controller']
                 or root['profile']['stage_profiles'].get('acquisition') != snapshot(self._acquisition_safety_profile())
@@ -896,11 +905,14 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             raise HardwareError('An original idle native queue is required for a blank holder.')
         self._validate_queue_bindings(coordinator)
         reference = coordinator._validate()
-        # XY has one calibrated blank; no nominal specimen or pickup is needed.
-        hole = coordinator.table.geometry.resolve_holder(marker, current_slot=coordinator.table.geometry.hole_slot)
+        station = coordinator.table.geometry
+        if type(marker) is not int or (marker != 0 and not station.is_empty(marker)):
+            raise HardwareError('A blank measurement requires an empty-hole request.')
+        requested = station.hole_slot if marker == 0 and station.use_xy_table else marker
         fields = coordinator.fields.verify_off(coordinator.session)
-        coordinator.table.move_to_slot(coordinator.session, hole, reference_verified=reference,
+        move = coordinator.table.move_to_slot(coordinator.session, requested, reference_verified=reference,
             field_outputs_off_verified=fields)
+        hole = move.operation['slot']
         blank = QueueBlankHolderMotion(coordinator.table, coordinator.vacuum)
         blank.prepare(coordinator.session, hole, reference_verified=reference, field_outputs_off_verified=fields)
         self.bind_holder_geometry(coordinator.session, coordinator.vacuum)
@@ -1997,6 +2009,8 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
                 else:
                     self._sample_loaded = False
             for axis_name in ("changer_x", "changer_y", "turning", "updown"):
+                if axis_name not in self._axes:
+                    continue
                 try:
                     self._client.halt(self._axes[axis_name])
                 except Exception as exc:
