@@ -102,10 +102,14 @@ def _verified_outputs(data, names):
 
 def run_performance_check(specimens, idle_seconds, queue_timeout_seconds, *, entry_started_ns):
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-    from PySide6 import QtWidgets
+    from PySide6 import QtCore, QtWidgets
     from rapid_main.startup import collect_startup_environment
 
     with tempfile.TemporaryDirectory(prefix='rapidpy-perf-') as directory, offline_profile(Path(directory)) as config:
+        # The simulated vacuum otherwise relaxes toward its warning threshold
+        # while we measure idle time. Keep the normal queue interlock active.
+        config.vacuum.auto_pump = True
+        config.save()
         startup = collect_startup_environment()
         if not startup.ok:
             print(startup.to_json())
@@ -115,11 +119,26 @@ def run_performance_check(specimens, idle_seconds, queue_timeout_seconds, *, ent
         app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
         app.setQuitOnLastWindowClosed(False)
         window = MainWindow()
+        unexpected_dialogs = []
+        dialog_watcher = QtCore.QTimer()
+
+        def reject_unexpected_dialog():
+            dialog = app.activeModalWidget()
+            if not isinstance(dialog, QtWidgets.QDialog):
+                return
+            text = dialog.text() if isinstance(dialog, QtWidgets.QMessageBox) else ''
+            unexpected_dialogs.append(f'{dialog.windowTitle()} — {text}'.strip(' —'))
+            dialog.reject()
+
+        dialog_watcher.timeout.connect(reject_unexpected_dialog)
         try:
+            window._set_show_startup_guide(False)
             window.show()
             app.processEvents()
-            if not window.config.general.nocomm or not window.measurement_backend().simulated:
-                raise RuntimeError('The benchmark requires the simulated measurement backend.')
+            vacuum = window._vacuum_backend
+            if (not window.config.general.nocomm or not window.measurement_backend().simulated
+                    or not vacuum.simulated or not vacuum.is_pump_on()):
+                raise RuntimeError('The benchmark requires simulated measurement and vacuum with the simulated pump on.')
             ready_ms = (time.perf_counter_ns() - entry_started_ns) / 1e6
             _ready_signal()
             idle = _observe(idle_seconds)
@@ -130,6 +149,7 @@ def run_performance_check(specimens, idle_seconds, queue_timeout_seconds, *, ent
                 queue.add_sample(position=str(position), name=name, treatment=' -> '.join(_LABELS))
             finished = []
             window._measurement.sample_run_finished.connect(lambda aborted, name: finished.append((name, aborted)))
+            dialog_watcher.start(100)
             clicked_at = time.perf_counter_ns()
             queue._run_btn.click()
             click_ms = (time.perf_counter_ns() - clicked_at) / 1e6
@@ -141,18 +161,22 @@ def run_performance_check(specimens, idle_seconds, queue_timeout_seconds, *, ent
             active.update(requested_specimens=specimens, requested_steps=specimens * len(_LABELS),
                           finished_specimens=len(reported), published_specimens=published,
                           published_steps=steps, queue_settled=done)
-            ok = (done and len(finished) == specimens and reported == set(names) and published == specimens
+            ok = (done and not unexpected_dialogs and len(finished) == specimens
+                  and reported == set(names) and published == specimens
                   and idle['timer']['samples'] > 0 and active['timer']['samples'] > 0)
             print(json.dumps(dict(schema='rapidpy.performance_check.v1', ok=ok, simulated=True,
                                   software_version=software_version(), qt_platform=app.platformName(),
                                   entry_to_first_window_ms=round(ready_ms, 3), qt_timer_interval_ms=_TIMER_INTERVAL_MS,
                                   idle_seconds_requested=idle_seconds, treatment_labels=_LABELS,
+                                  simulated_vacuum_pump_on=config.vacuum.auto_pump,
+                                  unexpected_dialogs=unexpected_dialogs, terminal_status=window._sb_status.text(),
                                   idle=idle, queue=active), indent=2, sort_keys=True), flush=True)
             return 0 if ok else 2
         finally:
             if window._has_active_automation():
                 window.cancel_queue_run('Performance check ended.')
                 _observe(10, lambda: not window._has_active_automation())
+            dialog_watcher.stop()
             window._confirm_shutdown(prompt=False)
             window.hide()
             window.deleteLater()

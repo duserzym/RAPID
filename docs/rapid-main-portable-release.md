@@ -352,8 +352,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Verify-RapidPy.ps1 `
     -RequireFullInventory -MeasurePerformance -PerformanceSpecimens 40 -PerformanceIdleSeconds 5
 ```
 
-This opens an isolated offscreen No-Communication session and runs the actual
-Sample Queue button with synthetic specimens. The report records process launch
+This opens an isolated offscreen No-Communication session with the simulated
+vacuum pump running, then uses the Sample Queue button with synthetic specimens.
+The report records process launch
 to the first sampled window, idle CPU time, working set and private bytes,
 queue duration, published specimen and step counts, and the 95th percentile
 and longest intervals between 20 ms Qt timer ticks. CPU percentage is relative

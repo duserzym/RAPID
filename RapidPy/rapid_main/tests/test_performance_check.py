@@ -28,15 +28,17 @@ class PerformanceCheckTests(unittest.TestCase):
                    'RAPID_PERFORMANCE_READY_FILE': str(ready),
                    'PYTHONPATH': os.pathsep.join(path for path in sys.path if path)}
             result = subprocess.run([sys.executable, '-m', 'rapid_main', '--measure-performance',
-                                     '--performance-specimens', '2', '--performance-idle-seconds', '1',
+                                     '--performance-specimens', '2', '--performance-idle-seconds', '5',
                                      '--performance-queue-timeout-seconds', '30'], env=env, capture_output=True,
                                     text=True, timeout=75)
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             report = json.loads(result.stdout)
             self.assertEqual(report['schema'], 'rapidpy.performance_check.v1')
             self.assertTrue(report['simulated'])
+            self.assertTrue(report['simulated_vacuum_pump_on'])
+            self.assertEqual(report['unexpected_dialogs'], [])
             self.assertGreater(report['entry_to_first_window_ms'], 0)
-            self.assertGreaterEqual(report['idle']['elapsed_ms'], 1000)
+            self.assertGreaterEqual(report['idle']['elapsed_ms'], 5000)
             self.assertGreater(report['idle']['timer']['samples'], 0)
             self.assertGreater(report['queue']['timer']['samples'], 0)
             self.assertEqual(report['queue']['published_specimens'], 2)
