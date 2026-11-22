@@ -305,6 +305,9 @@ on offscreen work areas. It checks that the registry and specimen selection
 controls fit and that a maximized window keeps its state. Lab sign-off covers
 monitor moves and dock or undock events on the actual workstation displays.
 
+`StationAcceptance.md` ships beside this guide. Its evidence audit checks the
+recorded bench cases and attachment hashes for the candidate revision.
+
 ## Remaining full-replacement gates
 
 This is a **pilot candidate**. Calibrated axial and transverse AF, independent

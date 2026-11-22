@@ -1,18 +1,30 @@
 from __future__ import annotations
 
 import io
+import json
 from pathlib import Path
 import tempfile
 import tomllib
 import unittest
 from unittest.mock import patch
 
+from rapid_main import __version__, software_version
 from rapid_main.__main__ import main as module_main
 from rapid_main.package_launch import ToolUnavailableError, resolve_tool_launch
 from rapid_main.startup import collect_startup_environment, select_main_icon
 
 
 class PackagingTests(unittest.TestCase):
+    def test_portable_version_uses_the_adjacent_candidate_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = "7" * 40
+            (root / "build_manifest.json").write_text(json.dumps({"schema": "rapidpy.portable_build.v2",
+                "source_revision": revision}), encoding="utf-8-sig")
+            with (patch("sys.frozen", True, create=True), patch("sys.executable", str(root / "RapidPyMain.exe")),
+                  patch.dict("os.environ", {"RAPID_BUILD_COMMIT": "external"})):
+                self.assertEqual(software_version(), f"{__version__}+{revision}")
+
     def test_frozen_tools_dispatch_through_the_bundled_executable(self) -> None:
         with patch("sys.frozen", True, create=True):
             launch = resolve_tool_launch(

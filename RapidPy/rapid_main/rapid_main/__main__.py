@@ -24,6 +24,8 @@ def _parser() -> argparse.ArgumentParser:
         help="print a read-only dependency/resource report without opening the UI",
     )
     parser.add_argument("--check-display", action="store_true", help="check the offline dialog layout and window state")
+    parser.add_argument("--check-station-evidence", nargs=2, metavar=("MANIFEST", "CANDIDATE_COMMIT"),
+                        help="audit a station evidence folder without opening hardware")
     parser.add_argument("--backup-measurement", nargs=2, metavar=("PUBLICATION", "BACKUP_FOLDER"),
                         help="verify and back up a completed specimen publication")
     parser.add_argument("--backup-index-sha256", help=argparse.SUPPRESS)
@@ -32,6 +34,16 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.check_station_evidence:
+        from rapid_main.station_evidence import audit_station_evidence
+
+        try:
+            result = audit_station_evidence(*args.check_station_evidence)
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0 if result["all_cases_have_passing_evidence"] else 1
     if args.backup_measurement:
         from rapid_main.io.bundle_backup import backup_measurement
 

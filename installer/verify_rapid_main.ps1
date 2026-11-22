@@ -116,6 +116,10 @@ try {
         $smoke.simulated -ne $true -or $smoke.panels -lt 6) {
         throw 'UI checks did not verify a packaged No-Comm session.'
     }
+    if ($report.inventory.source_revision -and $smoke.PSObject.Properties['software_version'] -and
+        -not ([string]$smoke.software_version).EndsWith("+$($report.inventory.source_revision)", [StringComparison]::Ordinal)) {
+        throw 'The packaged runtime version does not identify the candidate commit.'
+    }
     foreach ($helper in @('af_tuner', 'data_viewer', 'gaussmeter_control', 'updown_control', 'vrm_logger', 'webcam_viewer')) {
         if ($smoke.helpers.$helper -ne $true) { throw "UI checks did not verify packaged helper: $helper" }
     }

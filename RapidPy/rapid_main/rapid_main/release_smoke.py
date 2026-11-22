@@ -9,6 +9,8 @@ from pathlib import Path
 import struct
 import tempfile
 
+from rapid_main import software_version
+
 
 def _check_transverse_probe(window, app):
     from PySide6 import QtCore, QtGui
@@ -231,6 +233,7 @@ def run_smoke_test() -> int:
             sample_index_registry = _check_sample_index_registry(window, root)
             report = {
                 "schema": "rapidpy.release_smoke.v1", "simulated": True,
+                "software_version": software_version(),
                 "ok": (window.config.general.nocomm and all(helpers.values()) and transverse_probe
                        and webcam_decode and measurement_archive and measurement_backup and sample_index_registry),
                 "transverse_probe": transverse_probe,

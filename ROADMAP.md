@@ -2918,3 +2918,9 @@ visible normal windows on the affected screen. Maximized, minimized, and
 full-screen states are preserved. The portable verifier checks the Sample
 Index controls at 150% and 200% scaling on compact virtual work areas. The lab's
 mixed-monitor workstation remains part of display sign-off.
+
+**Station evidence audit checkpoint (2026-11-22).** The portable console audits
+the documented bench cases for a candidate commit. It verifies attachment
+hashes and reports missing, invalid, failed, and blocked records. Section and
+subsystem names distinguish reused IDs. The package carries the operator's
+station procedure and stamps its built revision into runtime evidence.

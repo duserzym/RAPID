@@ -29,6 +29,7 @@ try {
 $ErrorActionPreference = 'Stop'
 $bundleDir = Join-Path $repoRoot 'dist\RapidPyMain'
 Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\rapid-main-portable-release.md') -Destination (Join-Path $bundleDir 'OperatorGuide.md') -Force
+Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\rapid_hardware_acceptance_procedure_2026-08-29.md') -Destination (Join-Path $bundleDir 'StationAcceptance.md') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'verify_rapid_main.ps1') -Destination (Join-Path $bundleDir 'Verify-RapidPy.ps1')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'portable_bundle.psm1') -Destination $bundleDir
 Import-Module (Join-Path $PSScriptRoot 'portable_bundle.psm1') -Force

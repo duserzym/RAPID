@@ -23,7 +23,7 @@ without a complete record does not count as evidence.
 | `operator` | Person performing and signing the test |
 | `machine` | Hostname of the controlling computer |
 | `software_commit` | `git rev-parse HEAD` of this repository at run time |
-| `software_version` | `rapid_main.software_version()` (set `RAPID_BUILD_COMMIT` at deploy time) |
+| `software_version` | `rapid_main.software_version()` (portable builds include the candidate in `build_manifest.json`) |
 | `config_hash` | `rapid_main.hardware_contracts.config_fingerprint(config)` |
 | `device_identity` | Port, baud, adapter, firmware/serial reported by the device |
 | `commands` | Ordered commands issued, verbatim |
@@ -47,6 +47,58 @@ RapidPy already emits most of this automatically per run:
   with per-command start/end timestamps and replies.
 
 Attach these to the record rather than transcribing them.
+
+### Audit an evidence folder
+
+Create one `campaign.json` per station and candidate commit. Start with this
+structure and append the operator's records as each test is performed.
+
+```json
+{
+  "schema": "rapidpy.station_evidence.v1",
+  "station": "lab-station-id",
+  "software_commit": "full candidate commit hash",
+  "records": []
+}
+```
+
+Each record uses the fields in the table above, plus `station`, `case`, and
+`evidence_mode`. Use `station` for bench observations and `software` for
+offline checks or fixture replay. Use `datetime_iso` with `start` and `end`
+UTC timestamps. Record `commands` and `raw_replies` as ordered arrays of
+verbatim strings, including empty replies. Use empty arrays for steps that
+issue no commands. Supply `reason` for a failed or blocked attempt.
+
+Prefix each case ID with its procedure section name. Use `preconditions`,
+`ports`, `identity`, `motion`, `squid-zero`, `discontinuity`,
+`holder-reference`, `restart`, `vrm`, `rockmag`, or `susceptibility`. For
+example, `squid-zero/S1` and `susceptibility/S1` are separate cases. For R1–R3,
+include the subsystem between the section and case ID. The keys are `squid`,
+`changer-lift-turning`, `vacuum`, `af`, `irm-arm`, `dac-mcc`, `thermal`, and
+`susceptibility`. The SQUID identity case uses `identity/squid/R1`.
+
+Copy each attachment into the folder containing `campaign.json` or a
+subfolder. Each `artifact_paths` entry contains `original_path` (the
+absolute path at capture), `evidence_path` (relative to `campaign.json`,
+using `/` separators), and `sha256` (from `Get-FileHash -Algorithm SHA256`).
+Keep earlier attempts with distinct record IDs when repeating a case. The
+audit uses the latest end time after checking the supplied records.
+
+Use the candidate revision from the portable build manifest:
+
+```powershell
+$candidate = (Get-Content -Raw .\build_manifest.json | ConvertFrom-Json).source_revision
+.\RapidPyMainConsole.exe --check-station-evidence 'D:\RAPID evidence\campaign.json' $candidate
+```
+
+The report lists the recorded verdict for all 93 cases and explains invalid,
+ambiguous, and missing evidence. Exit code `0` means every case has passing
+records and verified attachments. Exit code `1` accompanies an incomplete or
+failing report. Exit code `2` indicates an unreadable campaign or candidate
+mismatch. The audit checks revision identifiers in attached RAPID JSON and
+flags recognized simulation evidence in station cases. The signed operator
+observations remain the basis for station acceptance. Hosted deployment
+qualification uses separate evidence.
 
 ---
 
