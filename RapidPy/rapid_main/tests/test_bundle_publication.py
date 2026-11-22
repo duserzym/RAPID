@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -125,6 +127,22 @@ with patch.object(bundle_publication, '_replace_snapshot', crash):
                 archive.writestr(name, data)
         with self.assertRaisesRegex(ValueError, 'Archived measurement file changed'):
             load_magic_directory(manifest.parent)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows legacy path limit')
+    def test_archive_manifest_can_exceed_the_windows_legacy_path_limit(self):
+        output = self.root / ('x' * (196 - len(str(self.root))))
+        output.mkdir()
+        writable = bundle_history._archive_io_path(output)
+        self.addCleanup(shutil.rmtree, writable)
+        for label in ('NRM', 'AF20'):
+            with MeasurementBundleWriter(writable, SpecimenMeta('A')) as writer:
+                writer.append_step(_step(label))
+        previous = json.loads((output / 'provenance.json').read_bytes())['previous_publication']
+        manifest = output / previous['relative_path']
+        self.assertGreater(len(str(manifest)), 260)
+        self.assertRegex(previous['sha256'], r'^[0-9a-f]{64}$')
+        prior = load_magic_directory(manifest.parent)
+        self.assertEqual([step.demag_label for step in prior.specimens[0].steps], ['NRM'])
 
     def test_archive_failure_keeps_the_previous_publication(self):
         before = self.original()

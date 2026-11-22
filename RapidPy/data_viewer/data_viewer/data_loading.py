@@ -12,7 +12,7 @@ from typing import Iterable
 
 try:
     from rapid_main.data_model import MeasurementStep, SpecimenMeta
-    from rapid_main.io.bundle_history import ARCHIVE_MANIFEST, ARCHIVE_PAYLOAD, open_bundle_archive
+    from rapid_main.io.bundle_history import ARCHIVE_MANIFEST, ARCHIVE_PAYLOAD, is_bundle_archive, open_bundle_archive
     from rapid_main.io.sam_reader import read_sam, specimen_path
     from rapid_main.io.specimen_reader import read_specimen
 except ModuleNotFoundError:
@@ -22,7 +22,7 @@ except ModuleNotFoundError:
         sys.path.insert(0, str(rapid_main_root))
     sys.modules.pop("rapid_main", None)
     from rapid_main.data_model import MeasurementStep, SpecimenMeta
-    from rapid_main.io.bundle_history import ARCHIVE_MANIFEST, ARCHIVE_PAYLOAD, open_bundle_archive
+    from rapid_main.io.bundle_history import ARCHIVE_MANIFEST, ARCHIVE_PAYLOAD, is_bundle_archive, open_bundle_archive
     from rapid_main.io.sam_reader import read_sam, specimen_path
     from rapid_main.io.specimen_reader import read_specimen
 
@@ -145,7 +145,7 @@ def load_csv_dataset(path: str | Path) -> ViewerDataset:
 
 def load_magic_directory(path: str | Path) -> ViewerDataset:
     root = Path(path)
-    archived = (root / ARCHIVE_MANIFEST).exists()
+    archived = is_bundle_archive(root)
     source_kind = "measurement_archive" if archived else "magic_dir"
     source_file = root / (ARCHIVE_PAYLOAD if archived else "measurements.txt")
     specimens_by_name: dict[str, ViewerSpecimen] = {}

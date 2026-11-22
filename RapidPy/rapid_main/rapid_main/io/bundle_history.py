@@ -24,6 +24,20 @@ _EVIDENCE_DIRECTORIES = {
 }
 
 
+def _archive_io_path(path: str | Path) -> Path:
+    """Use Windows extended paths for the additional archive directory levels."""
+    absolute = os.path.abspath(path)
+    if os.name != "nt" or absolute.startswith(("\\\\?\\", "\\\\.\\")):
+        return Path(absolute)
+    if absolute.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + absolute[2:])
+    return Path("\\\\?\\" + absolute)
+
+
+def is_bundle_archive(directory: str | Path) -> bool:
+    return (_archive_io_path(directory) / ARCHIVE_MANIFEST).exists()
+
+
 def _archive_identity(payload):
     return hashlib.sha256(_canonical(payload)).hexdigest()
 
@@ -60,13 +74,13 @@ def archive_previous_bundle(directory, specimen, scientific_paths, mutable_paths
     files = {name: digest for name, digest in previous.items() if digest is not None}
     payload = {"schema": _SCHEMA, "specimen": specimen, "files": files}
     archive_id = _archive_identity(payload)
-    root = contained_path(directory, HISTORY_DIRECTORY, output=True)
-    archive = contained_path(root, archive_id, output=True)
+    root = contained_path(_archive_io_path(directory), HISTORY_DIRECTORY, output=True)
+    archive = contained_path(root, archive_id[:32], output=True)
     if archive.exists():
         with open_bundle_archive(archive, expected_id=archive_id):
             pass
     else:
-        staged = contained_path(staging, "previous-publication", output=True)
+        staged = contained_path(staging, "prior", output=True)
         staged.mkdir()
         zip_path = contained_path(staged, ARCHIVE_PAYLOAD, output=True)
         with zip_path.open("xb") as stream:
@@ -89,14 +103,17 @@ def archive_previous_bundle(directory, specimen, scientific_paths, mutable_paths
         _replace_snapshot(staged, archive)
         _sync_directory(root)
     manifest = contained_path(archive, ARCHIVE_MANIFEST, output=True)
-    return {"relative_path": manifest.relative_to(directory).as_posix(),
-            "archive_id": archive_id, "sha256": _digest(manifest)}, previous
+    digest = _digest(manifest)
+    if digest is None:
+        raise OSError("The prior measurement archive manifest is missing after publication.")
+    return {"relative_path": f"{HISTORY_DIRECTORY}/{archive.name}/{ARCHIVE_MANIFEST}",
+            "archive_id": archive_id, "sha256": digest}, previous
 
 
 @contextmanager
 def open_bundle_archive(directory: str | Path, *, expected_id: str | None = None) -> Iterator[ZipFile]:
     """Verify every archived file before yielding the open ZIP for reading."""
-    directory = Path(directory).absolute()
+    directory = _archive_io_path(directory)
     path = contained_path(directory, ARCHIVE_MANIFEST, output=True)
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
