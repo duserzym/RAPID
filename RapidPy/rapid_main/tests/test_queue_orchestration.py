@@ -604,7 +604,7 @@ class QueueOrchestrationTest(unittest.TestCase):
             restored._sample_queue.interrupted_sample_names(),
             ["HBK-INT-1", "HBK-INT-3"],
         )
-        self.assertTrue(any("choose Resume, Re-run, Skip, or Abort" in msg for msg in captured))
+        self.assertTrue(any("Choose Re-run, Skip, or Abort" in msg for msg in captured))
 
 
 if __name__ == "__main__":

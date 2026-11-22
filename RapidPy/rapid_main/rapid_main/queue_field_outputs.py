@@ -99,9 +99,14 @@ class QueueFieldOutputs:
             raise HardwareSafetyError('Verify participating outputs off on the original live queue circuits.')
         return QueueFieldOffProof(self, context)
 
-    def verify_off(self, session, *, recovery=False):
+    def verify_off(self, session, *, recovery=False, recovery_operator=None):
         root = self._validate(session)
         child, operation = session.child_store, dict(action='verify_participating_field_outputs_off', recovery=recovery)
+        if recovery_operator is not None:
+            if (recovery is not True or session.is_recovery is not True
+                    or not isinstance(recovery_operator, str) or not recovery_operator.strip()):
+                raise HardwareSafetyError('Record a named operator for restart field recovery.')
+            operation['recovery_operator'] = recovery_operator.strip()
         stage = root['stage']
         if stage and stage['status'] == 'pending':
             if (recovery is not True or session.is_recovery is not True or stage['family'] != 'field_outputs'

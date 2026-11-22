@@ -1267,6 +1267,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 'Native queue commands are unavailable: ' + ', '.join(missing))
             return False
         try:
+            pending = self._measurement_backend._safety_store.pending()
+            if pending is not None:
+                if pending['family'] == 'queue':
+                    raise ValueError('An interrupted native queue is recorded. Open Diagnostics > Recover Interrupted Queue.')
+                raise ValueError('Recover the recorded hardware operation in its original panel before starting a queue.')
             if options.use_xy_table is not self.config.motor_station.use_xy_table:
                 raise ValueError('Queue options must match the accepted physical table mode.')
             from .queue_station import QueueStationGeometry
@@ -1460,6 +1465,48 @@ class MainWindow(QtWidgets.QMainWindow):
         self._start_queue_command_worker(None, backend.retry_queue_terminal_settlement, [], recover_on_error=False)
         self.set_flow_state('returning')
         self.set_status('Retrying original connection closure; queue ownership remains held until verification.')
+        return True
+
+    @QtCore.Slot()
+    def recover_interrupted_queue(self) -> bool:
+        """Select an original restart stage without replaying the queue."""
+        from rapidpy_common.queue_safety import QueueSafetyStore
+        from .queue_restart import QueueRestartRecovery, restart_stage
+
+        if (not self._uses_native_queue() or self._queue_native_session is not None
+                or self._shutdown_cleanup_requested
+                or self._queue_active or self._queue_command_thread is not None or self._measurement.is_active()):
+            self.set_status('Restart recovery requires an idle native station. Use Retry Queue Shutdown for a live queue owner.')
+            return False
+
+        backend, vacuum = self._measurement_backend, self._vacuum_backend
+        recovery = None
+        try:
+            state = QueueSafetyStore(backend._safety_store.path).read()
+            kind = restart_stage(state)
+            recovery = QueueRestartRecovery(backend, vacuum, state, operator=self.config.general.operator)
+            # Only the original-stage capability and OS lease allow entry here.
+            # Ordinary editor/diagnostic requests still use the fault guard.
+            lease = self._ownership.acquire_many(('measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptibility'),
+                                                'queue_restart_recovery', allow_reentrant=False)
+        except Exception as exc:
+            if recovery is not None:
+                recovery.release()
+            self.set_status(str(exc))
+            return False
+
+        if kind == 'field_outputs':
+            reason = 'Field cutoff verified. The interrupted queue still requires station recovery for motion and vacuum.'
+            state = 'error'
+        else:
+            reason = 'Recorded queue shutdown published. Review interrupted measurement rows before starting another run.'
+            state = 'idle'
+        self._queue_pending_finalize = dict(state=state, reason=reason, return_to_safe=False,
+            clear_plan=True, clear_current=True, clear_command=True, failure_reason='Interrupted queue recovery failed')
+        self._start_queue_command_worker(None, recovery.run, [lease, recovery], recover_on_error=False)
+        self.set_flow_state('returning')
+        self.set_status('Recovering the original field cutoff.' if kind == 'field_outputs'
+                        else 'Publishing the verified shutdown from the original queue journal.')
         return True
 
     def _run_next_queue_command(self) -> None:
@@ -1821,8 +1868,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._queue_command_leases = []
         pending, self._queue_pending_finalize = self._queue_pending_finalize, None
         if pending is not None:
+            failure_reason = pending.pop('failure_reason', None)
             if worker.error:
-                pending['reason'] = (pending.get('reason') or 'Queue stopped') + ': ' + worker.error
+                pending['reason'] = (failure_reason or pending.get('reason') or 'Queue stopped') + ': ' + worker.error
             if 'recovery remains unverified' in worker.error or command is None and not worker.ok:
                 pending['state'] = 'error'
             if self._queue_native_session is not None and command is not None:
@@ -2250,6 +2298,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._retry_queue_close_action = dm.addAction('Retry Queue &Shutdown', self.retry_queue_shutdown)
         self._retry_queue_close_action.setEnabled(False)
         self._retry_queue_close_action.setToolTip('Finish closing the original connections after a queue shutdown failure.')
+        restart_queue_action = dm.addAction('Recover &Interrupted Queue', self.recover_interrupted_queue)
+        restart_queue_action.setToolTip('Retry an interrupted field cutoff or publish an already verified shutdown after restart.')
         dm.addSeparator()
         af_sub = dm.addMenu("AF &Demagnetizer")
         af_sub.addAction("Set Up AF Sequence", self._launch_af)
@@ -3126,11 +3176,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 recovered = self._sample_queue.recover_interrupted_samples()
                 if recovered:
                     self.set_status(
-                        f"Recovered {recovered} interrupted queue row(s) from last session; choose Resume, Re-run, Skip, or Abort."
+                        f"Recovered {recovered} interrupted queue row(s) from last session. Choose Re-run, Skip, or Abort."
                     )
                 elif was_active:
                     self.set_status(
-                        "Previous queue run was active; review pending rows and press Run Queue to continue."
+                        "Previous queue run was interrupted. Review its status before starting another run."
                     )
                 if self._queue_resume_pos > 0 and not was_active:
                     self.set_status(f"Recovered queue progress index {self._queue_resume_pos}.")

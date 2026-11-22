@@ -2500,3 +2500,28 @@ smoke and compilation checks passed.
 Original-stage restart recovery, importing independent legacy Up collections,
 scientific output/orientation parity, remaining native and auxiliary workflows,
 portable distribution, performance, and station acceptance remain open.
+
+Native restart recovery checkpoint (2026-11-22). Diagnostics now offers Recover
+Interrupted Queue. The action acquires the original journal's OS lease and all
+six device reservations. It verifies the full stage history and compares the
+accepted station wiring/calibration before recovery. A pending field cutoff can
+be retried on the original AF, ARM and pulse circuits and records the operator.
+It keeps the queue pending and leaves vacuum, specimen support and motion state
+for separate recovery. If the original terminal close stage is already verified,
+RAPID checks its field, stopped-axis, vacuum OFF and transport settlement evidence
+and publishes the final queue record without sending any device commands. Pending
+closure and other unverified stages remain latched.
+
+Native queue admission now detects an interrupted journal before prompting for
+empty-rod startup. Saved Resume rows reopen as Interrupted. Re-run, Skip and Abort
+remain explicit choices and live Pause/Resume is available for an active worker.
+The five focused restart tests and an injected MainWindow recovery test passed
+with clean shutdown. The native instrument qualification and stage-specific
+motion, grip/support, acquisition and treatment recovery gates remain open.
+
+Verification passed all 1,401 tests in 636.741 seconds with process exit 0 and
+clean Qt/watchdog shutdown. A staged source snapshot rebuilt the portable wheel
+and both Windows executables. The offline bundled startup and six-panel smoke
+checks passed. The local candidate lives under `.tmp/restart-release/dist/RapidPyMain`
+and includes its build manifest and updated operator guide. Fresh Windows
+deployment and physical/scientific qualification remain open.

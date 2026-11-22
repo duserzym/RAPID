@@ -42,8 +42,11 @@ ownership leases and handoff environment.
 6. Review results in Plots/Data Review. Simulation output stays in `SIMULATED`.
    Run bundles retain scientific outputs, provenance, workflow summaries,
    communication evidence, and a hashed artifact index.
-7. After restart, review interrupted rows and choose Resume, Re-run, Skip, or
-   Abort. Restored queue state alone does not verify physical specimen location.
+7. After a native interruption, open **Diagnostics > Recover Interrupted Queue**.
+   RAPID can retry an interrupted field cutoff or publish a shutdown whose
+   transport closures were already verified. The cutoff leaves the queue latched
+   for further station recovery. Review the interrupted rows after settling the
+   station. Re-run starts a new acquisition, while Skip and Abort exclude the row.
 
 Calibration Center records proposals, approval, expiry/invalidation, and
 rollback. Review/approve calibration before using its coefficients. Help →

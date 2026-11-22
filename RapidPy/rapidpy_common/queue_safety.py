@@ -214,6 +214,21 @@ class QueueSafetyStore(HardwareSafetyStore):
         _token(event_id)
         return self.path.parent / (self.path.name + '.queue-events') / queue_token / (event_id + '.json')
 
+    def stage_event(self, queue_token, head):
+        """Read a specific immutable event from a verified history link."""
+        try:
+            _head(head)
+            payload = self._event_path(queue_token, head['id']).read_bytes()
+            if hashlib.sha256(payload).hexdigest() != head['sha256']:
+                raise ValueError('queue evidence checksum mismatch')
+            event = json.loads(payload)
+            if (event['schema'] != 'rapidpy.queue_stage.v1' or event['id'] != head['id']
+                    or event['queue_token'] != queue_token):
+                raise ValueError('queue evidence identity mismatch')
+            return event
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise HardwareSafetyError('Queue evidence cannot be verified: ' + str(exc)) from exc
+
     def _publish_event(self, state, stage):
         event_id = uuid.uuid4().hex
         event = dict(schema='rapidpy.queue_stage.v1', id=event_id, queue_token=state['token'],
@@ -249,13 +264,7 @@ class QueueSafetyStore(HardwareSafetyStore):
                 if head['id'] in seen:
                     raise ValueError('queue evidence cycle')
                 seen.add(head['id'])
-                payload = self._event_path(state['token'], head['id']).read_bytes()
-                if hashlib.sha256(payload).hexdigest() != head['sha256']:
-                    raise ValueError('queue evidence checksum mismatch')
-                event = json.loads(payload)
-                if (event['schema'] != 'rapidpy.queue_stage.v1' or event['id'] != head['id']
-                        or event['queue_token'] != state['token']):
-                    raise ValueError('queue evidence identity mismatch')
+                event = self.stage_event(state['token'], head)
                 count = event['stage_count']
                 if type(count) is not int or count < 1 or count != expected_count:
                     raise ValueError('queue evidence stage count mismatch')

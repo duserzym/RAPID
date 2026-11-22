@@ -157,14 +157,15 @@ class TestSampleQueueHelpers(unittest.TestCase):
         self.assertEqual(_normalize_status("error"), "Error")
         self.assertEqual(_normalize_status("running"), "Running")
         self.assertEqual(_normalize_status("interrupted"), "Interrupted")
-        self.assertEqual(_normalize_status("resume"), "Resume")
+        self.assertEqual(_normalize_status("resume"), "Interrupted")
         self.assertEqual(_normalize_status("rerun"), "Rerun")
         self.assertEqual(_normalize_status("aborted"), "Aborted")
         self.assertEqual(_normalize_status("Queued"), "Pending")
         self.assertEqual(_normalize_status(""), "Pending")
 
     def test_interrupted_recovery_actions_map_to_statuses(self) -> None:
-        self.assertEqual(_status_for_recovery_action("resume"), "Resume")
+        with self.assertRaises(ValueError):
+            _status_for_recovery_action("resume")
         self.assertEqual(_status_for_recovery_action("re-run"), "Rerun")
         self.assertEqual(_status_for_recovery_action("skip"), "Skipped")
         self.assertEqual(_status_for_recovery_action("abort"), "Aborted")
@@ -179,17 +180,17 @@ class TestSampleQueueHelpers(unittest.TestCase):
                         "sample_name": "HBK-INT",
                         "sample_set": "set-A",
                         "treatment": "NRM",
-                        "status": "Interrupted",
+                        "status": "Resume",
                     }
                 ]
             )
 
             rows, errors = _read_queue_rows(panel._table)
             self.assertEqual(rows, [])
-            self.assertTrue(any("requires Resume" in error for error in errors))
+            self.assertTrue(any("requires Re-run" in error for error in errors))
 
             self.assertEqual(panel.interrupted_sample_names(), ["HBK-INT"])
-            self.assertEqual(panel.apply_interrupted_recovery("resume"), 1)
+            self.assertEqual(panel.apply_interrupted_recovery("rerun"), 1)
             rows, errors = _read_queue_rows(panel._table)
             self.assertEqual(errors, [])
             self.assertEqual(len(rows), 1)

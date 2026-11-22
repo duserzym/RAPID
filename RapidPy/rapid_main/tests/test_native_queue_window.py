@@ -317,6 +317,37 @@ class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestC
         self.assertTrue(all(not self.window._ownership.is_owned(item) for item in RESOURCES))
         self.assertFalse(self.window._retry_queue_close_action.isEnabled())
 
+    def test_restart_menu_recovers_cutoff_and_releases_workers_but_keeps_queue_latched(self):
+        startup = self.prepare()
+        self.cap_voltage = .5
+        self.assertFalse(self.command(self.backend.start_queue_lifetime).ok)
+        interrupted = self.store.pending()
+        startup.session.release()
+        self.backend._safety_store = self.store
+        self.backend._queue_startup = None
+        self.backend._queue_instruments = None
+        self.cap_voltage = 0
+
+        prompts = []
+        with patch.object(QtWidgets.QMessageBox, 'critical', lambda *args: None), patch.object(
+                QtWidgets.QMessageBox, 'question', lambda *args: prompts.append(True)):
+            self.assertFalse(self.window.start_queue_run([QueueSample('S1', 'F1', 1)], QueueOptions()))
+        self.assertEqual(prompts, [])
+
+        vacuum_before = list(self.vacuum_serial.writes)
+        self.assertTrue(self.window.recover_interrupted_queue(), self.window._sb_status.text())
+        self.assertTrue(all(self.window._ownership.owner_of(key) == 'queue_restart_recovery' for key in RESOURCES))
+        self.wait_for(lambda: self.window._queue_command_thread is None)
+        record = self.store.pending()
+        self.assertEqual(record['token'], interrupted['token'])
+        self.assertEqual(record['stage']['token'], interrupted['stage']['token'])
+        self.assertEqual(record['stage']['status'], 'verified')
+        self.assertEqual(self.vacuum_serial.writes, vacuum_before)
+        self.assertFalse(self.motor._connections)
+        self.assertTrue(all(self.window._ownership.owner_of(key) is None for key in RESOURCES))
+        with self.store.operation_lease():
+            self.assertIn('still requires station recovery', self.window._sb_status.text())
+
     def test_ui_shutdown_retry_rejects_unfinished_field_stage(self):
         self.assertTrue(self.start(), self.window._sb_status.text())
         self.cap_voltage = .5

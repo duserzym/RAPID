@@ -74,7 +74,6 @@ class SampleQueuePanel(QtWidgets.QWidget):
 
         self._recovery_btn = QtWidgets.QPushButton("[R]  Recovery")
         recovery_menu = QtWidgets.QMenu(self._recovery_btn)
-        recovery_menu.addAction("Resume interrupted", lambda: self._on_recovery_action("resume"))
         recovery_menu.addAction("Re-run interrupted", lambda: self._on_recovery_action("rerun"))
         recovery_menu.addAction("Skip interrupted", lambda: self._on_recovery_action("skip"))
         recovery_menu.addAction("Abort interrupted", lambda: self._on_recovery_action("abort"))
@@ -372,7 +371,6 @@ class SampleQueuePanel(QtWidgets.QWidget):
         menu.addAction("Mark Error", lambda: self._set_status(row, "Error"))
         if self._safe_cell(row, 5) == "Interrupted":
             menu.addSeparator()
-            menu.addAction("Resume interrupted sample", lambda: self.apply_recovery_to_row(row, "resume"))
             menu.addAction("Re-run interrupted sample", lambda: self.apply_recovery_to_row(row, "rerun"))
             menu.addAction("Skip interrupted sample", lambda: self.apply_recovery_to_row(row, "skip"))
             menu.addAction("Abort interrupted sample", lambda: self.apply_recovery_to_row(row, "abort"))
@@ -602,7 +600,7 @@ class SampleQueuePanel(QtWidgets.QWidget):
         return changed
 
     def apply_recovery_to_row(self, row: int, action: str) -> bool:
-        """Apply an explicit resume/rerun/skip/abort choice to one interrupted row."""
+        """Apply an explicit rerun, skip, or abort choice to one interrupted row."""
         if row < 0 or row >= self._table.rowCount():
             return False
         if self._safe_cell(row, 5) != "Interrupted":
@@ -726,10 +724,6 @@ class SampleQueuePanel(QtWidgets.QWidget):
         elif normalized in {"Interrupted", "Up Captured"}:
             item.setForeground(
                 QtGui.QBrush(QtGui.QColor("#b45309"))
-            )
-        elif normalized == "Resume":
-            item.setForeground(
-                QtGui.QBrush(QtGui.QColor("#0369a1"))
             )
         elif normalized == "Rerun":
             item.setForeground(
@@ -908,7 +902,9 @@ def _parse_step_count(treatment_text: str) -> int:
 
 def _normalize_status(status: str) -> str:
     status = (status or "Pending").strip().title()
-    if status in {"Pending", "Running", "Up Captured", "Done", "Error", "Skipped", "Interrupted", "Resume", "Rerun", "Aborted"}:
+    if status == "Resume":
+        return "Interrupted"  # Older saves used Resume for a fresh acquisition.
+    if status in {"Pending", "Running", "Up Captured", "Done", "Error", "Skipped", "Interrupted", "Rerun", "Aborted"}:
         return status
     if status in {"Queued", "Queued (Ready)"}:
         return "Pending"
@@ -919,8 +915,6 @@ def _normalize_status(status: str) -> str:
 
 def _status_for_recovery_action(action: str) -> str:
     normalized = (action or "").strip().lower().replace("-", "").replace("_", "")
-    if normalized == "resume":
-        return "Resume"
     if normalized in {"rerun", "replay"}:
         return "Rerun"
     if normalized == "skip":
@@ -947,9 +941,9 @@ def _read_queue_rows(table: QtWidgets.QTableWidget) -> tuple[list[QueueSample], 
         status = _cell(5)
         if status in {"Done", "Skipped", "Aborted"}:
             continue
-        if status in {"Interrupted", "Up Captured"}:
+        if status in {"Interrupted", "Up Captured", "Resume"}:
             errors.append(
-                f"row {row_no}: interrupted sample requires Resume, Re-run, Skip, or Abort before queue start"
+                f"row {row_no}: interrupted sample requires Re-run, Skip, or Abort before queue start"
             )
             continue
 

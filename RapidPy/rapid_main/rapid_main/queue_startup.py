@@ -35,12 +35,28 @@ class QueueNativeStartup:
     """Original live startup only; an interrupted startup cannot replay its motion."""
     @classmethod
     def prepare(cls, backend, vacuum, plan, *, run_id, operator, empty_rod_confirmed=False):
-        from rapidpy_common.motor_routing import RoutedMotorSerialClient
-        from .diagnostic_services import VacuumBackendAdapter
         if (backend._config.general.nocomm is not False or empty_rod_confirmed is not True
                 or not isinstance(operator, str) or not operator.strip()
                 or not isinstance(run_id, str) or not run_id.strip() or not isinstance(plan, dict)):
             raise HardwareSafetyError('Native startup requires a queue plan, run identity and named empty-rod confirmation.')
+        table, fields, instruments, profile = cls.station_bindings(backend, vacuum)
+        attestation = dict(schema='rapidpy.queue_empty_rod_attestation.v1', operator=operator.strip(),
+            empty_rod_confirmed=True, timestamp_iso=datetime.now(timezone.utc).isoformat())
+        original_plan = json.loads(json.dumps(dict(commands=plan, startup=attestation), allow_nan=False))
+        store = QueueSafetyStore(backend._safety_store.path)
+        session = QueueWorkflowSession.start(store, original_plan, profile, run_id=run_id)
+        instance = cls(backend, vacuum, table, fields, session, attestation)
+        instance.instruments = instruments
+        backend._queue_instruments = instruments
+        backend._queue_startup = instance
+        backend._safety_store = session.child_store
+        return instance
+
+    @staticmethod
+    def station_bindings(backend, vacuum):
+        """Build and verify idle station bindings without opening transports."""
+        from rapidpy_common.motor_routing import RoutedMotorSerialClient
+        from .diagnostic_services import VacuumBackendAdapter
         if (not isinstance(backend._client, RoutedMotorSerialClient)
                 or backend._client._connections or getattr(backend, '_queue_coordinator', None) is not None
                 or getattr(backend, '_queue_startup', None) is not None
@@ -86,17 +102,7 @@ class QueueNativeStartup:
             stage_profiles=dict(motion=table.profile, vacuum=vacuum.queue_station_binding(),
                 field_outputs=fields.profile, acquisition=backend._acquisition_safety_profile(),
                 **{family: backend._safety_profile() for family in ('af', 'arm', 'pulse', 'rrm')}))
-        attestation = dict(schema='rapidpy.queue_empty_rod_attestation.v1', operator=operator.strip(),
-            empty_rod_confirmed=True, timestamp_iso=datetime.now(timezone.utc).isoformat())
-        original_plan = json.loads(json.dumps(dict(commands=plan, startup=attestation), allow_nan=False))
-        store = QueueSafetyStore(backend._safety_store.path)
-        session = QueueWorkflowSession.start(store, original_plan, profile, run_id=run_id)
-        instance = cls(backend, vacuum, table, fields, session, attestation)
-        instance.instruments = instruments
-        backend._queue_instruments = instruments
-        backend._queue_startup = instance
-        backend._safety_store = session.child_store
-        return instance
+        return table, fields, instruments, profile
 
     def __init__(self, backend, vacuum, table, fields, session, attestation):
         self.backend, self.vacuum, self.table, self.fields = backend, vacuum, table, fields
