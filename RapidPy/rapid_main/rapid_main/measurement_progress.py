@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import re
 
 from rapid_main.acquisition_evidence import canonical, restore_block
 from rapid_main.analysis import reading_cycle_statistics
@@ -37,6 +38,21 @@ class MeasurementProgress:
         self.root = contained_path(directory, DIRECTORY, output=True)
         self.directory = contained_path(self.root, self.identity_sha256, output=True)
         self._started = False
+
+    @classmethod
+    def open_existing(cls, directory, identity_sha256):
+        if not isinstance(identity_sha256, str) or not re.fullmatch(r'[0-9a-f]{64}', identity_sha256):
+            raise ValueError('Invalid acquisition identity.')
+        path = contained_path(directory, f'{DIRECTORY}/{identity_sha256}/run.json', output=True)
+        try:
+            identity = json.loads(path.read_bytes())['payload']['identity']
+            progress = cls(directory, **identity)
+        except (OSError, TypeError, KeyError, ValueError) as exc:
+            raise ValueError('The original acquisition identity could not be loaded.') from exc
+        if progress.identity_sha256 != identity_sha256:
+            raise ValueError('The original acquisition identity changed.')
+        progress._verify_identity()
+        return progress
 
     @property
     def identity(self):

@@ -81,6 +81,7 @@ The preview and snapshot button become active on receipt of a usable frame.
    Unexpected changes leave the journal available for review. A completed
    scientific publication can show diagnostics as pending if RAPID exits while
    completing the workflow summary or transcript.
+
 7. After a native interruption, open **Diagnostics > Recover Interrupted Queue**.
    RAPID can retry an interrupted field cutoff, stop and check axes in place for
    pending motion, measurement, treatment or vacuum stages, or publish a shutdown
@@ -107,6 +108,23 @@ The preview and snapshot button become active on receipt of a usable frame.
    For `SUSC`, transcribe each specimen's original standardized susceptibility from
    the Up pass record. RAPID measures Down without reapplying the treatment and
    links the original bytes and operator confirmation to the combined result.
+
+### Continue a saved manual measurement
+
+In Live Measure, choose **Save and Stop After Step** to complete the current
+step and return the instrument to its safe state. When RAPID reports that the
+run is saved, it has retained the original measurements and evidence. Any
+previously accepted publication stays available in Data Review.
+
+After relaunching, open the same specimen and sequence with the original
+station settings and holder correction. Choose **Continue Saved Run** and
+confirm the specimen identity, orientation, and treatment history. RAPID
+verifies the saved evidence and starts with the next untouched step. It
+publishes the full sequence after the remaining steps finish and the safe
+return succeeds. If a later treatment may already have started, inspect the
+specimen and station before deciding whether to start a fresh run.
+
+### Chain-drive queues
 
 For a chain-drive queue, import the original profile with
 `XYTable.UseXYTableAPS=False`, the chain motor's port and address, slot range,

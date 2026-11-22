@@ -167,6 +167,7 @@ def rockmag_run_artifact(
     labels_requested: Sequence[str],
     completed_labels: Sequence[str],
     skipped_duplicate_labels: Sequence[str] = (),
+    retained_step_count: int = 0,
     errors: Sequence[str] = (),
     aborted: bool,
     simulated: bool,
@@ -187,6 +188,8 @@ def rockmag_run_artifact(
     completed = [str(label) for label in completed_labels]
     if completed != requested[: len(completed)]:
         raise ValueError("completed rockmag labels are not a prefix of the requested plan")
+    if not 0 <= retained_step_count <= len(completed):
+        raise ValueError("the saved prefix exceeds the completed rockmag sequence")
     timestamp = timestamp_iso or datetime.now(timezone.utc).isoformat()
     return {
         "schema": "rapidpy.rockmag.run.v1",
@@ -204,6 +207,7 @@ def rockmag_run_artifact(
         "routine": context,
         "labels_requested": requested,
         "labels_completed": completed,
+        "labels_retained": completed[:retained_step_count],
         "skipped_duplicate_labels": [str(label) for label in skipped_duplicate_labels],
         "errors": [str(error) for error in errors],
         "final_phase": str(final_phase),

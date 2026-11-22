@@ -240,6 +240,10 @@ class NoCommBackend:
         del label
         self._step_count += 1
 
+    def restore_sequence_position(self, completed_steps: int) -> None:
+        """Continue the synthetic decay from the retained sequence position."""
+        self._step_count = completed_steps
+
     def read_paired_squid(self, *, is_up, range_factor=1e-5):
         """Simulate four sensor positions without inventing instrument replies."""
         from rapid_main.magnetometer import BracketedMeasurementBlock

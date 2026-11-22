@@ -2935,3 +2935,10 @@ No-Communication handoff. Operators can take a simulated baseline, log decay
 data, and verify a finalized `.vrm.json` beside the CSV in a separate session
 folder. The portable verifier runs this workflow and the station audit rejects
 simulated VRM evidence for physical cases.
+
+**Saved manual measurement checkpoint (2026-11-22).** Live Measure can stop
+after a captured step and confirmed safe return, then restore the verified
+staging files and raw acquisition records in a new app session. It checks
+the original plan, station profile, and holder before running the next
+untouched step. Repeat labels retain their individual positions. Physical
+acceptance remains open for I2 and K5.

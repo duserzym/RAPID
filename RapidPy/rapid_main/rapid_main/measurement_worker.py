@@ -56,10 +56,13 @@ from rapid_main.communication_log import CommunicationEvent, CommunicationLogger
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.specimen_metadata import validate_specimen_provenance
 from rapid_main.specimen_paths import contained_path
+from rapid_main.measurement_checkpoint import clear_checkpoint, pending_checkpoint, restore_checkpoint, save_checkpoint
 from rapid_main.measurement_progress import MeasurementProgress
 from rapid_main.queue_pair import QueueSide
 from rapid_main.io.rmg_writer import RmgTreatment, describe_rmg_treatment
-from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
+from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend, config_fingerprint
+from rapid_main.io.bundle_publication import _digest
+from rapid_main.io.specimen_reader import read_specimen
 from rapid_main.specimen_orientation import specimen_directions
 from rapid_main.magnetometer import (
     BlockAudit,
@@ -150,6 +153,7 @@ class MeasurementWorker(QtCore.QThread):
     preflight_warning = QtCore.Signal(str)  # preflight warning
     phase_changed = QtCore.Signal(str)  # workflow-state label
     status_event = QtCore.Signal(object)  # OperatorStatus
+    checkpoint_loaded = QtCore.Signal(object)
 
     def __init__(
         self,
@@ -171,6 +175,8 @@ class MeasurementWorker(QtCore.QThread):
         specimen_provenance: Mapping[str, Any] | None = None,
         queue_side: QueueSide | None = None,
         external_thermal: ExternalThermalTreatment | None = None,
+        checkpoint_profile: str = '',
+        continue_from: str | None = None,
     ) -> None:
         super().__init__(parent)
         self._specimen_provenance = deepcopy(dict(specimen_provenance)) if specimen_provenance is not None else None
@@ -194,6 +200,15 @@ class MeasurementWorker(QtCore.QThread):
             raise ValueError('Measurement inputs differ from the original paired queue command.')
         self._run_id = queue_side.run_id if queue_side is not None else str(run_id)
         self._resume = bool(resume)
+        self._checkpoint_profile = checkpoint_profile
+        self._continue_from = continue_from
+        self._checkpoint_request = threading.Event()
+        self._protect_checkpoint = continue_from is not None
+        self._saved_evidence: dict[str, str] = {}
+        self._restored_count = 0
+        self.checkpoint_saved = False
+        if continue_from is not None and (not checkpoint_profile or queue_side is not None or thermal_context is not None):
+            raise ValueError('Continue the saved run from its original manual measurement sequence.')
         self._allow_simulated_production_output = bool(allow_simulated_production_output)
         self._calibration_records = [dict(record) for record in (calibration_records or ())]
         self._routine_context = dict(routine_context) if routine_context is not None else None
@@ -282,6 +297,17 @@ class MeasurementWorker(QtCore.QThread):
         self._halt_flag = True
         self._pause_event.set()  # unblock if paused
 
+    def request_checkpoint(self) -> None:
+        if self._checkpoint_profile and self._queue_side is None and self._thermal_context is None:
+            self._checkpoint_request.set()
+
+    def _open_bundle(self, cleanup):
+        bundle = MeasurementBundleWriter(self._output_dir, self._meta, simulated=self._simulated,
+            allow_simulated_production_output=self._allow_simulated_production_output,
+            provenance=self._base_provenance())
+        cleanup.callback(bundle.abort)
+        return bundle
+
     def run(self) -> None:
         """QThread entry point — executes the full sequence."""
         try:
@@ -327,10 +353,24 @@ class MeasurementWorker(QtCore.QThread):
         # exists it must never authorize replay of scientific hardware actions.
         if self._resume:
             raise ValueError('Automatic measurement replay is unavailable; restore original step progress before recovery.')
+        pending = pending_checkpoint(self._pair_directory)
+        if pending is not None:
+            self._protect_checkpoint = True
+        if pending != self._continue_from:
+            raise ValueError('Review the saved run before starting another measurement for this specimen.')
         source = dict(specimen_source=self._specimen_provenance, specimen_metadata=asdict(self._meta),
                       samples_per_position=self._samples_per_position, operator=self._operator,
                       calibration_records=self._calibration_records, routine=self._routine_context,
                       thermal=self._thermal_context)
+        if self._checkpoint_profile:
+            active_config = getattr(self._backend, '_config', None)
+            if active_config is not None and config_fingerprint(active_config) != self._checkpoint_profile:
+                raise ValueError('The active measurement configuration differs from the selected station profile.')
+            source['checkpoint_profile'] = self._checkpoint_profile
+            source['software_version'] = software_version()
+            if self._routine_context is not None:
+                source['routine'] = {key: value for key, value in self._routine_context.items()
+                                     if key not in {'timestamp_iso', 'run_context', 'notes'}}
         side = self._queue_side
         apply_treatment = side is None or side.is_up
         up_blocks = ()
@@ -348,11 +388,38 @@ class MeasurementWorker(QtCore.QThread):
             side.begin(self._pair_directory)
             if side.legacy_up is not None:
                 side.archive_legacy_up(self._pair_directory)
-        self._progress = MeasurementProgress(self._publish_dir, run_id=self._progress_run_id,
-            specimen=self._meta.name, labels=self._labels, source=source, simulated=self._simulated)
-        self._progress.begin()
-
         bundle = None
+        susceptibility_records: list[dict[str, object]] = []
+        if self._continue_from is None:
+            self._progress = MeasurementProgress(self._publish_dir, run_id=self._progress_run_id,
+                specimen=self._meta.name, labels=self._labels, source=source, simulated=self._simulated)
+            self._progress.begin()
+        else:
+            bundle = self._open_bundle(cleanup)
+            self._progress, checkpoint, prior = restore_checkpoint(bundle, self._continue_from,
+                labels=self._labels, source=source, simulated=self._simulated)
+            self._run_id = self._progress.identity['run_id']
+            if self._routine_context is not None:
+                self._routine_context['run_context'] = self._run_id
+            self._restored_count = len(prior)
+            self._completed_labels.extend(self._labels[:self._restored_count])
+            self._saved_evidence = checkpoint['evidence']
+            if not self._simulated:
+                holders = {(block.get('audit') or {}).get('holder_record_id') for step in prior for block in step['blocks']}
+                directions = {block['is_up'] for step in prior for block in step['blocks']}
+                holder = self._backend_holder_status()
+                if (not holders or None in holders or '' in holders or getattr(holder, 'valid', False) is not True
+                        or holders != {getattr(holder, 'record_version', None)}
+                        or directions != {getattr(holder, 'is_up', None)}):
+                    raise ValueError('The original holder correction or specimen orientation is unavailable.')
+            self._collection_statistics.extend(dict(step_index=step['index'], label=step['label'], **step['block_statistics'])
+                                               for step in prior if step['block_statistics'] is not None)
+            susceptibility_records.extend(checkpoint['susceptibility'])
+            bundle.set_provenance(**self._base_provenance())
+            _, retained_steps = read_specimen(bundle._staged.specimen_file, specimen_name=self._meta.name)
+            self.checkpoint_loaded.emit(retained_steps)
+            self._emit_warning(f'Continuing at step {self._restored_count + 1}. The saved steps will not be repeated.')
+
         external = self._external_thermal
         if external is not None:
             planned = self._thermal_context["queue_labels"]
@@ -368,7 +435,7 @@ class MeasurementWorker(QtCore.QThread):
             try:
                 self._emit_phase(WorkflowPhase.PREFLIGHT)
                 plan_preflight = self._call_with_timeout(
-                    lambda: plan_validator(tuple(self._labels)),
+                    lambda: plan_validator(tuple(self._labels[self._restored_count:])),
                     timeout=self._get_backend_timeout("preflight_timeout"),
                     phase="treatment plan preflight",
                 )
@@ -443,6 +510,8 @@ class MeasurementWorker(QtCore.QThread):
                 "SIMULATED RUN: this backend produces synthetic values. Output is "
                 "written to the SIMULATED directory and is not hardware evidence."
             )
+            if self._checkpoint_profile and isinstance(self._backend, NoCommBackend):
+                self._backend.restore_sequence_position(self._restored_count)
 
         self._apply_measurement_context(carried_label=self._labels[0] if external is not None or not apply_treatment else None)
         self._emit_phase(WorkflowPhase.LOADING)
@@ -451,11 +520,10 @@ class MeasurementWorker(QtCore.QThread):
         try:
             self._emit_phase(WorkflowPhase.SAVING)
             if bundle is None and (side is None or not side.is_up):
-                bundle = MeasurementBundleWriter(
-                    self._output_dir, self._meta, simulated=self._simulated,
-                    allow_simulated_production_output=self._allow_simulated_production_output,
-                    provenance=self._base_provenance(),
-                )
+                bundle = self._open_bundle(cleanup)
+            if pending_checkpoint(self._pair_directory) != self._continue_from:
+                self._protect_checkpoint = True
+                raise ValueError('A saved run changed while preparing this specimen.')
             self._comm_logger = CommunicationLogger("measurement-worker", port=self._meta.name)
             self._comm_logger.info(
                 "bundle initialized (simulated)" if self._simulated else "bundle initialized"
@@ -468,13 +536,17 @@ class MeasurementWorker(QtCore.QThread):
 
         total = len(self._labels)
         aborted = False
-        susceptibility_records: list[dict[str, object]] = []
+        saving_checkpoint = False
 
-        for idx, label in enumerate(self._labels):
+        for idx in range(self._restored_count, total):
+            label = self._labels[idx]
             # Halt has top priority
             if self._halt_flag:
                 aborted = True
                 self._emit_phase(WorkflowPhase.HALTED)
+                break
+            if idx > self._restored_count and self._checkpoint_request.is_set():
+                saving_checkpoint = True
                 break
 
             self.step_started.emit(idx, label)
@@ -600,7 +672,8 @@ class MeasurementWorker(QtCore.QThread):
                         axis_sd_emu=(self._last_collection_stats.axis_sd_emu
                                      if self._last_collection_stats is not None else None),
                         sample_height_cm=sample_height_cm,
-                        treatment_temp_k=external.peak_temperature_c + 273.15 if external is not None else None):
+                        treatment_temp_k=external.peak_temperature_c + 273.15 if external is not None else None,
+                        retain_repeats=external is None):
                     self._skipped_labels.append(label)
                     self._emit_warning(
                         f"Step {label} is already present from an interrupted run; "
@@ -643,17 +716,39 @@ class MeasurementWorker(QtCore.QThread):
             return_to_safe_state = getattr(self._backend, "return_to_safe_state", None)
             if callable(return_to_safe_state):
                 self._comm_info("return_to_safe_state")
-                self._call_with_timeout(
+                returned = self._call_with_timeout(
                     lambda: return_to_safe_state(),
                     timeout=self._get_backend_timeout("return_timeout"),
                     phase="return_to_safe_state",
                 )
-            elif side is not None:
-                raise ValueError('Paired acquisition requires a verified safe return.')
+                if returned is False:
+                    raise ValueError('The backend did not confirm a safe return.')
+            elif side is not None or saving_checkpoint:
+                raise ValueError('A saved or paired acquisition requires a verified safe return.')
         except Exception as exc:
             self._emit_error(f"Failed to return to safe state: {exc}", phase=WorkflowPhase.RETURNING)
             self._emit_phase(WorkflowPhase.ERROR)
             aborted = True
+
+        if saving_checkpoint and self._halt_flag:
+            aborted = True
+        if saving_checkpoint and not aborted:
+            self._protect_checkpoint = True
+            self._emit_phase(WorkflowPhase.HALTED)
+            self._finish_run(aborted=True)
+            if not self._error_messages:
+                evidence = dict(self._saved_evidence)
+                retained = [path for _, path in (*self._af_artifacts, *self._pulse_artifacts, *self._susceptibility_artifacts)]
+                retained.append(self._artifact_path('communication.tsv'))
+                for path in retained:
+                    digest = _digest(path)
+                    if digest is None:
+                        raise ValueError(f'Checkpoint evidence is missing: {path.name}')
+                    evidence[path.relative_to(self._pair_directory).as_posix()] = digest
+                save_checkpoint(bundle, self._progress, len(self._completed_labels), previous=self._continue_from,
+                                susceptibility=susceptibility_records, evidence=evidence)
+                self.checkpoint_saved = True
+            return
 
         if not aborted:
             try:
@@ -689,6 +784,11 @@ class MeasurementWorker(QtCore.QThread):
                     if external is not None:
                         bundle.link_external_thermal_measurement(external, self._progress.reference)
                     bundle.set_provenance(**self._run_provenance())
+                    if self._continue_from is not None:
+                        for name, expected_digest in self._saved_evidence.items():
+                            if _digest(self._artifact_path(name)) != expected_digest:
+                                raise ValueError(f'The saved measurement evidence changed: {name}')
+                        bundle.set_provenance(continued_from_saved_step=self._restored_count)
                     published = bundle.paths
                     self._publish_dir = bundle.publish_dir
                     self._published_paths = {
@@ -1118,7 +1218,7 @@ class MeasurementWorker(QtCore.QThread):
             "operator": self._operator,
             "labels_requested": list(self._labels),
             "samples_per_position": self._samples_per_position,
-            "resumed": self._resume,
+            "resumed": self._continue_from is not None,
             "simulated": self._simulated,
             "software_version": software_version(),
             "calibration_record_ids": [
@@ -1237,6 +1337,7 @@ class MeasurementWorker(QtCore.QThread):
             "operator": self._operator,
             "labels": list(self._labels),
             "completed_labels": list(self._completed_labels),
+            "continued_from_saved_step": self._restored_count,
             "errors": list(self._error_messages),
             "rockmag_routine": (
                 {
@@ -1341,6 +1442,7 @@ class MeasurementWorker(QtCore.QThread):
     def _finish_run(self, *, aborted: bool) -> None:
         if (aborted and self._publish_dir == self._pair_directory
                 and (self._external_thermal is not None
+                     or self._protect_checkpoint
                      or self._artifact_path('provenance.json').exists()
                      or self._artifact_path('.rapidpy-publication').exists())):
             # A failed attempt cannot replace the index and diagnostics of the
@@ -1359,6 +1461,8 @@ class MeasurementWorker(QtCore.QThread):
         self._pending_run_result = aborted
 
     def _finish_accepted_bundle(self) -> None:
+        if self._continue_from is not None:
+            clear_checkpoint(self._pair_directory, self._continue_from)
         self._emit_phase(WorkflowPhase.COMPLETE)
         self._finish_run(aborted=False)
 
@@ -1375,6 +1479,7 @@ class MeasurementWorker(QtCore.QThread):
                 labels_requested=self._labels,
                 completed_labels=self._completed_labels,
                 skipped_duplicate_labels=self._skipped_labels,
+                retained_step_count=self._restored_count,
                 errors=self._error_messages,
                 aborted=aborted,
                 simulated=self._simulated,
@@ -1593,6 +1698,10 @@ class MeasurementWorker(QtCore.QThread):
         for treatment_id,path in self._pulse_artifacts:
             payload["artifacts"].append(entry(f"pulse_treatment:{treatment_id}",path,required=True,
                 producer="PulseTreatmentService",description="Capacitor/field plan, relay readback, charge/fire/discharge evidence, specimen motion and safe return."))
+        if not aborted:
+            for name in self._saved_evidence:
+                payload['artifacts'].append(entry('checkpoint:' + name, self._artifact_path(name), required=True,
+                    producer='MeasurementWorker', description='Original communication or treatment evidence from the saved prefix.'))
         if self._progress is not None and self._progress.directory.is_dir():
             paths = {self._progress._path(path.name) for path in self._progress.directory.iterdir()}
             paths.update(path for path in sources if path.parent == self._progress.directory)

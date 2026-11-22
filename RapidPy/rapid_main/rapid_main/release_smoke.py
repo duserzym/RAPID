@@ -167,6 +167,31 @@ def _check_measurement_backup(app, root):
         return len(archives) == 1 and load_magic_directory(archives[0]).specimens[0].steps[0].demag_label == "NRM"
 
 
+def _check_measurement_checkpoint(root):
+    from rapid_main.data_model import SpecimenMeta
+    from rapid_main.hardware_contracts import NoCommBackend
+    from rapid_main.measurement_checkpoint import pending_checkpoint
+    from rapid_main.measurement_worker import MeasurementWorker
+    from rapidpy_common.paths import absolute_io_path
+
+    with tempfile.TemporaryDirectory(prefix='checkpoint-', dir=absolute_io_path(root)) as directory:
+        output = Path(directory)
+        plan = ['NRM', 'AF10']
+        first = MeasurementWorker(SpecimenMeta('offline'), plan, output, NoCommBackend(),
+                                  run_id='offline-checkpoint', checkpoint_profile='offline')
+        first.request_checkpoint()
+        first.run()
+        saved = pending_checkpoint(first._pair_directory)
+        if not first.checkpoint_saved or saved is None or (first._pair_directory / 'measurements.txt').exists():
+            return False
+        resumed = MeasurementWorker(SpecimenMeta('offline'), plan, output, NoCommBackend(),
+                                    checkpoint_profile='offline', continue_from=saved)
+        resumed.run()
+        return (resumed._pending_run_result is False and resumed._restored_count == 1
+                and pending_checkpoint(resumed._pair_directory) is None
+                and [step['label'] for step in resumed._progress.accepted_steps()] == plan)
+
+
 def _check_vrm_practice(app, root):
     from PySide6 import QtCore
     from rapid_main.vrm import VRM_CONTEXT_ENV, build_vrm_launch_context, write_vrm_launch_context
@@ -291,6 +316,7 @@ def run_smoke_test() -> int:
             webcam_decode = _check_webcam_decode(window, app, root)
             measurement_archive = _check_measurement_archive(root)
             measurement_backup = _check_measurement_backup(app, root)
+            measurement_checkpoint = _check_measurement_checkpoint(root)
             sample_index_registry = _check_sample_index_registry(window, root)
             vrm_practice = _check_vrm_practice(app, root)
             report = {
@@ -298,11 +324,12 @@ def run_smoke_test() -> int:
                 "software_version": software_version(),
                 "ok": (window.config.general.nocomm and all(helpers.values()) and transverse_probe
                        and webcam_decode and measurement_archive and measurement_backup and sample_index_registry
-                       and vrm_practice),
+                       and vrm_practice and measurement_checkpoint),
                 "transverse_probe": transverse_probe,
                 "webcam_decode": webcam_decode,
                 "measurement_archive": measurement_archive,
                 "measurement_backup": measurement_backup,
+                "measurement_checkpoint": measurement_checkpoint,
                 "sample_index_registry": sample_index_registry,
                 "vrm_practice": vrm_practice,
                 "compact_display_check": True,

@@ -210,7 +210,7 @@ grip through the dummy specimen release.
 | # | Step | Expected |
 |---|---|---|
 | I1 | Kill the process mid-run | No accepted measurement published; no staging directory left behind |
-| I2 | Restart and resume the same specimen | Already-published steps skipped, remaining steps appended once |
+| I2 | Use **Save and Stop After Step** during a manual run, relaunch RAPID, and use **Continue Saved Run** for the same specimen | An existing accepted publication is preserved during the stop. The first treatment after the restart is the next untouched step. The final publication contains every step once and links the original retained evidence. |
 | I3 | Power-cycle the controlling computer mid-run | As I1, plus holder correction file still valid |
 | I4 | Resume a queue with interrupted rows | Operator must explicitly choose Resume / Re-run / Skip / Abort |
 
@@ -247,7 +247,7 @@ family still has a software preflight blocker.
 | K2 | Attempt Rockmag the Works in hardware mode with the backfield polarity route unconfigured or the required SUSC holder/bridge evidence missing | Plan blocks before treatment dispatch and writes an `ABORTED` rockmag artifact naming the blocker |
 | K3 | After AF acceptance, run Hawaiian AF on a reference specimen | Every requested label is treated and measured once in order; raw treatment/SQUID traffic, safe return, holder version, and rockmag artifact share one run ID |
 | K4 | Halt between two rockmag steps | No partial accepted bundle is published; abort artifact lists only the completed prefix and the halt/final phase |
-| K5 | Resume the interrupted specimen | Previously published labels are not duplicated; skipped duplicate labels and the remaining completed suffix are explicit |
+| K5 | Repeat the routine with **Save and Stop After Step**, relaunch RAPID, and use **Continue Saved Run** with the original sequence and specimen | The restored prefix and the newly measured suffix appear in order. Repeated labels in the compiled plan keep distinct acquisition positions and MagIC measurement IDs. No treatment already captured in the prefix is repeated. |
 | K6 | Exercise each additional approved family separately before adding it to a mixed routine | Field/readback, interlock, failure, and safe-return evidence passes that family's acceptance procedure |
 | K7 | Run the approved mixed routine | `provenance.json`, `workflow_summary.json`, `rockmag_run.json`, scientific outputs, and `artifact_index.json` agree on routine, run, sample, operator, labels, outcome, and hashes |
 

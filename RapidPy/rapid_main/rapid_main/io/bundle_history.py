@@ -23,7 +23,7 @@ _SCHEMA = "rapidpy.measurement.bundle_archive.v1"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _EVIDENCE_DIRECTORIES = {
     ".rapidpy-acquisitions", ".rapidpy-pairs", "af_treatments",
-    "pulse_treatments", "susceptibility_acquisitions",
+    "pulse_treatments", "susceptibility_acquisitions", ".rapidpy-attempts",
 }
 
 

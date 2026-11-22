@@ -184,20 +184,24 @@ class MeasurementBundleWriter:
                     rmg_treatment: RmgTreatment | None = None,
                     axis_sd_emu: tuple[float, float, float] | None = None,
                     sample_height_cm: float | None = None,
-                    treatment_temp_k: float | None = None) -> bool:
+                    treatment_temp_k: float | None = None,
+                    retain_repeats: bool = False) -> bool:
         """Append one accepted step. Returns ``False`` when it was a duplicate."""
         self._require_open()
         _paths_for(self.publish_dir, self.meta.name)
         _paths_for(self.staging_dir, self.meta.name)
         self._ensure_headers()
         label = str(step.demag_label)
-        if label in self._existing_labels or label in self._appended_labels:
+        occurrence = self._existing_labels.count(label) + self._appended_labels.count(label) + 1
+        if occurrence > 1 and not retain_repeats:
             self._skipped_labels.append(label)
             return False
         append_step(self._staged.specimen_file, step)
         append_rmg_record(self._staged.rmg_file, step, susceptibility=susceptibility, meta=self.meta,
                           treatment=rmg_treatment, axis_sd_emu=axis_sd_emu, sample_height_cm=sample_height_cm)
-        append_measurement(self._staged.magic_measurements_file, self.meta, step, treatment_temp_k=treatment_temp_k)
+        measurement_name = f'{self.meta.name}-{label}-repeat-{occurrence}' if occurrence > 1 else None
+        append_measurement(self._staged.magic_measurements_file, self.meta, step,
+                           treatment_temp_k=treatment_temp_k, measurement_name=measurement_name)
         self._appended_labels.append(label)
         return True
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import math
+import re
 import sys
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -324,7 +325,7 @@ def _label_from_measurement_row(row: dict[str, str], specimen_name: str) -> str:
     if measurement_name:
         prefix = f"{specimen_name}-"
         if measurement_name.upper().startswith(prefix.upper()):
-            return measurement_name[len(prefix):]
+            return re.sub(r"-repeat-(?:[2-9]|[1-9][0-9]+)$", "", measurement_name[len(prefix):])
         return measurement_name.split("-")[-1]
 
     method_codes = row.get("method_codes", "").upper()

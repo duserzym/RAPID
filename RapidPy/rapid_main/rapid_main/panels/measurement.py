@@ -20,11 +20,13 @@ from rapid_main.device_ownership import DeviceOwnershipError
 from rapid_main.dialogs.external_thermal import ExternalThermalDialog
 from rapid_main.dialogs.plots import build_quicklook_summary, write_quicklook_json
 from rapid_main.geometry import Angular3D, Cartesian3D, angular3d_to_cartesian3d
-from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
+from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend, config_fingerprint
 from rapid_main.io.measurement_bundle import SIMULATED_SUBDIR, validate_measurement_output
 from rapid_main.specimen_paths import specimen_run_directory
 from rapid_main.measurement_worker import MeasurementWorker, StepResult
+from rapid_main.measurement_checkpoint import discard_checkpoint, pending_checkpoint
 from rapid_main.printing import print_widget_snapshot
+from rapidpy_common.hardware_safety import HardwareSafetyError
 
 try:
     import pyqtgraph as pg
@@ -241,6 +243,9 @@ class MeasurementPanel(QtWidgets.QWidget):
         self._start_btn.setObjectName("accent")
         self._pause_btn = QtWidgets.QPushButton("⏸  Pause Run")
         self._halt_btn  = QtWidgets.QPushButton("■  Halt Run")
+        self._save_run_btn = QtWidgets.QPushButton("Save and Stop After Step")
+        self._save_run_btn.setEnabled(False)
+        self._continue_run_btn = QtWidgets.QPushButton("Continue Saved Run")
         self._halt_btn.setStyleSheet(
             "QPushButton { color: #b91c1c; }"
             "QPushButton:hover { background: rgba(220,38,38,0.10); }"
@@ -252,8 +257,10 @@ class MeasurementPanel(QtWidgets.QWidget):
         self._start_btn.clicked.connect(self._on_start)
         self._pause_btn.clicked.connect(self._on_pause)
         self._halt_btn.clicked.connect(self._on_halt)
+        self._save_run_btn.clicked.connect(self._request_checkpoint)
+        self._continue_run_btn.clicked.connect(self._continue_saved_run)
 
-        for btn in (self._start_btn, self._pause_btn, self._halt_btn,
+        for btn in (self._start_btn, self._pause_btn, self._halt_btn, self._save_run_btn, self._continue_run_btn,
                     self._print_btn, self._plots_btn):
             cl.addWidget(btn)
 
@@ -545,12 +552,25 @@ class MeasurementPanel(QtWidgets.QWidget):
     def _on_start(self) -> None:
         self.start_measurement_for_sample(self._current_sample)
 
+    def _continue_saved_run(self) -> None:
+        self.start_measurement_for_sample(self._current_sample, continue_saved=True)
+
+    def _request_checkpoint(self) -> None:
+        if self._worker is not None:
+            self._worker.request_checkpoint()
+            self._save_run_btn.setEnabled(False)
+            mw = self.window()
+            if hasattr(mw, 'set_status'):
+                mw.set_status('Save requested. Resume the paused run to finish this step.' if self._worker.is_paused
+                              else 'Save requested. RAPID will finish this step, then return safely.')
+
     def start_measurement_for_sample(
         self,
         sample: str,
         *,
         queue_run: bool = False,
         owner: str | None = None,
+        continue_saved: bool = False,
     ) -> bool:
         """Start a full run for a given specimen name.
 
@@ -563,7 +583,7 @@ class MeasurementPanel(QtWidgets.QWidget):
             calls should not cancel an active queue run.
         """
         owner = owner or ("queue_workflow" if queue_run else "measurement_panel")
-        if self._worker is not None and self._worker.is_paused:
+        if self._worker is not None and self._worker.is_paused and not continue_saved:
             self._worker.resume()
             return True
         if self._worker is not None and self._worker.isRunning():
@@ -574,10 +594,13 @@ class MeasurementPanel(QtWidgets.QWidget):
         thermal_plan = getattr(mw, "_thermal_routine_plan", None) if not queue_run else None
         external_workflow = thermal_plan is not None and getattr(getattr(cfg, "general", None), "nocomm", None) is False
         active_workflow = getattr(mw, "_has_active_automation", lambda: False)
+        if continue_saved and (queue_run or thermal_plan is not None or active_workflow()):
+            QtWidgets.QMessageBox.warning(self, 'Saved Run', 'Select the original manual sequence while the station is idle.')
+            return False
         if external_workflow and active_workflow():
             QtWidgets.QMessageBox.warning(self, "Station Busy", "Finish the active workflow before measuring an external thermal step.")
             return False
-        if hasattr(mw, "cancel_queue_run") and not queue_run and not external_workflow:
+        if hasattr(mw, "cancel_queue_run") and not queue_run and not external_workflow and not continue_saved:
             mw.cancel_queue_run("Manual run started.")
 
         labels = getattr(mw, "_sequence_labels", [])
@@ -631,6 +654,35 @@ class MeasurementPanel(QtWidgets.QWidget):
                 published = queue_side.up_directory(published)
         except (OSError, ValueError) as exc:
             QtWidgets.QMessageBox.warning(self, "Invalid Specimen Path", str(exc))
+            return False
+        checkpoint_profile = (config_fingerprint(cfg) if cfg is not None and not queue_run
+                              and thermal_plan is None and meta.name != 'UNKNOWN' else '')
+        saved = None
+        try:
+            if not queue_run:
+                saved = pending_checkpoint(published)
+            if continue_saved:
+                if saved is None or not checkpoint_profile:
+                    QtWidgets.QMessageBox.information(self, 'Saved Run', 'There is no saved run for this specimen and mode.')
+                    return False
+                if QtWidgets.QMessageBox.question(self, 'Continue Saved Run',
+                        f'Confirm that {meta.name} is the original specimen, has the original orientation, '
+                        'and has received no treatment since the saved step.',
+                        QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
+                        QtWidgets.QMessageBox.StandardButton.Cancel) != QtWidgets.QMessageBox.StandardButton.Yes:
+                    return False
+                if (active_workflow() or self._worker is not None or getattr(mw, 'config', None) is not cfg
+                        or config_fingerprint(cfg) != checkpoint_profile or _resolve_measurement_backend(mw, backend) is not backend):
+                    raise ValueError('The active station or configuration changed. Review the saved run again.')
+            elif saved is not None:
+                if QtWidgets.QMessageBox.warning(self, 'Saved Run',
+                        f'{meta.name} has a saved sequence. Use Continue Saved Run to keep it, or discard it to start over.',
+                        QtWidgets.QMessageBox.StandardButton.Discard | QtWidgets.QMessageBox.StandardButton.Cancel,
+                        QtWidgets.QMessageBox.StandardButton.Cancel) != QtWidgets.QMessageBox.StandardButton.Discard:
+                    return False
+                discard_checkpoint(published, meta.name, saved)
+        except (OSError, ValueError, HardwareSafetyError) as exc:
+            QtWidgets.QMessageBox.warning(self, 'Saved Run', str(exc))
             return False
         external_thermal = None
         if external_workflow:
@@ -732,6 +784,8 @@ class MeasurementPanel(QtWidgets.QWidget):
                 specimen_provenance=queue_provenance,
                 queue_side=queue_side,
                 external_thermal=external_thermal,
+                checkpoint_profile=checkpoint_profile,
+                continue_from=saved if continue_saved else None,
                 parent=self,
             )
         except (OSError, ValueError) as exc:
@@ -740,11 +794,14 @@ class MeasurementPanel(QtWidgets.QWidget):
             return False
         self._worker.step_started.connect(self._on_step_started)
         self._worker.step_complete.connect(self._on_step_complete)
+        self._worker.checkpoint_loaded.connect(self._load_saved_steps)
         self._worker.run_finished.connect(self._on_run_finished)
         self._worker.finished.connect(self._settle_measurement_worker)
         self._worker.preflight_warning.connect(self._on_preflight_warning)
         self._worker.error_occurred.connect(self._on_error)
         self._worker.phase_changed.connect(self._on_phase_changed)
+        self._save_run_btn.setEnabled(bool(checkpoint_profile) and len(labels) > 1)
+        self._continue_run_btn.setEnabled(False)
         self._worker.start()
 
         if hasattr(mw, "start_run"):
@@ -752,6 +809,10 @@ class MeasurementPanel(QtWidgets.QWidget):
         if hasattr(mw, "set_flow_state"):
             mw.set_flow_state("running")
         return True
+
+    @QtCore.Slot(object)
+    def _load_saved_steps(self, steps) -> None:
+        self._completed_steps.extend(steps)
 
     def toggle_pause(self) -> None:
         """Public entrypoint for toolbar/menu pause toggles."""
@@ -1099,10 +1160,13 @@ class MeasurementPanel(QtWidgets.QWidget):
         self._worker_settle_timer.stop()
         aborted, self._pending_run_finished = self._pending_run_finished, None
         sample_name = self._current_sample
+        saved_checkpoint = getattr(self._worker, 'checkpoint_saved', False)
         if self._worker is not None:
             self._worker.deleteLater()
         self._worker = None
         self._pause_btn.setText("⏸  Pause Run")
+        self._save_run_btn.setEnabled(False)
+        self._continue_run_btn.setEnabled(True)
         self._release_measurement_ownership()
         sidecar_error: Exception | None = None
         if not aborted:
@@ -1115,7 +1179,8 @@ class MeasurementPanel(QtWidgets.QWidget):
         mw = self.window()
         if hasattr(mw, "stop_run"):
             mw.stop_run()
-        msg = "Run halted by user." if aborted else "Sequence complete!"
+        msg = ('Run saved. Use Continue Saved Run to start the next step.' if saved_checkpoint
+               else 'Run halted.' if aborted else 'Sequence complete!')
         if sidecar_error is not None:
             msg = f"{msg} Quicklook sidecar not written: {sidecar_error}"
         if hasattr(mw, "set_status"):
