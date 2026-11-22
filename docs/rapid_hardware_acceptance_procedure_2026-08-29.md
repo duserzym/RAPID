@@ -145,6 +145,7 @@ grip through the dummy specimen release.
 | H4 | Measure a reference specimen up and down | Compare raw block, baseline-adjusted vectors, holder-frame vectors, average, moment, declination/inclination, and CSD against VB6 for the same specimen |
 | H5 | Compare saved files byte-for-byte where formats are identical | Differences explained and recorded, or fixed |
 | H6 | With the magnetic rod standard securely mounted and the accepted lift travel clear, open **Diagnostics → Calibrate Rod** and select **SQUID Rod Scan**. Repeat the scan at the accepted 1× range and lab drift limit. | Attach both `squid-rod-*.json` records. Compare coarse and fine peaks, fitted measurement and zero positions, center verification, and absolute baseline drift against the accepted station and VB6 reference results. Verify final lift home and stationary changer axes. Confirm any proposed positions independently before applying settings. |
+| H7 | With the approved core or EPR tube mount, use **Diagnostics → U-channel Scan**. Review the measured assembly extension, the computed span, and the 0° reference. Run one pass, then repeat with four passes after verifying turn clearance at lift top. | Attach the two `uchannel-*` bundles. Verify loaded travel, zero positions, drift, angles, and final top/0° readbacks. Compare the raw CSV in legacy SQUID units and the corrected emu profile against the station reference. |
 
 ---
 

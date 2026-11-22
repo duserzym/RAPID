@@ -23,6 +23,7 @@ from rapid_main.calibration_registry import (
 from rapid_main.hardware_contracts import MeasurementBackend
 from rapid_main.rod_calibration import RodScanRequest, RodScanWorker
 from rapid_main.squid_rod_calibration import SquidRodFit, SquidRodRequest
+from rapid_main.uchannel import CoreGeometry, EprTubeGeometry, UChannelRequest, UChannelSummary
 from rapid_main.thermal import (
     ThermalSafetyLimits,
     compile_thermal_routine,
@@ -110,6 +111,7 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         self._procedure.addItem("Thermal Routine Planning", "thermal_routine")
         self._procedure.addItem("Susceptibility Rod Scan", "susceptibility_rod")
         self._procedure.addItem("SQUID Rod Scan", "squid_rod")
+        self._procedure.addItem("U-channel Scan", "uchannel")
         self._procedure.currentIndexChanged.connect(self._on_procedure_changed)
         fl.addRow("Procedure:", self._procedure)
 
@@ -251,7 +253,68 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         rod_form.addRow("Moment susceptibility (CGS):", self._rod_reference)
         rod_form.addRow("Max baseline drift (emu):", self._rod_drift_limit)
         rod_form.addRow("Fit threshold:", self._rod_threshold)
-        rod_form.addRow("Artifact folder:", self._rod_artifact_dir)
+        fl.addRow(self._rod_box)
+
+        self._channel_box = QtWidgets.QGroupBox("Mounted long specimen")
+        channel_form = QtWidgets.QFormLayout(self._channel_box)
+        channel_form.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
+        self._channel_kind = QtWidgets.QComboBox()
+        self._channel_kind.addItem("Long core", "core")
+        self._channel_kind.addItem("EPR tube", "epr")
+        self._channel_specimen = QtWidgets.QLineEdit()
+        self._channel_extension = self._spin(0, 500, 0, " cm")
+        self._channel_extension.setToolTip("Measure from the carriage reference to the lowest point of the loaded assembly.")
+        self._channel_spacing = self._spin(.008, 10, .5, " cm")
+        self._channel_orientation = QtWidgets.QComboBox()
+        self._channel_orientation.addItem("Up", "up")
+        self._channel_orientation.addItem("Down", "down")
+        self._channel_passes = QtWidgets.QComboBox()
+        self._channel_passes.addItem("One pass at 0°", False)
+        self._channel_passes.addItem("Four passes at 0°, 90°, 180°, 270°", True)
+        self._channel_zero_every = QtWidgets.QSpinBox()
+        self._channel_zero_every.setRange(0, 1001)
+        self._channel_zero_every.setSpecialValueText("Start and end of each pass")
+        self._channel_drift_limit = QtWidgets.QLineEdit("1e-6")
+        channel_form.addRow("Specimen type:", self._channel_kind)
+        channel_form.addRow("Specimen identity:", self._channel_specimen)
+        channel_form.addRow("Loaded assembly extension:", self._channel_extension)
+        channel_form.addRow("Spacing:", self._channel_spacing)
+        channel_form.addRow("Specimen orientation:", self._channel_orientation)
+        channel_form.addRow("Angular passes:", self._channel_passes)
+        channel_form.addRow("Positions per zero:", self._channel_zero_every)
+        channel_form.addRow("Max zero drift (emu):", self._channel_drift_limit)
+
+        self._core_geometry = QtWidgets.QWidget()
+        core_form = QtWidgets.QFormLayout(self._core_geometry)
+        core_form.setContentsMargins(0, 0, 0, 0)
+        self._core_length = self._spin(0, 500, 0, " cm")
+        self._core_first, self._core_last, self._core_zero = (QtWidgets.QSpinBox() for _ in range(3))
+        for field in (self._core_first, self._core_last, self._core_zero):
+            field.setRange(-(2**31), 0)
+            field.setSuffix(" counts")
+        core_form.addRow("Core length:", self._core_length)
+        core_form.addRow("Verified first position:", self._core_first)
+        core_form.addRow("Verified final position:", self._core_last)
+        core_form.addRow("Verified zero position:", self._core_zero)
+        channel_form.addRow(self._core_geometry)
+
+        self._epr_geometry = QtWidgets.QWidget()
+        epr_form = QtWidgets.QFormLayout(self._epr_geometry)
+        epr_form.setContentsMargins(0, 0, 0, 0)
+        self._epr_length, self._epr_bottom, self._epr_top, self._epr_below, self._epr_above = (
+            self._spin(0, 500, 0, " cm") for _ in range(5)
+        )
+        epr_form.addRow("Tube length:", self._epr_length)
+        epr_form.addRow("Sample bottom from tube end:", self._epr_bottom)
+        epr_form.addRow("Sample top from tube end:", self._epr_top)
+        epr_form.addRow("Buffer below sample:", self._epr_below)
+        epr_form.addRow("Buffer above sample:", self._epr_above)
+        channel_form.addRow(self._epr_geometry)
+        self._channel_kind.currentIndexChanged.connect(self._on_channel_kind_changed)
+        self._on_channel_kind_changed()
+        fl.addRow(self._channel_box)
+
+        fl.addRow("Artifact folder:", self._rod_artifact_dir)
         self._rod_run = QtWidgets.QPushButton("Run Rod Scan")
         self._rod_run.clicked.connect(self._run_rod_scan)
         self._rod_stop = QtWidgets.QPushButton("Stop Rod Scan")
@@ -260,8 +323,9 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         rod_buttons = QtWidgets.QHBoxLayout()
         rod_buttons.addWidget(self._rod_run)
         rod_buttons.addWidget(self._rod_stop)
-        rod_form.addRow(rod_buttons)
-        fl.addRow(self._rod_box)
+        self._scan_buttons = QtWidgets.QWidget()
+        self._scan_buttons.setLayout(rod_buttons)
+        fl.addRow(self._scan_buttons)
 
         button_row = QtWidgets.QHBoxLayout()
         self._run_auto_btn = QtWidgets.QPushButton("Run Automated")
@@ -393,10 +457,17 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         is_thermal = key == "thermal_routine"
         is_squid_rod = key == "squid_rod"
         is_rod = is_squid_rod or key == "susceptibility_rod"
-        is_baseline = not (is_irm or is_thermal or is_rod)
+        is_channel = key == "uchannel"
+        is_scan = is_rod or is_channel
+        is_baseline = not (is_irm or is_thermal or is_scan)
         self._irm_box.setVisible(is_irm)
         self._thermal_box.setVisible(is_thermal)
         self._rod_box.setVisible(is_rod)
+        self._channel_box.setVisible(is_channel)
+        self._procedure_form.setRowVisible(self._rod_artifact_dir, is_scan)
+        self._procedure_form.setRowVisible(self._scan_buttons, is_scan)
+        self._rod_run.setText("Run U-channel Scan" if is_channel else "Run Rod Scan")
+        self._rod_stop.setText("Stop Scan")
         if is_rod:
             self._rod_form.setRowVisible(self._rod_reference, not is_squid_rod)
             self._rod_form.setRowVisible(self._rod_drift_limit, is_squid_rod)
@@ -408,7 +479,7 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
             self._baseline_context, self._baseline_operator, self._baseline_artifact_dir,
             self._baseline_buttons,
         ):
-            self._procedure_form.setRowVisible(widget, not is_rod)
+            self._procedure_form.setRowVisible(widget, not is_scan)
         for widget in (
             self._expected,
             self._samples,
@@ -452,6 +523,11 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         if is_baseline:
             self._on_mode_changed()
 
+    def _on_channel_kind_changed(self) -> None:
+        is_epr = self._channel_kind.currentData() == "epr"
+        self._epr_geometry.setVisible(is_epr)
+        self._core_geometry.setVisible(not is_epr)
+
     def _on_mode_changed(self) -> None:
         if self._procedure.currentData() != "gaussmeter_baseline":
             return
@@ -482,7 +558,34 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         if self._rod_worker is not None:
             self._rod_worker.requestInterruption()
             self._rod_stop.setEnabled(False)
-            self._status.setText("Stopping the rod scan and verifying motor settlement…")
+            self._status.setText("Stopping the scan and verifying motor settlement…")
+
+    def _channel_request(self) -> UChannelRequest:
+        try:
+            limit = float(self._channel_drift_limit.text())
+        except ValueError as exc:
+            raise ValueError("Enter the maximum zero drift in emu.") from exc
+        if self._channel_kind.currentData() == "epr":
+            geometry = EprTubeGeometry(self._epr_length.value(), self._epr_bottom.value(), self._epr_top.value(),
+                                       self._epr_below.value(), self._epr_above.value())
+        else:
+            geometry = CoreGeometry(self._core_length.value(), self._core_first.value(), self._core_last.value(),
+                                    self._core_zero.value())
+        return UChannelRequest(self._channel_specimen.text().strip(), geometry, self._channel_extension.value(),
+                               self._channel_spacing.value(), self._channel_orientation.currentData(),
+                               self._channel_passes.currentData(), self._channel_zero_every.value(), limit)
+
+    def _rod_request(self) -> RodScanRequest | SquidRodRequest:
+        is_squid = self._procedure.currentData() == "squid_rod"
+        input_field = self._rod_drift_limit if is_squid else self._rod_reference
+        try:
+            reference = float(input_field.text())
+        except ValueError as exc:
+            label = "maximum baseline drift in emu" if is_squid else "certified susceptibility in CGS units"
+            raise ValueError(f"Enter a number for the {label}.") from exc
+        request_type = SquidRodRequest if is_squid else RodScanRequest
+        return request_type(self._rod_standard.text().strip(), self._rod_height.value(),
+                            self._rod_spacing.value(), reference, self._rod_threshold.value())
 
     def _run_rod_scan(self) -> None:
         if self.rod_scan_active or self._rod_configuring:
@@ -493,21 +596,14 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
             folder = self._rod_artifact_dir.text().strip()
             if not folder:
                 raise ValueError("Enter an artifact folder.")
-            is_squid = self._procedure.currentData() == "squid_rod"
-            input_field = self._rod_drift_limit if is_squid else self._rod_reference
-            try:
-                reference = float(input_field.text())
-            except ValueError as exc:
-                label = "maximum baseline drift in emu" if is_squid else "certified susceptibility in CGS units"
-                raise ValueError(f"Enter a number for the {label}.") from exc
             if self._rod_scan_provider is None:
-                raise ValueError("A rod scan backend is unavailable.")
-            request_type = SquidRodRequest if is_squid else RodScanRequest
-            request = request_type(self._rod_standard.text().strip(), self._rod_height.value(),
-                                   self._rod_spacing.value(), reference, self._rod_threshold.value())
+                raise ValueError("A scan backend is unavailable.")
+            is_channel = self._procedure.currentData() == "uchannel"
+            request = self._channel_request() if is_channel else self._rod_request()
+            identity = request.specimen if is_channel else request.standard
             prepared = self._rod_scan_provider(request, folder)
             if prepared is None:
-                self._status.setText("Rod scan canceled before connecting.")
+                self._status.setText("Scan canceled before connecting.")
                 return
             job, lease = prepared
             self._rod_lease = lease
@@ -517,7 +613,7 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
             self._procedure.setEnabled(False)
             self._rod_run.setEnabled(False)
             self._rod_stop.setEnabled(True)
-            self._status.setText(f"Running {job.procedure_name} with {request.standard}…")
+            self._status.setText(f"Running {job.procedure_name} with {identity}…")
             self._rod_worker.start()
         except Exception as exc:
             if self._rod_worker is not None:
@@ -549,16 +645,26 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         worker.deleteLater()
         result = worker.result
         if result is None:
-            self._status.setText(f"Rod scan evidence could not be saved. {worker.error}")
+            self._status.setText(f"Scan evidence could not be saved. {worker.error}")
             return
-        label = "Simulated rod scan" if result.simulated else "Rod scan"
+        is_channel = isinstance(worker.job.plan.request, UChannelRequest)
+        if is_channel:
+            label = "Simulated U-channel scan" if result.simulated else "U-channel scan"
+        else:
+            label = "Simulated rod scan" if result.simulated else "Rod scan"
         if result.fit is None:
             self._status.setText(f"{label} unsuccessful. {result.error}")
             lines = [result.error]
         else:
             fit = result.fit
-            self._status.setText(f"{label} complete. Calibration proposal saved.")
-            if isinstance(fit, SquidRodFit):
+            saved = "Profile saved." if is_channel else "Calibration proposal saved."
+            self._status.setText(f"{label} complete. {saved}")
+            if isinstance(fit, UChannelSummary):
+                lines = [f"Profile positions per pass   {len(worker.job.plan.positions)}",
+                         f"Completed angular passes   {len(worker.job.plan.angles)}",
+                         f"Maximum baseline drift   {fit.max_baseline_drift_emu:.9g} emu",
+                         f"Profile CSV   {result.artifact.with_name('profile.csv')}"]
+            elif isinstance(fit, SquidRodFit):
                 drift = max(map(abs, fit.baseline_drift_emu))
                 lines = [f"Proposed measurement position   {fit.measurement_position:,d} counts",
                          f"Proposed zero position   {fit.zero_position:,d} counts",
@@ -568,7 +674,7 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
                 lines = [f"Proposed coil position   {fit.coil:,d} counts",
                          f"Proposed moment factor   {fit.moment_factor_cgs:.9g}",
                          f"Independent center reading   {fit.verification_reading_cgs:.9g} CGS"]
-            self._set_last_calibration_artifact(None if result.simulated else result.artifact,
+            self._set_last_calibration_artifact(None if result.simulated or is_channel else result.artifact,
                                                 suggested_operator=worker.job.operator)
         self._result.setPlainText("\n".join([label, *lines, f"Evidence   {result.artifact}"]))
         if result.recovery_required:

@@ -2809,3 +2809,19 @@ All 46 focused calibration, import, routing, and queue-geometry tests passed
 against the combined source. The Windows bundle passed offline startup and
 smoke checks for six panels and six helpers. It is available under
 `.tmp/long-scan-settings-release/dist/RapidPyMain`.
+
+U-channel acquisition checkpoint (2026-11-22). **Diagnostics → U-channel
+Scan** runs mounted long core and EPR tube profiles with one or four angular
+passes. A long core uses bench-verified start, end, and zero counts. EPR
+positions follow the entered tube and buffer geometry. The movement plan
+checks the loaded carriage and floor limits, verifies the lift and turning
+readbacks, and takes bracketing zero readings for each group of positions.
+The bundle contains a scan manifest, VB6-style readings, and a corrected
+profile in emu. A controlled halt retains the captured readings.
+
+Both forms were checked offscreen at 1280 × 720. The four-pass simulation
+published 4,004 profile points and 4,052 readings. Nine new cases cover
+desktop export, travel and drift validation, legacy output units, and routed
+motor sequencing. The full suite passed all 1,487 tests in 801.504 seconds.
+The Windows bundle passed offline startup and smoke checks for six panels
+and six helpers. Physical H7 acceptance and automatic rod loading remain open.

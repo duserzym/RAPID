@@ -122,7 +122,7 @@ Enable the Bartington bridge in Settings for live mode. The procedure uses the
 accepted motor and bridge configuration and asks the signed-in
 operator to confirm the mounted standard and clear opening. The scan saves its
 position and bridge readings, independent center check, and proposed coil position
-and moment factor. Use **Halt** or **Stop Rod Scan** to cancel. If motor settlement
+and moment factor. Use **Halt** or **Stop Scan** to cancel. If motor settlement
 requires recovery, open DC Motors and use **Recover Verify Stopped**. A No-Comm run
 creates simulated evidence for practice. Registry approval stores a provenance
 record. Review the proposal and apply any accepted station settings separately.
@@ -135,6 +135,24 @@ a fine pass measures its center inside the accepted travel. The scan repeats
 the center and baseline readings and records a measurement and zero position
 proposal. Review the evidence and independently verify fit and positioning
 before changing station settings.
+
+**Diagnostics → U-channel Scan** handles mounted long cores and EPR tubes.
+Import the station's `MinUpDownPos`, `FloorPos`, and `UpDownMotor1cm`. Use the
+accepted SQUID calibration at 1× and measure the extension from the carriage
+reference to the lowest point of the full mounted assembly. Enter the
+bench-verified start, end, and zero counts for a long core. For an EPR tube,
+enter the tube length, sample bounds measured from its lower end, and the two
+buffers. RAPID calculates the scan span and places the zero 5 cm above the
+first scan position. The plan must fit both the carriage and floor envelopes.
+
+Choose one pass at 0° or four passes at 0°, 90°, 180°, and 270°. Live turns
+require a verified top lift and the accepted 0° reference. RAPID takes two
+bracketing zero readings for each group of positions and checks their drift.
+Each output bundle contains `scan.json` with the plan and readbacks and
+`readings.csv` with VB6-style metadata and SQUID units. A completed scan also
+contains `profile.csv` with baseline-corrected instrument-axis moments in emu.
+The specimen orientation is retained in the manifest. No-Comm writes the same
+bundle with the simulation flag. **Halt** or **Stop Scan** cancels acquisition.
 
 ## Rebuild and test
 
@@ -169,9 +187,9 @@ that must not be mistaken for physical acceptance alone:
   adapter binding and loopback/position evidence.
 - Thermal treatment remains manual/external; automated furnace operation needs
   an identified controller, protocol, readback, and interlocks.
-- Automatic rod loading and U-channel scans still need parity work. The mounted
-  Bartington and SQUID rod scans need bench acceptance with the station's
-  certified standards.
+- Automatic rod loading still needs parity work. Mounted Bartington and SQUID
+  rods, U-channel cores, and EPR tubes need bench acceptance with the station's
+  standards and fixtures.
 
 These integrations remain open. Vendor driver installation, fresh-Windows
 deployment, mixed-DPI display review, physical fault/recovery tests, scientific

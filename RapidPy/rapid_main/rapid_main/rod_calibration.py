@@ -14,6 +14,7 @@ from PySide6 import QtCore
 
 if TYPE_CHECKING:
     from .squid_rod_calibration import SquidRodFit
+    from .uchannel import UChannelSummary
 
 
 ROD_PROCEDURE = 'calibration/susceptibility-rod'
@@ -157,7 +158,7 @@ def simulate_rod_scan(plan, readings, *, cancelled):
 @dataclass(frozen=True)
 class RodScanResult:
     artifact: Path
-    fit: RodFit | SquidRodFit | None
+    fit: RodFit | SquidRodFit | UChannelSummary | None
     error: str
     simulated: bool
     recovery_required: bool

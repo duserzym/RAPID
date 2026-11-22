@@ -1131,7 +1131,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.set_status("Queue run is already active.")
             return False
         if getattr(getattr(self, '_calibration_panel', None), 'rod_scan_active', False):
-            self.set_status('Wait for the rod scan to finish before starting the queue.')
+            self.set_status('Wait for the scan to finish before starting the queue.')
             return False
 
         if hasattr(self._measurement, "is_active") and self._measurement.is_active():
@@ -2543,6 +2543,7 @@ class MainWindow(QtWidgets.QMainWindow):
         dm.addSeparator()
         dm.addAction("&VRM Data Collection", self._launch_vrm)
         dm.addAction("Calibrate &Rod", self._launch_calibrate_rod)
+        dm.addAction("U-channel Scan", self._launch_uchannel_scan)
 
         hm = mb.addMenu("&Help")
         hm.addAction("Open &Error Log Folder", self._open_error_log_folder)
@@ -2989,6 +2990,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._calibration_panel.set_procedure("susceptibility_rod")
         self.set_status("Opened Susceptibility Rod Scan in Calibration Center.")
 
+    def _launch_uchannel_scan(self) -> None:
+        self._nav_select(5)
+        self._calibration_panel.set_procedure("uchannel")
+        self.set_status("Opened U-channel Scan in Calibration Center.")
+
     @QtCore.Slot(str)
     def _on_rod_scan_recovery_required(self, message):
         if self._shutdown_cleanup_requested:
@@ -3002,18 +3008,31 @@ class MainWindow(QtWidgets.QMainWindow):
         from .hardware_contracts import _build_motor_controller_config
         from .rod_calibration import RodScanJob, plan_rod_scan
         from .squid_rod_calibration import SquidRodRequest, SquidRodScanJob, coil_factors, plan_squid_rod
+        from .uchannel import UChannelJob, UChannelRequest, plan_uchannel, plan_uchannel_from_config
 
         if self._shutdown_cleanup_requested or self._has_active_automation():
-            raise DeviceOwnershipError('Wait for the active workflow to finish before scanning the rod.')
+            raise DeviceOwnershipError('Wait for the active workflow to finish before starting the scan.')
         config = self.config
         simulator = config.general.nocomm is True
         operator = str(config.general.operator or '').strip()
         if not simulator and not operator:
-            raise ValueError('Sign in before running the live rod calibration.')
+            raise ValueError('Sign in before running the live scan.')
         counts_per_cm = config.motor_station.lift_counts_per_cm or (961 if simulator else 0)
         meas_pos = config.motion.meas_pos or (-97500 if simulator else 0)
         is_squid = isinstance(request, SquidRodRequest)
-        if is_squid:
+        is_channel = isinstance(request, UChannelRequest)
+        if is_channel:
+            if simulator:
+                plan = plan_uchannel(request, meas_pos=meas_pos, counts_per_cm=counts_per_cm,
+                    carriage_limit=config.motor_station.lift_min_counts or -120000,
+                    floor_limit=config.motor_station.lift_floor_counts or -148955,
+                    axis_factors_emu=coil_factors(config.calibration), range_factor=config.calibration.range_factor,
+                    settle_s=config.squid.settle_time)
+            else:
+                plan = plan_uchannel_from_config(request, config)
+            resource, sensor_class, sensor_settings = 'squid', SquidBackendAdapter, config.squid
+            job_class, artifact_prefix = UChannelJob, 'uchannel'
+        elif is_squid:
             plan = plan_squid_rod(request, zero_pos=config.motion.zero_pos or (-50000 if simulator else 0),
                                   meas_pos=meas_pos, counts_per_cm=counts_per_cm,
                                   axis_factors_emu=coil_factors(config.calibration), settle_s=config.squid.settle_time)
@@ -3037,26 +3056,39 @@ class MainWindow(QtWidgets.QMainWindow):
                     or motors._client.config != _build_motor_controller_config(config)
                     or asdict(sensor._cfg) != asdict(sensor_settings)):
                 raise ValueError(f'Restore the accepted live motor and {resource} settings.')
-            if is_squid and config.squid.range_label != '1×':
-                raise ValueError('Select the calibrated 1× SQUID range before running the magnetic rod scan.')
-            deepest_travel = plan.meas_pos if is_squid else min(plan.positions)
-            if QtWidgets.QMessageBox.question(self, 'Confirm mounted calibration standard',
-                    f'Confirm that {request.standard} is securely mounted, the lift is at top, '
-                    f'the changer opening and travel to {deepest_travel:,d} counts are clear, '
-                    'and field outputs are off.',
+            if resource == 'squid' and config.squid.range_label != '1×':
+                raise ValueError('Select the calibrated 1× SQUID range before running the scan.')
+            if is_channel:
+                turns = (' The assembly clears the full turn from 0° to 270° at lift top.'
+                         if request.four_passes else '')
+                title = 'Confirm mounted long-scan assembly'
+                message = (f'{len(plan.positions)} positions per pass, from {plan.positions[0]:,d} to '
+                           f'{plan.positions[-1]:,d} counts. Zero at {plan.zero_target:,d} counts.\n\n'
+                           f'Confirm that {request.specimen} is securely mounted at lift top and at the 0° reference. '
+                           f'The total extension is {request.assembly_extension_cm:g} cm and travel to '
+                           f'{plan.positions[-1] - plan.readback_tolerance:,d} counts is clear. Field outputs are off.' + turns)
+            else:
+                deepest_travel = plan.meas_pos if is_squid else min(plan.positions)
+                title = 'Confirm mounted calibration standard'
+                message = (f'Confirm that {request.standard} is securely mounted, the lift is at top, '
+                           f'the changer opening and travel to {deepest_travel:,d} counts are clear, and field outputs are off.')
+            if QtWidgets.QMessageBox.question(self, title, message,
                     QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
                     QtWidgets.QMessageBox.StandardButton.No) != QtWidgets.QMessageBox.StandardButton.Yes:
                 return None
             if (self._shutdown_cleanup_requested or self._has_active_automation()
                     or config_fingerprint(self.config) != fingerprint
                     or motors is not self._dc_motor_backend or sensor is not getattr(self, sensor_attribute)):
-                raise DeviceOwnershipError('The station changed while confirming the mounted standard.')
-            if is_squid:
+                raise DeviceOwnershipError('The station changed while confirming the mounted assembly.')
+            if is_channel:
+                scan = partial(motors.run_uchannel_scan, squid=sensor, config=deepcopy(config), operator=operator)
+            elif is_squid:
                 scan = partial(motors.run_squid_rod_scan, squid=sensor, config=deepcopy(config), operator=operator)
             else:
                 scan = partial(motors.run_rod_scan, bridge=sensor, port=config.changer.port, operator=operator)
 
-        path = Path(folder).expanduser() / f'{artifact_prefix}-{uuid.uuid4().hex}.json'
+        suffix = '' if is_channel else '.json'
+        path = Path(folder).expanduser() / f'{artifact_prefix}-{uuid.uuid4().hex}{suffix}'
         job = job_class(plan, path, operator=operator or 'No-Comm', config_hash=fingerprint, scan=scan)
         lease = self.acquire_devices(('measurement', 'changer', resource, 'vacuum', 'af_demag'),
                                      'rod_calibration', allow_reentrant=False)
@@ -3281,7 +3313,7 @@ class MainWindow(QtWidgets.QMainWindow):
         active = self._has_active_automation()
         if prompt and active:
             active_message = (
-                'Shutdown will stop the rod scan and wait for verified motor settlement.'
+                'Shutdown will stop the scan and wait for verified motor settlement.'
                 if getattr(getattr(self, '_calibration_panel', None), 'rod_scan_active', False)
                 else 'Shutdown will halt the active measurement or queue run.'
             )

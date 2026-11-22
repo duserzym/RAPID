@@ -25,6 +25,7 @@ from rapidpy_common.hardware import (
     MotorSerialClient,
     MotorTelemetry,
     MotorControllerConfig,
+    convert_pos_to_angle,
     convert_position_to_hole,
     sample_dropoff_position,
 )
@@ -2206,7 +2207,7 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
                 moment_factor_cgs=bridge._cfg.moment_factor_cgs):
             raise HardwareError('Restore the accepted susceptibility bridge and rod scan plan.')
 
-        def execute(move, home):
+        def execute(move, home, orient):
             def sample(target):
                 home()
                 self._client._check_motion_cancel()
@@ -2231,14 +2232,10 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
                     axis_factors_emu=coil_factors(config.calibration), settle_s=config.squid.settle_time)):
             raise HardwareError('Restore the original SQUID settings and accepted lift calibration.')
 
-        def execute(move, home):
+        def execute(move, home, orient):
             def sample(target):
                 stopped = move(target, 0)
-                deadline = time.monotonic() + plan.settle_s
-                while (remaining := deadline - time.monotonic()) > 0:
-                    self._client._check_motion_cancel()
-                    time.sleep(min(.05, remaining))
-                self._client._check_motion_cancel()
+                self._settle_squid_scan(plan.settle_s)
                 return stopped, squid.read_raw_xyz()
 
             return scan_squid_rod(plan, sample, readings, cancelled=cancelled)
@@ -2248,8 +2245,41 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
             'squid_rod_scan', config.changer.port, operator, cancelled, execute, plan.deepest_target, plan.baseline_position,
             timeout_s=360 + (30 + plan.settle_s) * point_budget)
 
+    def _settle_squid_scan(self, settle_s):
+        deadline = time.monotonic() + settle_s
+        while (remaining := deadline - time.monotonic()) > 0:
+            self._client._check_motion_cancel()
+            time.sleep(min(.05, remaining))
+        self._client._check_motion_cancel()
+
+    def run_uchannel_scan(self, plan, readings, evidence, *, squid, config, operator, cancelled):
+        from .hardware_contracts import _build_motor_controller_config
+        from .uchannel import plan_uchannel_from_config, scan_uchannel
+        if (not isinstance(squid, SquidBackendAdapter) or asdict(squid._cfg) != asdict(config.squid)
+                or config.squid.range_label != '1×' or self._client.config != _build_motor_controller_config(config)
+                or plan != plan_uchannel_from_config(plan.request, config)):
+            raise HardwareError('Restore the original SQUID settings and accepted long-scan lift calibration.')
+
+        turning_axis = self._axes['Turning']
+        full_rotation = self._client.config.turning_motor_full_rotation
+
+        def execute(move, home, orient):
+            def sample(target, angle):
+                stopped = move(target, 0)
+                self._settle_squid_scan(plan.settle_s)
+                actual_angle = convert_pos_to_angle(self._client.read_position(turning_axis), full_rotation)
+                if abs(actual_angle - angle) > 5:
+                    raise HardwareError('The turning axis no longer verifies the planned long-scan angle.')
+                return stopped, actual_angle, squid.read_raw_xyz()
+
+            return scan_uchannel(plan, sample, orient, readings, cancelled=cancelled)
+
+        return self._run_mounted_rod(plan, readings, evidence, squid, squid.connect_for_acquisition, 'squid',
+            'uchannel_scan', config.changer.port, operator, cancelled, execute, min(plan.positions), plan.zero_target,
+            timeout_s=360 + (30 + plan.settle_s) * plan.reading_budget, turn_angles=plan.angles)
+
     def _run_mounted_rod(self, plan, readings, evidence, sensor, connect_sensor, sensor_name, action,
-                         port, operator, cancelled, execute, lower, upper, *, timeout_s):
+                         port, operator, cancelled, execute, lower, upper, *, timeout_s, turn_angles=()):
         from .queue_instruments import QueueInstrumentLifetime
         from .rod_calibration import RodFitError
 
@@ -2274,6 +2304,9 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
             nonlocal sensor_attempted, fit
             initial = self._observe_stopped(axes, observations, 'before_rod_scan')
             self._require_lift_clearance(initial)
+            full_rotation = self._client.config.turning_motor_full_rotation
+            if turn_angles and abs(convert_pos_to_angle(initial['Turning'], full_rotation)) > 5:
+                raise HardwareError('Verify the mounted assembly is at the accepted 0° turning reference.')
             self._client._check_motion_cancel()
             sensor_attempted = True
             connect_sensor()
@@ -2296,17 +2329,34 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
                 self._client._check_motion_cancel()
                 return stopped
 
+            def orient(angle):
+                if angle not in turn_angles:
+                    raise HardwareError('The requested turn is outside the planned scan angles.')
+                home()
+                axis = self._axes['Turning']
+                actual = convert_pos_to_angle(self._client.read_position(axis), full_rotation)
+                if abs(actual - angle) > 5:
+                    self._client._check_motion_cancel()
+                    self._require_move_success('set the long-scan turn angle', self._client.turning_motor_rotate(axis, angle))
+                recent = self._observe_stopped(('Turning', 'Up/Down'), observations, 'scan_at_angle')
+                self._require_lift_clearance(recent)
+                if abs(convert_pos_to_angle(recent['Turning'], full_rotation) - angle) > 5:
+                    raise HardwareError('The long-scan turning angle could not be verified.')
+
             try:
                 try:
-                    fit = execute(move_to_point, home)
+                    fit = execute(move_to_point, home, orient)
                 except RodFitError:
                     home()
                     raise
                 home()
                 final = self._observe_stopped(axes, observations, 'after_rod_scan')
                 self._require_lift_clearance(final)
-                if any(final[name] != initial[name] for name in axes if name != 'Up/Down'):
+                stationary = set(axes) - ({'Up/Down', 'Turning'} if turn_angles else {'Up/Down'})
+                if any(final[name] != initial[name] for name in stationary):
                     raise HardwareError('A stationary axis changed position during the rod scan.')
+                if turn_angles and abs(convert_pos_to_angle(final['Turning'], full_rotation)) > 5:
+                    raise HardwareError('The turning axis did not return to its verified 0° reference.')
                 evidence['final_stopped_positions'] = final
                 return asdict(fit)
             finally:

@@ -166,6 +166,8 @@ class CalibrationRegistry:
         procedure_id = str(artifact_payload.get("procedure_id", "")).strip()
         if not procedure_id:
             raise CalibrationRegistryError("calibration artifact has no procedure_id")
+        if procedure_id == "measurement/uchannel":
+            raise CalibrationRegistryError("U-channel records are specimen measurements")
         if artifact_payload.get("passed") is False or artifact_payload.get("status") == "FAIL":
             raise CalibrationRegistryError("a failed calibration artifact cannot be approved")
         rod_schema = {
