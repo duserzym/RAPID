@@ -68,6 +68,8 @@ def _fmt(value: Optional[float]) -> str:
 def _step_to_row(
     step: MeasurementStep,
     meta: SpecimenMeta,
+    *,
+    treatment_temp_k: float | None = None,
 ) -> list[str]:
     """Convert one MeasurementStep to a list of column values."""
     meas_name = f"{meta.name}-{step.demag_label}"
@@ -86,7 +88,7 @@ def _step_to_row(
         method_code,                          # method_codes
         _fmt(step.treat_ac_field_T()),        # treat_ac_field (T)
         _fmt(step.treat_dc_field_T()),        # treat_dc_field (T)
-        _fmt(step.treat_temp_K()),            # treat_temp (K)
+        _fmt(step.treat_temp_K() if treatment_temp_k is None else treatment_temp_k),
         _fmt(magn_moment),                    # magn_moment (A·m²)
         _fmt(vector.x),                       # magn_x
         _fmt(vector.y),                       # magn_y
@@ -135,6 +137,8 @@ def append_measurement(
     path: str | Path,
     meta: SpecimenMeta,
     step: MeasurementStep,
+    *,
+    treatment_temp_k: float | None = None,
 ) -> None:
     """
     Append a single measurement step to an existing MagIC measurements.txt.
@@ -156,5 +160,5 @@ def append_measurement(
         if write_header:
             fh.write(_HEADER_LINE + "\n")
             fh.write("\t".join(MAGIC_COLUMNS) + "\n")
-        row = _step_to_row(step, meta)
+        row = _step_to_row(step, meta, treatment_temp_k=treatment_temp_k)
         fh.write("\t".join(row) + "\n")

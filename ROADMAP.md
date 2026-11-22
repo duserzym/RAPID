@@ -2878,3 +2878,9 @@ The transverse scan now pauses between readings with AF outputs confirmed off
 and both motor axes stationary. Resume verifies the lift and turning positions
 before the next ramp. Live scans flush each confirmed reading to a checkpoint
 and link it from the terminal or recovery record.
+
+**External thermal measurement checkpoint (2026-11-22).** Live Measure
+records a completed, cooled furnace step from a reviewed plan, binds it to
+the SQUID acquisition, and appends it to the verified specimen bundle.
+RMG records peak and dwell. MagIC uses the measured peak. H10 covers
+physical reconciliation with the furnace log.

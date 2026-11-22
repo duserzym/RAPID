@@ -32,9 +32,10 @@ Usage::
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from contextlib import ExitStack
 import hashlib
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import re
 import threading
@@ -74,7 +75,7 @@ from rapid_main.susceptibility import write_susceptibility_summary_json
 from rapid_main.susceptibility_acquisition import write_susceptibility_acquisition
 from rapid_main.af_treatment import write_af_treatment_record
 from rapid_main.rockmag import write_rockmag_run_artifact
-from rapid_main.thermal import write_thermal_run_artifact
+from rapid_main.thermal import ExternalThermalTreatment, bind_external_thermal_treatment, write_thermal_run_artifact
 from rapid_main.workflow import WorkflowPhase, WorkflowStateMachine
 from rapid_main import software_version
 from rapid_main.worker_ownership import worker_claim
@@ -169,6 +170,7 @@ class MeasurementWorker(QtCore.QThread):
         *,
         specimen_provenance: Mapping[str, Any] | None = None,
         queue_side: QueueSide | None = None,
+        external_thermal: ExternalThermalTreatment | None = None,
     ) -> None:
         super().__init__(parent)
         self._specimen_provenance = deepcopy(dict(specimen_provenance)) if specimen_provenance is not None else None
@@ -201,6 +203,17 @@ class MeasurementWorker(QtCore.QThread):
         # A backend that declares itself simulated taints every artifact it
         # produces: the run is labelled and kept out of the production path.
         self._simulated = bool(getattr(self._backend, "simulated", False))
+        self._external_thermal = external_thermal
+        if external_thermal is not None:
+            if (not isinstance(external_thermal, ExternalThermalTreatment) or self._simulated or self._resume
+                    or queue_side is not None or not self._run_id or self._thermal_context is None
+                    or self._thermal_context.get("run_context") != self._run_id):
+                raise ValueError("External treatment is only accepted for one new live manual measurement.")
+            self._thermal_context = bind_external_thermal_treatment(
+                self._thermal_context, external_thermal, specimen=meta.name, operator=operator, labels=labels,
+            )
+        elif self._thermal_context is not None and "external_treatment" in self._thermal_context:
+            raise ValueError("External treatment requires an operator attestation for the current measurement.")
         validate_measurement_output(self._output_dir, self._meta.name, simulated=self._simulated,
             allow_simulated_production_output=self._allow_simulated_production_output)
         self._last_block_audit: BlockAudit | None = None
@@ -298,6 +311,10 @@ class MeasurementWorker(QtCore.QThread):
             self._emit_error(f'Failed to record worker failure: {artifact_error}', phase=WorkflowPhase.SAVING)
 
     def _run_owned(self) -> None:
+        with ExitStack() as cleanup:
+            self._run_sequence(cleanup)
+
+    def _run_sequence(self, cleanup) -> None:
         if self._halt_flag:
             self._emit_phase(WorkflowPhase.HALTED)
             self._finish_run(aborted=True)
@@ -335,8 +352,19 @@ class MeasurementWorker(QtCore.QThread):
             specimen=self._meta.name, labels=self._labels, source=source, simulated=self._simulated)
         self._progress.begin()
 
+        bundle = None
+        external = self._external_thermal
+        if external is not None:
+            planned = self._thermal_context["queue_labels"]
+            bundle = MeasurementBundleWriter(
+                self._output_dir, self._meta, provenance=self._base_provenance(),
+                thermal_steps_through_current=tuple(planned[:planned.index(external.label) + 1]),
+                external_thermal=external,
+            )
+            cleanup.callback(bundle.abort)
+
         plan_validator = getattr(self._backend, "validate_treatment_plan", None)
-        if apply_treatment and callable(plan_validator):
+        if external is None and apply_treatment and callable(plan_validator):
             try:
                 self._emit_phase(WorkflowPhase.PREFLIGHT)
                 plan_preflight = self._call_with_timeout(
@@ -416,14 +444,13 @@ class MeasurementWorker(QtCore.QThread):
                 "written to the SIMULATED directory and is not hardware evidence."
             )
 
-        self._apply_measurement_context(carried_label=None if apply_treatment else self._labels[0])
+        self._apply_measurement_context(carried_label=self._labels[0] if external is not None or not apply_treatment else None)
         self._emit_phase(WorkflowPhase.LOADING)
 
         # Prepare bundle writer (VB6 specimen + RMG + MagIC measurement/specimen)
-        bundle = None
         try:
             self._emit_phase(WorkflowPhase.SAVING)
-            if side is None or not side.is_up:
+            if bundle is None and (side is None or not side.is_up):
                 bundle = MeasurementBundleWriter(
                     self._output_dir, self._meta, simulated=self._simulated,
                     allow_simulated_production_output=self._allow_simulated_production_output,
@@ -490,8 +517,12 @@ class MeasurementWorker(QtCore.QThread):
 
             # Apply treatment step
             try:
-                self._emit_phase(WorkflowPhase.TREATING)
-                if apply_treatment:
+                if external is not None:
+                    self._comm_info(f"Externally treated step {label}, attestation {external.evidence_id}")
+                    rmg_treatment = replace(describe_rmg_treatment(label), level=external.peak_temperature_c,
+                                            hold_time_s=external.hold_seconds, evidence_id=external.evidence_id)
+                elif apply_treatment:
+                    self._emit_phase(WorkflowPhase.TREATING)
                     af_start, pulse_start = len(self._backend_af_records()), len(self._backend_pulse_records())
                     self._comm_sent(label, detail="set_demag_step")
                     self._call_with_timeout(
@@ -501,6 +532,7 @@ class MeasurementWorker(QtCore.QThread):
                     )
                     rmg_treatment = self._rmg_treatment(label, af_start=af_start, pulse_start=pulse_start)
                 else:
+                    self._emit_phase(WorkflowPhase.TREATING)
                     self._comm_info(f'Paired Down retains the original Up treatment {label}')
                     carried = self._up_reference.get('rmg_treatment')
                     rmg_treatment = RmgTreatment(**carried) if carried is not None else describe_rmg_treatment(label)
@@ -567,7 +599,8 @@ class MeasurementWorker(QtCore.QThread):
                         rmg_treatment=rmg_treatment,
                         axis_sd_emu=(self._last_collection_stats.axis_sd_emu
                                      if self._last_collection_stats is not None else None),
-                        sample_height_cm=sample_height_cm):
+                        sample_height_cm=sample_height_cm,
+                        treatment_temp_k=external.peak_temperature_c + 273.15 if external is not None else None):
                     self._skipped_labels.append(label)
                     self._emit_warning(
                         f"Step {label} is already present from an interrupted run; "
@@ -630,12 +663,13 @@ class MeasurementWorker(QtCore.QThread):
                         raise ValueError('The original Up acquisition changed during the Down pass.')
                     if side.legacy_up is not None:
                         side.verify_legacy_archive(self._pair_directory)
-                write_susceptibility_summary_json(
-                    bundle.staged_susceptibility if bundle is not None else self._artifact_path('susceptibility.json'),
-                    susceptibility_records,
-                    sample=self._meta.name,
-                    operator=self._operator,
-                )
+                if external is None or not self._artifact_path('susceptibility.json').exists():
+                    write_susceptibility_summary_json(
+                        bundle.staged_susceptibility if bundle is not None else self._artifact_path('susceptibility.json'),
+                        susceptibility_records,
+                        sample=self._meta.name,
+                        operator=self._operator,
+                    )
             except Exception as exc:
                 self._emit_error(
                     f"Failed to write susceptibility summary: {exc}",
@@ -652,6 +686,8 @@ class MeasurementWorker(QtCore.QThread):
         else:
             try:
                 if bundle is not None:
+                    if external is not None:
+                        bundle.link_external_thermal_measurement(external, self._progress.reference)
                     bundle.set_provenance(**self._run_provenance())
                     published = bundle.paths
                     self._publish_dir = bundle.publish_dir
@@ -1033,7 +1069,7 @@ class MeasurementWorker(QtCore.QThread):
         setter = getattr(self._backend, "set_measurement_context", None)
         if setter is None or not callable(setter):
             if carried_label is not None and not self._simulated:
-                raise ValueError('A native Down pass requires a read-only original treatment context.')
+                raise ValueError('Live acquisition requires a read-only original treatment context.')
             return
         context = dict(sample_name=self._meta.name, run_id=self._run_id, operator=self._operator)
         if carried_label is not None:
@@ -1042,7 +1078,7 @@ class MeasurementWorker(QtCore.QThread):
             setter(**context)
         except Exception as exc:
             if carried_label is not None and not self._simulated:
-                raise ValueError('Cannot bind the original treatment label for the Down acquisition.') from exc
+                raise ValueError('Cannot bind the original treatment label for acquisition.') from exc
             self._comm_warning(f"set_measurement_context failed: {exc}")
 
     def _record_block_evidence(
@@ -1304,7 +1340,8 @@ class MeasurementWorker(QtCore.QThread):
 
     def _finish_run(self, *, aborted: bool) -> None:
         if (aborted and self._publish_dir == self._pair_directory
-                and (self._artifact_path('provenance.json').exists()
+                and (self._external_thermal is not None
+                     or self._artifact_path('provenance.json').exists()
                      or self._artifact_path('.rapidpy-publication').exists())):
             # A failed attempt cannot replace the index and diagnostics of the
             # previously accepted bundle at the shared legacy filenames.

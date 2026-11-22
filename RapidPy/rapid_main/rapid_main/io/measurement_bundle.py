@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import astuple, dataclass
 from copy import deepcopy
+from datetime import datetime, timezone
 import json
 import os
 import shutil
@@ -21,13 +22,14 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
-from rapid_main.io.bundle_publication import BundlePublication, JOURNAL
+from rapid_main.io.bundle_publication import BundlePublication, JOURNAL, _digest
 from rapidpy_common.hardware_safety import _replace_snapshot
 from rapid_main.io.magic_specimen_writer import append_specimen
 from rapid_main.io.magic_writer import append_measurement
 from rapid_main.io.rmg_writer import RmgTreatment, append_rmg_record
 from rapid_main.io.specimen_writer import append_step, write_header
 from rapid_main.specimen_paths import contained_path, specimen_output_path
+from rapid_main.thermal import ExternalThermalTreatment
 
 SIMULATED_SUBDIR = "SIMULATED"
 SIMULATION_MARKER_FILE = "SIMULATION.txt"
@@ -65,6 +67,8 @@ class MeasurementBundleWriter:
         allow_simulated_production_output: bool = False,
         resume: bool = False,
         provenance: Mapping[str, Any] | None = None,
+        thermal_steps_through_current: tuple[str, ...] | None = None,
+        external_thermal: ExternalThermalTreatment | None = None,
     ) -> None:
         self.output_dir = Path(output_dir).resolve()
         self.meta = deepcopy(meta)
@@ -85,25 +89,70 @@ class MeasurementBundleWriter:
         self._lease.__enter__()
         try:
             self._publication.recover()
-            self._prepare_staging(resume, provenance)
+            self._prepare_staging(resume, provenance, thermal_steps_through_current, external_thermal)
         except BaseException:
             self._release()
             raise
 
-    def _prepare_staging(self, resume, provenance):
-        _reset_directory(self.staging_dir)
+    def _prepare_staging(self, resume, provenance, thermal_steps_through_current, external_thermal):
         self._closed = False
         self._committed = False
         self._appended_labels: list[str] = []
         self._provenance: dict[str, Any] = dict(provenance or {})
-
+        self._existing_labels = []
         self._resume = bool(resume)
-        self._existing_labels = _read_step_ledger(self.publish_dir) if resume else []
+        if external_thermal is not None:
+            self._existing_labels = self._admit_thermal_append(thermal_steps_through_current, external_thermal)
+        elif resume:
+            self._existing_labels = _read_step_ledger(self.publish_dir)
+        _reset_directory(self.staging_dir)
         self._skipped_labels: list[str] = []
-        if resume:
+        if resume or external_thermal is not None:
             self._seed_from_published()
         self._header_written = bool(self._existing_labels)
         self._ensure_headers()
+
+    def _admit_thermal_append(self, steps, treatment):
+        if self.simulated or self._resume or not steps or steps[-1] != treatment.label:
+            raise ValueError("External thermal append requires one reviewed live step.")
+        provenance = contained_path(self.publish_dir, "provenance.json", output=True)
+        ledger = contained_path(self.publish_dir, STEP_LEDGER_FILE, output=True)
+        index = contained_path(self.publish_dir, "artifact_index.json", output=True)
+        science = astuple(self.paths)
+        members = (*science, provenance, ledger, index)
+        if not any(path.exists() for path in members):
+            if len(steps) != 1:
+                raise ValueError("Measure the earlier steps of the thermal plan first.")
+            return []
+        if not all(path.is_file() for path in members):
+            raise ValueError("Existing specimen output has no complete RAPID bundle to append to.")
+        prior = json.loads(provenance.read_text(encoding="utf-8"))
+        recorded = json.loads(ledger.read_text(encoding="utf-8"))
+        manifest = json.loads(index.read_text(encoding="utf-8"))
+        identity = self._provenance_payload()
+        identity_fields = ("specimen", "sample", "site", "location", "comment", "volume_cm3", "core_plate_strike",
+                           "core_plate_dip", "bedding_strike", "bedding_dip", "fold_axis", "fold_plunge",
+                           "magnetic_declination_e", "core_orientation_available")
+        labels = recorded.get("labels")
+        if (prior.get("simulated") is not False or any(prior.get(key) != identity[key] for key in identity_fields)
+                or recorded.get("schema") != "rapidpy.measurement.step_ledger.v1"
+                or recorded.get("specimen") != self.meta.name or not isinstance(labels, list) or not labels
+                or labels != prior.get("labels") or any(not isinstance(label, str) for label in labels)):
+            raise ValueError("Existing bundle labels or specimen metadata do not match the reviewed specimen.")
+        entries = {entry.get("relative_path"): entry.get("sha256") for entry in manifest.get("artifacts", ())}
+        if any(entries.get(path.name) != _digest(path) for path in (*science, provenance)):
+            raise ValueError("Existing specimen bundle files differ from their accepted artifact hashes.")
+        if steps[-1] in labels:
+            raise ValueError("This thermal step already has a published measurement.")
+        if [label for label in labels if label in steps[:-1]] != list(steps[:-1]):
+            raise ValueError("Measure the earlier steps of the thermal plan in order.")
+        history = prior.get("external_thermal_measurements", [])
+        if history:
+            previous = datetime.fromisoformat(history[-1]["measurement_completed_at"])
+            if datetime.fromisoformat(treatment.completed_at) <= previous:
+                raise ValueError("The furnace completion time must follow the previous external SQUID measurement.")
+        self._provenance["external_thermal_measurements"] = history
+        return labels
 
     # -- properties --------------------------------------------------------
 
@@ -131,7 +180,8 @@ class MeasurementBundleWriter:
     def append_step(self, step: MeasurementStep, susceptibility: float = 0.0, *,
                     rmg_treatment: RmgTreatment | None = None,
                     axis_sd_emu: tuple[float, float, float] | None = None,
-                    sample_height_cm: float | None = None) -> bool:
+                    sample_height_cm: float | None = None,
+                    treatment_temp_k: float | None = None) -> bool:
         """Append one accepted step. Returns ``False`` when it was a duplicate."""
         self._require_open()
         _paths_for(self.publish_dir, self.meta.name)
@@ -144,7 +194,7 @@ class MeasurementBundleWriter:
         append_step(self._staged.specimen_file, step)
         append_rmg_record(self._staged.rmg_file, step, susceptibility=susceptibility, meta=self.meta,
                           treatment=rmg_treatment, axis_sd_emu=axis_sd_emu, sample_height_cm=sample_height_cm)
-        append_measurement(self._staged.magic_measurements_file, self.meta, step)
+        append_measurement(self._staged.magic_measurements_file, self.meta, step, treatment_temp_k=treatment_temp_k)
         self._appended_labels.append(label)
         return True
 
@@ -152,6 +202,12 @@ class MeasurementBundleWriter:
         """Record run/holder/calibration provenance published with the bundle."""
         self._require_open()
         self._provenance.update(fields)
+
+    def link_external_thermal_measurement(self, treatment, acquisition):
+        self._require_open()
+        history = self._provenance.setdefault("external_thermal_measurements", [])
+        history.append({"label": treatment.label, "evidence_id": treatment.evidence_id, "acquisition": acquisition,
+                        "measurement_completed_at": datetime.now(timezone.utc).isoformat()})
 
     # -- transaction -------------------------------------------------------
 

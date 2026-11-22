@@ -198,6 +198,23 @@ inspect interrupted readings. Start a new scan to obtain a best angle after
 an interruption. No-Comm exercises pause, resume, and move with simulated
 readings.
 
+## Externally treated specimens
+
+Record and load a **Thermal Routine Planning** plan in Calibration Center.
+In live mode, select the named specimen and use **Start / Resume** in Live
+Measure. Select the completed thermal step and enter the furnace-log
+reference, recorded peak, dwell, handling temperature, and completion time.
+Confirm the cooled specimen is mounted for SQUID measurement according to the
+station procedure.
+
+Measure after each furnace treatment in plan order. RAPID appends one
+SQUID measurement to the specimen's verified bundle. The requested label
+identifies the step, and RMG and MagIC retain the observed temperature.
+The bundle provenance links each operator attestation to that step's
+acquisition record. Duplicate, out-of-order, and unverifiable existing
+bundles are rejected before SQUID preflight. The normal **No-Comm**
+thermal plan run remains a simulation.
+
 ## Rebuild and test
 
 Use an environment with the declared RapidPy dependencies, setuptools, wheel,
@@ -222,8 +239,9 @@ accepted station configuration, physical interlock tests, and reference results.
 - Transverse probe auto-positioning has native turning motor, calibrated ADwin
   AF and 908A DC peak integration. The station needs probe fixture clearance,
   peak fidelity and interruption acceptance with the actual meter.
-- Thermal treatment remains manual/external. Automated furnace operation needs
-  an identified controller, protocol, readback, and interlocks.
+- External thermal steps need a physical reconciliation against the furnace
+  log and SQUID output. Automated furnace operation needs an identified
+  controller, protocol, readback, and interlocks.
 - Bartington and SQUID rod scans need bench acceptance for manual mounts and
   automatic tray loading. U-channel cores and EPR tubes need acceptance with the
   station's fixtures.

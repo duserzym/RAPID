@@ -15,6 +15,7 @@ from rapid_main.calibration_registry import CalibrationRegistry, CalibrationRegi
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.specimen_metadata import resolve_specimen_meta, validate_specimen_provenance
 from rapid_main.device_ownership import DeviceOwnershipError
+from rapid_main.dialogs.external_thermal import ExternalThermalDialog
 from rapid_main.dialogs.plots import build_quicklook_summary, write_quicklook_json
 from rapid_main.geometry import Angular3D, Cartesian3D, angular3d_to_cartesian3d
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
@@ -532,7 +533,14 @@ class MeasurementPanel(QtWidgets.QWidget):
             return False  # already running
 
         mw = self.window()
-        if hasattr(mw, "cancel_queue_run") and not queue_run:
+        cfg = getattr(mw, "config", None)
+        thermal_plan = getattr(mw, "_thermal_routine_plan", None) if not queue_run else None
+        external_workflow = thermal_plan is not None and getattr(getattr(cfg, "general", None), "nocomm", None) is False
+        active_workflow = getattr(mw, "_has_active_automation", lambda: False)
+        if external_workflow and active_workflow():
+            QtWidgets.QMessageBox.warning(self, "Station Busy", "Finish the active workflow before measuring an external thermal step.")
+            return False
+        if hasattr(mw, "cancel_queue_run") and not queue_run and not external_workflow:
             mw.cancel_queue_run("Manual run started.")
 
         labels = getattr(mw, "_sequence_labels", [])
@@ -569,7 +577,6 @@ class MeasurementPanel(QtWidgets.QWidget):
             )
             return False
 
-        cfg = getattr(mw, "config", None)
         backend = _resolve_measurement_backend(mw, NoCommBackend()) or NoCommBackend()
         self._current_run_simulated = bool(getattr(backend, "simulated", False))
         op = cfg.general.operator if cfg else ""
@@ -588,6 +595,28 @@ class MeasurementPanel(QtWidgets.QWidget):
         except (OSError, ValueError) as exc:
             QtWidgets.QMessageBox.warning(self, "Invalid Specimen Path", str(exc))
             return False
+        external_thermal = None
+        if external_workflow:
+            op = op.strip()
+            if not op or meta.name == "UNKNOWN" or self._current_run_simulated:
+                QtWidgets.QMessageBox.warning(self, "Thermal Measurement",
+                    "Sign in, select a named specimen, and verify that live SQUID mode is available.")
+                return False
+            selected_sample = self._current_sample
+            dialog = ExternalThermalDialog(self, thermal_plan, meta.name, op)
+            accepted = dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted
+            external_thermal = dialog.treatment
+            dialog.deleteLater()
+            if not accepted:
+                return False
+            if (getattr(mw, "_thermal_routine_plan", None) is not thermal_plan or active_workflow()
+                    or self._current_sample != selected_sample or getattr(mw, "config", None) is not cfg
+                    or cfg.general.nocomm is not False or cfg.general.operator.strip() != op
+                    or _resolve_measurement_backend(mw, backend) is not backend):
+                QtWidgets.QMessageBox.warning(self, "Thermal Measurement",
+                    "The station or reviewed plan changed. Start the measurement again.")
+                return False
+            labels = [external_thermal.label]
         if resolution.defaulted_fields:
             self._on_preflight_warning("Specimen metadata defaulted for: "
                 + ", ".join(resolution.defaulted_fields)
@@ -595,14 +624,12 @@ class MeasurementPanel(QtWidgets.QWidget):
         try:
             self._last_run_error = False
             self._clear_measurement_plot()
-            self._acquire_ownerships(
-                mw,
-                owner=owner,
-                queue_run=queue_run,
-                needs_susceptibility=any(
-                    str(label).strip().upper() == "SUSC" for label in labels
-                ),
-            )
+            if external_thermal is not None:
+                self._leases.append(mw.acquire_devices(("measurement", "changer", "af_demag", "squid", "vacuum"),
+                                                       owner, allow_reentrant=False))
+            else:
+                self._acquire_ownerships(mw, owner=owner, queue_run=queue_run,
+                                         needs_susceptibility=any(str(label).strip().upper() == "SUSC" for label in labels))
         except DeviceOwnershipError as exc:
             QtWidgets.QMessageBox.warning(self, "Device Busy", str(exc))
             return False
@@ -621,14 +648,13 @@ class MeasurementPanel(QtWidgets.QWidget):
                 operator=op,
                 notes="Compiled sequence executed by MeasurementWorker.",
             )
-        thermal_plan = getattr(mw, "_thermal_routine_plan", None)
         if thermal_plan is not None:
             thermal_context = thermal_plan.to_artifact(
                 run_context=run_id,
                 operator=op,
                 notes=(
-                    "Manual-external thermal plan carried into MeasurementWorker. "
-                    "No specimen furnace control is implied."
+                    "Operator-attested furnace treatment for a measured specimen step."
+                    if external_thermal is not None else "Reviewed thermal planning context for simulation."
                 ),
             )
         try:
@@ -645,28 +671,34 @@ class MeasurementPanel(QtWidgets.QWidget):
                 "bundle will preserve this as an empty calibration-record list."
             )
 
-        self._worker = MeasurementWorker(
-            meta=meta,
-            labels=labels,
-            output_dir=run_output_dir,
-            backend=backend,
-            operator=op,
-            samples_per_position=queue_averages if queue_run else max(
-                1,
-                int(getattr(getattr(cfg, "squid", None), "samples_per_pos", 1)),
-            ),
-            run_id=run_id,
-            calibration_records=calibration_records,
-            communication_sources=(
-                getattr(mw, "_vacuum_backend", None),
-                getattr(mw, "_susceptibility_backend", None),
-            ),
-            routine_context=routine_context,
-            thermal_context=thermal_context,
-            specimen_provenance=queue_provenance,
-            queue_side=queue_side,
-            parent=self,
-        )
+        try:
+            self._worker = MeasurementWorker(
+                meta=meta,
+                labels=labels,
+                output_dir=run_output_dir,
+                backend=backend,
+                operator=op,
+                samples_per_position=queue_averages if queue_run else max(
+                    1,
+                    int(getattr(getattr(cfg, "squid", None), "samples_per_pos", 1)),
+                ),
+                run_id=run_id,
+                calibration_records=calibration_records,
+                communication_sources=(
+                    getattr(mw, "_vacuum_backend", None),
+                    getattr(mw, "_susceptibility_backend", None),
+                ),
+                routine_context=routine_context,
+                thermal_context=thermal_context,
+                specimen_provenance=queue_provenance,
+                queue_side=queue_side,
+                external_thermal=external_thermal,
+                parent=self,
+            )
+        except (OSError, ValueError) as exc:
+            self._release_measurement_ownership()
+            QtWidgets.QMessageBox.warning(self, "Measurement Setup", str(exc))
+            return False
         self._worker.step_started.connect(self._on_step_started)
         self._worker.step_complete.connect(self._on_step_complete)
         self._worker.run_finished.connect(self._on_run_finished)

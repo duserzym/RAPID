@@ -17,7 +17,7 @@ from rapid_main.hardware_contracts import PreflightResult
 from rapid_main.magnetometer import BracketedMeasurementBlock, CommandEvent, ZeroPairValidation
 from rapid_main.measurement_worker import MeasurementWorker
 from rapid_main.rockmag import RockmagRoutineSpec, compile_rockmag_routine, rockmag_af_demag
-from rapid_main.thermal import compile_thermal_routine
+from rapid_main.thermal import ExternalThermalTreatment, compile_thermal_routine
 from rapid_main.workflow import WorkflowPhase
 
 
@@ -432,6 +432,72 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
         self.assertTrue(thermal_entry["required"])
         self.assertTrue(thermal_entry["exists"])
         self.assertEqual(len(thermal_entry["sha256"]), 64)
+
+    def test_external_thermal_steps_append_science_without_issuing_treatments(self) -> None:
+        class ExternalBackend(ReturnAwareBackend):
+            def validate_treatment_plan(self, labels):
+                raise AssertionError("External acquisition cannot call the furnace or treatment validator.")
+
+            def set_measurement_context(self, **context):
+                self.context = context
+
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "specimen"
+            meta = _meta("EXT_THERMAL")
+            plan = compile_thermal_routine([100, 200], name="Oven series")
+            MeasurementWorker(meta, ["NRM"], output, backend=ReturnAwareBackend(),
+                              run_id="baseline").run()
+            nrm_rmg = (output / "EXT_THERMAL.rmg").read_bytes()
+            susceptibility = (output / "susceptibility.json").read_bytes()
+
+            def measure(label, peak, run_id, *, completed_at=None):
+                backend = ExternalBackend()
+                receipt = ExternalThermalTreatment(meta.name, label, "operator", f"furnace/{run_id}",
+                    peak, 620, 31., completed_at or datetime.now(timezone.utc).isoformat())
+                worker = MeasurementWorker(meta, [label], output, backend=backend, operator="operator",
+                    run_id=run_id, thermal_context=plan.to_artifact(run_context=run_id), external_thermal=receipt)
+                worker.run()
+                return backend, receipt
+
+            premature, _ = measure("TT200", 199., "premature")
+            self.assertEqual(premature.preflight_calls, 0)
+            first, first_receipt = measure("TT100", 98.5, "first")
+            out_of_order, _ = measure("TT200", 199., "backdated", completed_at=first_receipt.completed_at)
+            self.assertEqual(out_of_order.preflight_calls, 0)
+            scientific_file = output / "EXT_THERMAL.rmg"
+            verified_bytes = scientific_file.read_bytes()
+            edited_bytes = verified_bytes + b"changed\n"
+            scientific_file.write_bytes(edited_bytes)
+            conflict, _ = measure("TT200", 199., "hash-conflict")
+            self.assertEqual(conflict.preflight_calls, 0)
+            self.assertEqual(scientific_file.read_bytes(), edited_bytes)
+            scientific_file.write_bytes(verified_bytes)
+            second, second_receipt = measure("TT200", 199., "second")
+            for backend, label in ((first, "TT100"), (second, "TT200")):
+                self.assertEqual(backend.context["treatment_label"], label)
+                self.assertEqual(backend.preflight_calls, 1)
+                self.assertEqual(backend.return_to_safe_state_calls, 1)
+                self.assertEqual(backend.step_calls, [])
+                self.assertGreater(backend.squid_calls, 0)
+            rmg = (output / "EXT_THERMAL.rmg").read_bytes()
+            self.assertTrue(rmg.startswith(nrm_rmg))
+            self.assertIn(b"TT,98.5,,,620,", rmg)
+            self.assertIn(b"TT,199.0,,,620,", rmg)
+            self.assertEqual((output / "susceptibility.json").read_bytes(), susceptibility)
+            self.assertIn("371.65", (output / "measurements.txt").read_text(encoding="utf-8"))
+            provenance = json.loads((output / "provenance.json").read_text(encoding="utf-8"))
+            self.assertEqual(provenance["labels"], ["NRM", "TT100", "TT200"])
+            for link, receipt in zip(provenance["external_thermal_measurements"], (first_receipt, second_receipt), strict=True):
+                self.assertEqual(link["evidence_id"], receipt.evidence_id)
+                journal = Path(link["acquisition"]["directory"]) / "run.json"
+                source = json.loads(journal.read_text(encoding="utf-8"))["payload"]["identity"]["source"]
+                self.assertEqual(source["thermal"]["external_treatment"], receipt.to_artifact())
+            report = (output / "thermal_run.json").read_bytes()
+            self.assertEqual(json.loads(report)["labels_completed"], ["TT200"])
+            duplicate, _ = measure("TT200", 199., "duplicate")
+            self.assertEqual(duplicate.preflight_calls, 0)
+            self.assertEqual((output / "thermal_run.json").read_bytes(), report)
+            self.assertEqual((output / "EXT_THERMAL.rmg").read_bytes(), rmg)
 
     def test_treatment_plan_preflight_blocks_before_hardware_preflight(self) -> None:
         class _PlanningOnlyBackend(DeterministicBackend):

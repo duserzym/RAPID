@@ -9,10 +9,12 @@ unknown live furnace boundary fail-closed.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tempfile
-from dataclasses import dataclass, field
+import uuid
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -21,6 +23,63 @@ from rapid_main.data_model import MeasurementBlock
 
 
 _THERMAL_LABEL_RE = re.compile(r"^(TT|TH|TEMP)\s*(\d+(?:\.\d+)?)$", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class ExternalThermalTreatment:
+    """Operator attestation for a completed furnace step and cooled specimen."""
+
+    specimen: str
+    label: str
+    operator: str
+    furnace_log: str
+    peak_temperature_c: float
+    hold_seconds: int
+    handling_temperature_c: float
+    completed_at: str
+    evidence_id: str = field(default_factory=lambda: "thermal-" + uuid.uuid4().hex)
+
+    def __post_init__(self):
+        if any(not isinstance(text, str) or not text.strip() for text in
+               (self.specimen, self.label, self.operator, self.furnace_log, self.completed_at)):
+            raise ValueError("Specimen, operator, furnace-log reference, label, and completion time are required.")
+        if not _THERMAL_LABEL_RE.fullmatch(self.label):
+            raise ValueError("Select a thermal step from the reviewed plan.")
+        if not re.fullmatch(r"thermal-[0-9a-f]{32}", self.evidence_id):
+            raise ValueError("Invalid external treatment evidence ID.")
+        for value in (self.peak_temperature_c, self.handling_temperature_c):
+            if type(value) not in (float, int) or not math.isfinite(value) or value < 0:
+                raise ValueError("Enter the recorded peak and handling temperatures.")
+        if self.handling_temperature_c > self.peak_temperature_c:
+            raise ValueError("Handling temperature exceeds the recorded peak.")
+        if type(self.hold_seconds) is not int or self.hold_seconds < 0:
+            raise ValueError("Enter the recorded dwell time in seconds.")
+        timestamp = datetime.fromisoformat(self.completed_at)
+        if timestamp.tzinfo is None or timestamp > datetime.now(timezone.utc):
+            raise ValueError("Enter a completed furnace time with a time zone.")
+
+    def to_artifact(self):
+        return {"schema": "rapidpy.thermal.external_treatment.v1",
+                "evidence_basis": "operator attestation referencing an external furnace log", **asdict(self)}
+
+
+def bind_external_thermal_treatment(context, treatment, *, specimen, operator, labels):
+    if (context.get("procedure_id") != "thermal/routine-planning" or list(labels) != [treatment.label]
+            or treatment.specimen != specimen or treatment.operator != operator):
+        raise ValueError("The external treatment does not match the reviewed step, specimen, or operator.")
+    planned = list(context.get("queue_labels", ()))
+    steps = context.get("steps", ())
+    if [step["label"] for step in steps] != planned or len(set(planned)) != len(planned) or treatment.label not in planned:
+        raise ValueError("External treatment requires a reviewed plan with distinct thermal steps.")
+    step = steps[planned.index(treatment.label)]
+    limits = ThermalSafetyLimits(**context["limits"])
+    if treatment.peak_temperature_c > limits.max_temperature_c:
+        raise ValueError("The recorded peak exceeds the reviewed plan limit.")
+    if treatment.handling_temperature_c > limits.cool_to_c:
+        raise ValueError("The specimen is above the reviewed cooldown limit.")
+    if treatment.hold_seconds < step["hold_seconds"]:
+        raise ValueError("The recorded dwell time is shorter than the reviewed step.")
+    return {**context, "external_treatment": treatment.to_artifact()}
 
 
 @dataclass(frozen=True)
@@ -34,6 +93,9 @@ class ThermalSafetyLimits:
     default_hold_seconds: int = 600
 
     def __post_init__(self) -> None:
+        if not all(math.isfinite(value) for value in (
+                self.max_temperature_c, self.ambient_temperature_c, self.cool_to_c, self.ramp_rate_c_per_min)):
+            raise ValueError("thermal planning limits must be finite")
         if self.max_temperature_c <= self.ambient_temperature_c:
             raise ValueError("thermal max temperature must exceed ambient temperature")
         if self.cool_to_c < self.ambient_temperature_c:
@@ -64,7 +126,7 @@ class ThermalStep:
         )
 
     def __post_init__(self) -> None:
-        if self.temperature_c < 0.0:
+        if not math.isfinite(self.temperature_c) or self.temperature_c < 0.0:
             raise ValueError("thermal temperature must be non-negative")
         if self.hold_seconds is not None and self.hold_seconds < 0:
             raise ValueError("thermal hold seconds must be non-negative")
@@ -321,6 +383,7 @@ def thermal_integration_decision(*, timestamp_iso: str = "2026-10-02T00:00:00+00
         "current_software_behavior": {
             "planning": "SUPPORTED",
             "manual_external_treatment": "OPERATOR_CONTROLLED",
+            "external_treatment_measurement": "LIVE_SQUID_WITH_OPERATOR_ATTESTATION",
             "no_communication_execution": "SIMULATED_ONLY",
             "hardware_mode_without_adapter": "BLOCKED_BEFORE_HARDWARE_PREFLIGHT",
         },
@@ -363,7 +426,15 @@ def thermal_run_artifact(
         raise ValueError("thermal run context must be a routine-planning artifact")
     planned = [str(label) for label in context.get("queue_labels", context.get("labels", ()))]
     requested = [str(label) for label in labels_requested]
-    if planned != requested:
+    external = context.get("external_treatment")
+    if external is not None:
+        treatment = ExternalThermalTreatment(**{
+            key: external[key] for key in ExternalThermalTreatment.__dataclass_fields__
+        })
+        if simulated:
+            raise ValueError("External treatment evidence cannot be attached to a simulated run.")
+        bind_external_thermal_treatment(context, treatment, specimen=sample, operator=operator, labels=requested)
+    elif planned != requested:
         raise ValueError("thermal run labels do not match the compiled routine context")
     completed = [str(label) for label in completed_labels]
     if completed != requested[: len(completed)]:
@@ -394,6 +465,9 @@ def thermal_run_artifact(
         "final_phase": str(final_phase),
         "hardware_validation_required": True,
         "hardware_validation_statement": (
+            "The furnace treatment and handling temperature are operator attestations. "
+            "The measurement is independently recorded by the SQUID."
+            if external is not None else
             "This record proves software planning and runner behavior only. It is not proof "
             "of specimen furnace treatment, temperature readback, interlocks, or cooldown."
         ),

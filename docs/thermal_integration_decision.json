@@ -1,6 +1,7 @@
 {
   "automated_live_dispatch": "BLOCKED",
   "current_software_behavior": {
+    "external_treatment_measurement": "LIVE_SQUID_WITH_OPERATOR_ATTESTATION",
     "hardware_mode_without_adapter": "BLOCKED_BEFORE_HARDWARE_PREFLIGHT",
     "manual_external_treatment": "OPERATOR_CONTROLLED",
     "no_communication_execution": "SIMULATED_ONLY",
