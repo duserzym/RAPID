@@ -125,6 +125,39 @@ def _check_measurement_archive(root):
             and [item.demag_label for item in current.specimens[0].steps] == ["AF20"])
 
 
+def _check_measurement_backup(app, root):
+    from PySide6 import QtCore
+    from data_viewer.data_loading import load_magic_directory
+    from rapid_main.backup_tasks import MeasurementBackups
+    from rapid_main.data_model import SpecimenMeta
+    from rapid_main.hardware_contracts import NoCommBackend
+    from rapid_main.io.bundle_history import _archive_io_path
+    from rapid_main.measurement_worker import MeasurementWorker
+
+    with tempfile.TemporaryDirectory(prefix="backup-", dir=_archive_io_path(root)) as directory:
+        parent = Path(directory)
+        destination = parent / "target"
+        destination.mkdir()
+        specimen = SpecimenMeta("backup-specimen")
+        worker = MeasurementWorker(specimen, ["NRM"], parent / "source", NoCommBackend())
+        worker.run()
+        if worker._pending_run_result is not False:
+            return False
+        backups = MeasurementBackups()
+        statuses = []
+        backups.status_changed.connect(lambda message, warning: statuses.append((message, warning)))
+        backups.submit(specimen.name, worker._publish_dir, str(destination))
+        timer = QtCore.QElapsedTimer()
+        timer.start()
+        while len(statuses) < 2 and timer.elapsed() < 15_000:
+            app.processEvents()
+            QtCore.QThread.msleep(10)
+        if len(statuses) < 2 or statuses[-1][1]:
+            return False
+        archives = list((destination / "RapidPy backups" / "SIMULATED").iterdir())
+        return len(archives) == 1 and load_magic_directory(archives[0]).specimens[0].steps[0].demag_label == "NRM"
+
+
 def run_smoke_test() -> int:
     from PySide6 import QtCore, QtWidgets
     from rapid_main.config import AppConfig
@@ -164,13 +197,15 @@ def run_smoke_test() -> int:
             transverse_probe = _check_transverse_probe(window, app)
             webcam_decode = _check_webcam_decode(window, app, root)
             measurement_archive = _check_measurement_archive(root)
+            measurement_backup = _check_measurement_backup(app, root)
             report = {
                 "schema": "rapidpy.release_smoke.v1", "simulated": True,
                 "ok": (window.config.general.nocomm and all(helpers.values()) and transverse_probe
-                       and webcam_decode and measurement_archive),
+                       and webcam_decode and measurement_archive and measurement_backup),
                 "transverse_probe": transverse_probe,
                 "webcam_decode": webcam_decode,
                 "measurement_archive": measurement_archive,
+                "measurement_backup": measurement_backup,
                 "panels": window._stack.count(), "helpers": helpers,
                 "width": window.width(), "height": window.height(),
             }

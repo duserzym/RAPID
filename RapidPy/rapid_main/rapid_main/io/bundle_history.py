@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+from tempfile import TemporaryDirectory
 from typing import Iterator
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
@@ -72,42 +73,61 @@ def archive_previous_bundle(directory, specimen, scientific_paths, mutable_paths
     candidates = set((*scientific_paths, *mutable_paths, *_indexed_evidence(directory)))
     previous = {path.relative_to(directory).as_posix(): _digest(path) for path in sorted(candidates)}
     files = {name: digest for name, digest in previous.items() if digest is not None}
-    payload = {"schema": _SCHEMA, "specimen": specimen, "files": files}
-    archive_id = _archive_identity(payload)
     root = contained_path(_archive_io_path(directory), HISTORY_DIRECTORY, output=True)
-    archive = contained_path(root, archive_id[:32], output=True)
-    if archive.exists():
-        with open_bundle_archive(archive, expected_id=archive_id):
-            pass
-    else:
-        staged = contained_path(staging, "prior", output=True)
-        staged.mkdir()
-        zip_path = contained_path(staged, ARCHIVE_PAYLOAD, output=True)
-        with zip_path.open("xb") as stream:
-            with ZipFile(stream, "w", compression=ZIP_DEFLATED, compresslevel=3) as data:
-                for name in files:
-                    data.write(contained_path(directory, name, output=True), name)
-            stream.flush()
-            os.fsync(stream.fileno())
-        manifest = contained_path(staged, ARCHIVE_MANIFEST, output=True)
-        with manifest.open("x", encoding="utf-8") as stream:
-            json.dump({**payload, "archive_id": archive_id}, stream, indent=2, sort_keys=True)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        with open_bundle_archive(staged, expected_id=archive_id):
-            pass
-        _sync_directory(staged)
-        root.mkdir(exist_ok=True)
-        _sync_directory(directory)
-        _replace_snapshot(staged, archive)
-        _sync_directory(root)
+    archive, archive_id = publish_bundle_archive(directory, specimen, files, root, staging=staging)
     manifest = contained_path(archive, ARCHIVE_MANIFEST, output=True)
     digest = _digest(manifest)
     if digest is None:
         raise OSError("The prior measurement archive manifest is missing after publication.")
     return {"relative_path": f"{HISTORY_DIRECTORY}/{archive.name}/{ARCHIVE_MANIFEST}",
             "archive_id": archive_id, "sha256": digest}, previous
+
+
+def _write_bundle_archive(directory, staged, payload, archive_id):
+    zip_path = contained_path(staged, ARCHIVE_PAYLOAD, output=True)
+    with zip_path.open("xb") as stream:
+        with ZipFile(stream, "w", compression=ZIP_DEFLATED, compresslevel=3) as data:
+            for name in payload["files"]:
+                data.write(contained_path(directory, name, output=True), name)
+        stream.flush()
+        os.fsync(stream.fileno())
+    manifest = contained_path(staged, ARCHIVE_MANIFEST, output=True)
+    with manifest.open("x", encoding="utf-8") as stream:
+        json.dump({**payload, "archive_id": archive_id}, stream, indent=2, sort_keys=True)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    with open_bundle_archive(staged, expected_id=archive_id):
+        pass
+    _sync_directory(staged)
+
+
+def publish_bundle_archive(directory, specimen, files, root, *, staging=None):
+    """Write a verified immutable archive. Stage on the destination filesystem."""
+    payload = {"schema": _SCHEMA, "specimen": specimen, "files": files}
+    archive_id = _archive_identity(payload)
+    archive = contained_path(root, archive_id[:32], output=True)
+    if archive.exists():
+        with open_bundle_archive(archive, expected_id=archive_id):
+            pass
+        return archive, archive_id
+
+    root.mkdir(parents=True, exist_ok=True)
+    _sync_directory(root.parent)
+    staging_root = _archive_io_path(staging) if staging is not None else root
+    with TemporaryDirectory(prefix=".pending-", dir=staging_root) as temporary:
+        staged = contained_path(temporary, "archive", output=True)
+        staged.mkdir()
+        _write_bundle_archive(directory, staged, payload, archive_id)
+        try:
+            _replace_snapshot(staged, archive)
+        except OSError:
+            if not archive.is_dir():
+                raise
+            with open_bundle_archive(archive, expected_id=archive_id):
+                pass
+        _sync_directory(root)
+    return archive, archive_id
 
 
 @contextmanager

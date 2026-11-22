@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime
+import hashlib
 import json
 import uuid
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Optional
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from rapid_main.analysis import ReadingCycleStatistics, reading_cycle_statistics
+from rapid_main.backup_tasks import MeasurementBackups
 from rapid_main.queue_compiler import validate_average_count
 from rapid_main.calibration_registry import CalibrationRegistry, CalibrationRegistryError
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
@@ -163,6 +165,9 @@ class MeasurementPanel(QtWidgets.QWidget):
         self._current_depth = "—"
         self._current_treatment = "—"
         self._current_output_dir: Path | None = None
+        self._current_backup_dir = ""
+        self._backups = MeasurementBackups(self)
+        self._backups.status_changed.connect(self._set_backup_status)
         self._current_run_simulated = False
         self._plot_traces: dict[str, deque[float]] = {
             "step": deque(maxlen=self._TRACE_LIMIT),
@@ -443,7 +448,7 @@ class MeasurementPanel(QtWidgets.QWidget):
     # ── Quality warning strip ─────────────────────────────────────────────────
     def _build_warning_strip(self) -> QtWidgets.QWidget:
         w = QtWidgets.QWidget()
-        hl = QtWidgets.QHBoxLayout(w)
+        hl = QtWidgets.QVBoxLayout(w)
         hl.setContentsMargins(14, 4, 14, 8)
         hl.setSpacing(8)
 
@@ -461,8 +466,22 @@ class MeasurementPanel(QtWidgets.QWidget):
 
         hl.addWidget(self._warn_orange)
         hl.addWidget(self._warn_red)
-        hl.addStretch()
+        self._backup_status = QtWidgets.QLabel()
+        self._backup_status.setAccessibleName("Measurement backup status")
+        self._backup_status.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self._backup_status.setWordWrap(True)
+        self._backup_status.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._backup_status.hide()
+        hl.addWidget(self._backup_status)
         return w
+
+    @QtCore.Slot(str, bool)
+    def _set_backup_status(self, message: str, warning: bool) -> None:
+        self._backup_status.setObjectName("warnOrange" if warning else "")
+        self._backup_status.style().unpolish(self._backup_status)
+        self._backup_status.style().polish(self._backup_status)
+        self._backup_status.setText(message)
+        self._backup_status.show()
 
     # ── Dialog launchers ──────────────────────────────────────────────────────
     def _show_plots(self) -> None:
@@ -637,6 +656,8 @@ class MeasurementPanel(QtWidgets.QWidget):
         self.set_specimen_context(sample)
 
         self._current_output_dir = published
+        self._current_backup_dir = (str(getattr(cfg.general, "backup_dir", "")).strip()
+                                    if cfg and (queue_side is None or not queue_side.is_up) else "")
         run_id = (queue_side.run_id if queue_side is not None else
                   f"{meta.name}-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex}")
         routine_context = None
@@ -1041,6 +1062,8 @@ class MeasurementPanel(QtWidgets.QWidget):
         entry["relative_path"] = quicklook_path.name
         entry["exists"] = True
         entry["size_bytes"] = quicklook_path.stat().st_size
+        with quicklook_path.open("rb") as stream:
+            entry["sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
         write_quicklook_json(index_path, payload)
 
     @QtCore.Slot(bool)
@@ -1069,6 +1092,8 @@ class MeasurementPanel(QtWidgets.QWidget):
                 self._write_quicklook_sidecar()
             except Exception as exc:  # pragma: no cover - filesystem failure path
                 sidecar_error = exc
+            if self._current_backup_dir and self._current_output_dir is not None:
+                self._backups.submit(sample_name, self._current_output_dir, self._current_backup_dir)
         mw = self.window()
         if hasattr(mw, "stop_run"):
             mw.stop_run()

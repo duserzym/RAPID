@@ -250,6 +250,25 @@ contains `archive_manifest.json`. Data Review checks the ZIP members against the
 recorded SHA-256 hashes and opens the earlier MagIC results without extraction.
 Archives from No-Comm runs stay inside the `SIMULATED` output.
 
+## Back up completed measurements
+
+Set **Settings → General → Backup folder** to an existing local or network
+directory outside the specimen output. After an accepted measurement and its
+quicklook are saved, RAPID verifies the published files against the artifact
+index and copies them to `RapidPy backups/Measurements` in that folder.
+Practice runs use `RapidPy backups/SIMULATED`. The copy runs in the background.
+**Live Measure** reports its status and the archive path. Use **Open MagIC
+Directory** in Data Review to open a backup archive.
+
+The primary measurement remains available if the copy fails. Reconnect or
+correct the backup folder, then retry the retained publication with the portable
+console executable. Point the first argument to the specimen output folder
+that contains `artifact_index.json`.
+
+```powershell
+.\RapidPyMainConsole.exe --backup-measurement "D:\RAPID_data\Specimen-A" "E:\Lab backups"
+```
+
 ## Rebuild and test
 
 Use an environment with the declared RapidPy dependencies, setuptools, wheel,

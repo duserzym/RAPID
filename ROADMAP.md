@@ -2901,3 +2901,9 @@ thermal appends preserve an earlier publication and its indexed acquisition
 evidence in a verified ZIP before committing current results. Data Review
 opens the archive directly. Paired-holder evidence retains its original
 relative paths inside the ZIP.
+
+**Measurement backup checkpoint (2026-11-22).** The configured backup folder
+receives an independently verified copy of an accepted publication. The
+desktop delivers it after releasing measurement resources, reports the outcome,
+and keeps practice output separate. The portable console can retry a retained
+publication after the destination becomes available.

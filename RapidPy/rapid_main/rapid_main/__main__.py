@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from importlib import import_module
 
@@ -22,11 +23,24 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print a read-only dependency/resource report without opening the UI",
     )
+    parser.add_argument("--backup-measurement", nargs=2, metavar=("PUBLICATION", "BACKUP_FOLDER"),
+                        help="verify and back up a completed specimen publication")
+    parser.add_argument("--backup-index-sha256", help=argparse.SUPPRESS)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.backup_measurement:
+        from rapid_main.io.bundle_backup import backup_measurement
+
+        try:
+            result = backup_measurement(*args.backup_measurement, expected_index_sha256=args.backup_index_sha256)
+        except (OSError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(json.dumps(result, sort_keys=True))
+        return 0
     if args.smoke_test:
         from rapid_main.release_smoke import run_smoke_test
         return run_smoke_test()
