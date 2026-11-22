@@ -1,6 +1,7 @@
 import csv
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -108,6 +109,48 @@ class UChannelTests(unittest.TestCase):
             self.assertEqual(len(list(csv.DictReader(handle))), len(result.fit.profile))
         with self.assertRaisesRegex(CalibrationRegistryError, 'specimen measurements'):
             CalibrationRegistry(self.output / 'registry').approve(result.artifact, approved_by='Approver')
+
+    def test_interrupted_process_leaves_progress_and_samples_without_publishing(self):
+        def acquire(plan, readings, evidence, *, cancelled):
+            def sample(position, angle):
+                if len(readings) == 3:
+                    raise KeyboardInterrupt
+                return position, float(angle), (1., 2., 3.)
+
+            return scan_uchannel(plan, sample, lambda angle: None, readings, cancelled=cancelled)
+
+        progress = []
+        job = UChannelJob(plan_for(), self.output / 'incomplete', operator='Operator', config_hash='cfg', scan=acquire)
+        job.report_progress = progress.append
+        with self.assertRaises(KeyboardInterrupt):
+            job.run(cancelled=lambda: False)
+        self.assertEqual(progress, [1, 2, 3])
+        self.assertFalse(job.path.exists())
+        stage, = self.output.glob('.uchannel-pending-*')
+        manifest = json.loads((stage / 'scan.json').read_text())
+        self.assertEqual((manifest['status'], manifest['output_name']), ('running', 'incomplete'))
+        trace = [json.loads(line) for line in (stage / 'readings.jsonl').read_text().splitlines()]
+        self.assertEqual([reading['phase'] for reading in trace], ['zero', 'sample', 'sample'])
+        self.assertFalse((stage / 'profile.csv').exists())
+
+    def test_failed_bundle_promotion_keeps_its_files_and_names_their_location(self):
+        job = UChannelJob(plan_for(), self.output / 'complete', operator='No-Comm', config_hash='cfg')
+        replace_path = os.replace
+
+        def replace_with_locked_destination(source, destination):
+            if destination == job.path:
+                raise PermissionError('destination is locked')
+            replace_path(source, destination)
+
+        with (patch('rapid_main.uchannel.os.replace', side_effect=replace_with_locked_destination),
+              self.assertRaisesRegex(OSError, r'Inspect .*\.uchannel-pending-.*destination is locked')):
+            job.run(cancelled=lambda: False)
+        self.assertFalse(job.path.exists())
+        stage, = self.output.glob('.uchannel-pending-*')
+        manifest = json.loads((stage / 'scan.json').read_text())
+        self.assertEqual((manifest['status'], manifest['output_name']), ('complete', 'complete'))
+        self.assertTrue((stage / 'profile.csv').is_file())
+        self.assertTrue((stage / 'readings.csv').is_file())
 
 
 class UChannelNativeTests(unittest.TestCase):

@@ -2825,3 +2825,17 @@ desktop export, travel and drift validation, legacy output units, and routed
 motor sequencing. The full suite passed all 1,487 tests in 801.504 seconds.
 The Windows bundle passed offline startup and smoke checks for six panels
 and six helpers. Physical H7 acceptance and automatic rod loading remain open.
+
+U-channel interruption checkpoint (2026-11-22). The acquisition worker saves
+each verified reading before updating the desktop count. A forced exit in a
+simulated child process retained the pending manifest and its five readings.
+A publication error preserves the prepared files and reports their path.
+The pending files support inspection after interruption. The app still requires
+station recovery before motion can resume.
+
+All 25 focused U-channel and rod calibration tests passed. The final Windows
+package passed offline startup and smoke checks for six panels and six helpers
+and is available under `.tmp/uchannel-recovery-release/dist/RapidPyMain`.
+In the offscreen four-pass test, the Run button returned in 1.17 ms. The
+worker saved all 4,052 readings and published 4,004 profile points in 7.601
+seconds. The longest measured UI timer interval was 73.43 ms.

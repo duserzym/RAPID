@@ -609,6 +609,9 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
             self._rod_lease = lease
             self._rod_worker = RodScanWorker(job, self)
             self._rod_worker.finished.connect(self._rod_scan_finished)
+            if is_channel:
+                job.report_progress = self._rod_worker.readings_recorded.emit
+                self._rod_worker.readings_recorded.connect(self._on_uchannel_readings)
             self._set_last_calibration_artifact(None)
             self._procedure.setEnabled(False)
             self._rod_run.setEnabled(False)
@@ -629,6 +632,13 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         finally:
             self._rod_configuring = False
 
+    @QtCore.Slot(int)
+    def _on_uchannel_readings(self, count: int) -> None:
+        worker = self._rod_worker
+        if worker is not None and self.sender() is worker and not worker.isInterruptionRequested():
+            plan = worker.job.plan
+            self._status.setText(f"Scanning {plan.request.specimen}. {count} of {plan.reading_budget} readings saved.")
+
     def _rod_scan_finished(self) -> None:
         worker = self._rod_worker
         if worker is None:
@@ -642,12 +652,14 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         self._procedure.setEnabled(True)
         self._rod_run.setEnabled(True)
         self._rod_stop.setEnabled(False)
+        is_channel = isinstance(worker.job.plan.request, UChannelRequest)
+        if is_channel:
+            worker.job.report_progress = None
         worker.deleteLater()
         result = worker.result
         if result is None:
             self._status.setText(f"Scan evidence could not be saved. {worker.error}")
             return
-        is_channel = isinstance(worker.job.plan.request, UChannelRequest)
         if is_channel:
             label = "Simulated U-channel scan" if result.simulated else "U-channel scan"
         else:

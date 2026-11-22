@@ -153,6 +153,9 @@ Each output bundle contains `scan.json` with the plan and readbacks and
 contains `profile.csv` with baseline-corrected instrument-axis moments in emu.
 The specimen orientation is retained in the manifest. No-Comm writes the same
 bundle with the simulation flag. **Halt** or **Stop Scan** cancels acquisition.
+The scan shows a count of saved readings. If the process exits before the scan
+finishes, its `.uchannel-pending-*` folder keeps the plan and `readings.jsonl`.
+Only a completed scan publishes a corrected profile to its final bundle.
 
 ## Rebuild and test
 

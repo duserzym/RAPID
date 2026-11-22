@@ -217,6 +217,8 @@ class RodScanJob:
 
 
 class RodScanWorker(QtCore.QThread):
+    readings_recorded = QtCore.Signal(int)
+
     def __init__(self, job, parent=None):
         super().__init__(parent)
         self.job = job

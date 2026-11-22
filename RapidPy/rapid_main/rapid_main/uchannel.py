@@ -264,6 +264,31 @@ def _profile_rows(profile):
         yield (row.angle, row.actual_angle, row.target, row.position, row.distance_cm, *row.moment_emu)
 
 
+def _write_manifest(path, payload):
+    staged = path.with_suffix('.tmp')
+    with staged.open('x', encoding='utf-8', newline='\n') as handle:
+        json.dump(payload, handle, indent=2, allow_nan=False)
+        handle.write('\n')
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(staged, path)
+
+
+class _RecordedReadings(list[ChannelReading]):
+    def __init__(self, checkpoint, report_progress):
+        super().__init__()
+        self._checkpoint = checkpoint
+        self._report_progress = report_progress
+
+    def append(self, reading):
+        self._checkpoint.write(json.dumps(asdict(reading), allow_nan=False) + '\n')
+        self._checkpoint.flush()
+        os.fsync(self._checkpoint.fileno())
+        super().append(reading)
+        if self._report_progress is not None:
+            self._report_progress(len(self))
+
+
 class UChannelJob:
     procedure_name = 'U-channel Scan'
 
@@ -273,19 +298,27 @@ class UChannelJob:
         self.operator = operator
         self.config_hash = config_hash
         self.scan = scan
+        self.report_progress = None
 
     def run(self, *, cancelled):
         started = datetime.now(timezone.utc)
         simulated = self.scan is None
-        readings, evidence = [], {}
+        evidence = {}
         summary, error = None, ''
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
             raise FileExistsError(f'The long-scan output already exists at {self.path}.')
-        with tempfile.TemporaryDirectory(prefix='.uchannel-', dir=self.path.parent) as temporary:
-            staged = Path(temporary) / 'bundle'
-            staged.mkdir()
-            with (staged / 'scan.json').open('x', encoding='utf-8', newline='\n') as manifest:
+        staged = Path(tempfile.mkdtemp(prefix='.uchannel-pending-', dir=self.path.parent))
+        payload = dict(schema='rapidpy.measurement.uchannel.v1', procedure_id=UCHANNEL_PROCEDURE,
+                       operator=self.operator, config_hash=self.config_hash, simulated=simulated,
+                       status='running', started_at=started.isoformat(), plan=asdict(self.plan),
+                       output_name=self.path.name)
+        manifest = staged / 'scan.json'
+        checkpoint = staged / 'readings.jsonl'
+        try:
+            _write_manifest(manifest, payload)
+            with checkpoint.open('x', encoding='utf-8', newline='\n') as handle:
+                readings = _RecordedReadings(handle, self.report_progress)
                 try:
                     if simulated:
                         summary = simulate_uchannel(self.plan, readings, cancelled=cancelled)
@@ -295,18 +328,16 @@ class UChannelJob:
                         raise InterruptedError('The U-channel scan was canceled.')
                 except Exception as exc:
                     summary, error = None, str(exc) or type(exc).__name__
-                payload = dict(schema='rapidpy.measurement.uchannel.v1', procedure_id=UCHANNEL_PROCEDURE,
-                               operator=self.operator, config_hash=self.config_hash, simulated=simulated,
-                               status='complete' if summary is not None else 'failed', started_at=started.isoformat(),
-                               completed_at=datetime.now(timezone.utc).isoformat(), plan=asdict(self.plan),
-                               station_evidence=evidence, readings=[asdict(row) for row in readings], error=error,
-                               max_baseline_drift_emu=summary.max_baseline_drift_emu if summary else None)
-                json.dump(payload, manifest, indent=2, allow_nan=False)
-                manifest.write('\n')
-                manifest.flush()
-                os.fsync(manifest.fileno())
             _write_csv(staged / 'readings.csv', _legacy_rows(self.plan, readings, started))
             if summary is not None:
                 _write_csv(staged / 'profile.csv', _profile_rows(summary.profile))
+            payload.update(status='complete' if summary is not None else 'failed',
+                           completed_at=datetime.now(timezone.utc).isoformat(), station_evidence=evidence,
+                           readings=[asdict(row) for row in readings], error=error,
+                           max_baseline_drift_emu=summary.max_baseline_drift_emu if summary else None)
+            _write_manifest(manifest, payload)
+            checkpoint.unlink()
             os.replace(staged, self.path)
+        except OSError as exc:
+            raise OSError(f'Could not publish the U-channel scan. Inspect {staged} for saved evidence. {exc}') from exc
         return RodScanResult(self.path / 'scan.json', summary, error, simulated, bool(evidence.get('pending_motion_record')))
