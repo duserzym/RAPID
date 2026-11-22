@@ -127,6 +127,15 @@ requires recovery, open DC Motors and use **Recover Verify Stopped**. A No-Comm 
 creates simulated evidence for practice. Registry approval stores a provenance
 record. Review the proposal and apply any accepted station settings separately.
 
+For the operator-mounted magnetic standard, select **SQUID Rod Scan** in the
+same Procedure menu. Use the accepted lift and SQUID configuration with the
+1× range. Enter the standard height, fine spacing, fit threshold, and maximum
+baseline drift in emu. A coarse pass locates the strongest axis response, and
+a fine pass measures its center inside the accepted travel. The scan repeats
+the center and baseline readings and records a measurement and zero position
+proposal. Review the evidence and independently verify fit and positioning
+before changing station settings.
+
 ## Rebuild and test
 
 Use an environment with the declared RapidPy dependencies, setuptools, wheel,
@@ -160,9 +169,9 @@ that must not be mistaken for physical acceptance alone:
   adapter binding and loopback/position evidence.
 - Thermal treatment remains manual/external; automated furnace operation needs
   an identified controller, protocol, readback, and interlocks.
-- Other calibration rod workflows still need parity work, including automatic
-  rod loading, SQUID scans, and U-channel calibration. The mounted Bartington rod
-  scan still needs bench acceptance with the station's certified standard.
+- Automatic rod loading and U-channel scans still need parity work. The mounted
+  Bartington and SQUID rod scans need bench acceptance with the station's
+  certified standards.
 
 These integrations remain open. Vendor driver installation, fresh-Windows
 deployment, mixed-DPI display review, physical fault/recovery tests, scientific

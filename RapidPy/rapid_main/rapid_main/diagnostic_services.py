@@ -1319,6 +1319,10 @@ class SquidBackendAdapter(_BaseBackend, SquidBackend):
         )
         return (float(x_emu), float(y_emu), float(z_emu))
 
+    def read_raw_xyz(self) -> tuple[float, float, float]:
+        self._ensure_connected()
+        return self.raw_client.read_xyz_raw()
+
     def read_susceptibility(self) -> float:
         raise DiagnosticContractError(
             "The SQUID adapter measures magnetic moment, not susceptibility. "
@@ -2195,62 +2199,106 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
 
     def run_rod_scan(self, plan, readings, evidence, *, bridge, port, operator, cancelled):
         """Borrow the accepted motor station for one operator-mounted rod scan."""
-        from .queue_instruments import QueueInstrumentLifetime
-        from .rod_calibration import RodFit, RodFitError, RodReading, plan_rod_scan, scan_rod
-        if (self._station_baud is None or self._client.config.meas_pos != plan.travel_limit
-                or not isinstance(bridge, SusceptibilityBackendAdapter) or bridge.simulated is not False
-                or self._client._connections or bridge.is_connected()):
-            raise HardwareError('Restore the original idle native motor station and susceptibility bridge.')
-        if not operator.strip() or plan != plan_rod_scan(plan.request, coil=bridge._cfg.coil_position,
-                travel_limit=self._client.config.meas_pos, counts_per_cm=plan.counts_per_cm,
+        from .rod_calibration import RodReading, plan_rod_scan, scan_rod
+        if not isinstance(bridge, SusceptibilityBackendAdapter) or plan != plan_rod_scan(
+                plan.request, coil=bridge._cfg.coil_position, travel_limit=self._client.config.meas_pos,
+                counts_per_cm=plan.counts_per_cm,
                 moment_factor_cgs=bridge._cfg.moment_factor_cgs):
-            raise HardwareError('The mounted standard confirmation or accepted rod scan plan is missing.')
+            raise HardwareError('Restore the accepted susceptibility bridge and rod scan plan.')
+
+        def execute(move, home):
+            def sample(target):
+                home()
+                self._client._check_motion_cancel()
+                zero = bridge.zero()
+                return RodReading(target, move(target, 1), bridge.measure(), zero)
+
+            return scan_rod(plan, sample, readings, cancelled=cancelled)
+
+        return self._run_mounted_rod(plan, readings, evidence, bridge, bridge.test_connection, 'bridge',
+            'susceptibility_rod_scan', port, operator, cancelled, execute, min(plan.positions), max(plan.positions),
+            timeout_s=360 + 30 * len(plan.positions))
+
+    def run_squid_rod_scan(self, plan, readings, evidence, *, squid, config, operator, cancelled):
+        """Measure independent SQUID readings at positions verified by the routed lift."""
+        from .hardware_contracts import _build_motor_controller_config
+        from .squid_rod_calibration import plan_squid_rod, scan_squid_rod, coil_factors
+        if (not isinstance(squid, SquidBackendAdapter) or asdict(squid._cfg) != asdict(config.squid)
+                or config.squid.range_label != '1×'
+                or self._client.config != _build_motor_controller_config(config)
+                or plan != plan_squid_rod(plan.request, zero_pos=config.motion.zero_pos, meas_pos=config.motion.meas_pos,
+                    counts_per_cm=config.motor_station.lift_counts_per_cm,
+                    axis_factors_emu=coil_factors(config.calibration), settle_s=config.squid.settle_time)):
+            raise HardwareError('Restore the original SQUID settings and accepted lift calibration.')
+
+        def execute(move, home):
+            def sample(target):
+                stopped = move(target, 0)
+                deadline = time.monotonic() + plan.settle_s
+                while (remaining := deadline - time.monotonic()) > 0:
+                    self._client._check_motion_cancel()
+                    time.sleep(min(.05, remaining))
+                self._client._check_motion_cancel()
+                return stopped, squid.read_raw_xyz()
+
+            return scan_squid_rod(plan, sample, readings, cancelled=cancelled)
+
+        point_budget = len(plan.positions) + 2 * plan.fine_half_count + 6
+        return self._run_mounted_rod(plan, readings, evidence, squid, squid.connect_for_acquisition, 'squid',
+            'squid_rod_scan', config.changer.port, operator, cancelled, execute, plan.deepest_target, plan.baseline_position,
+            timeout_s=360 + (30 + plan.settle_s) * point_budget)
+
+    def _run_mounted_rod(self, plan, readings, evidence, sensor, connect_sensor, sensor_name, action,
+                         port, operator, cancelled, execute, lower, upper, *, timeout_s):
+        from .queue_instruments import QueueInstrumentLifetime
+        from .rod_calibration import RodFitError
+
+        if (self._station_baud is None or sensor.simulated is not False or self._client._connections
+                or sensor.is_connected() or not operator.strip()):
+            raise HardwareError('Restore the original idle native motor station and sensor and confirm the mount.')
         port_key = QueueInstrumentLifetime.port_key
-        if port_key(bridge._cfg.port) in {port_key(axis.port) for axis in self._axes.values()}:
-            raise HardwareError('The bridge and motors need distinct native serial connections.')
+        if port_key(sensor._cfg.port) in {port_key(axis.port) for axis in self._axes.values()}:
+            raise HardwareError('The rod sensor and motors need distinct native serial connections.')
         if cancelled():
             raise InterruptedError('The rod scan was canceled before connecting.')
 
         axes = tuple(self._axes)
         lift = self._axes['Up/Down']
-        upper, lower = max(plan.positions), min(plan.positions)
-        evidence['bridge'] = asdict(bridge._cfg)
+        evidence[sensor_name] = asdict(sensor._cfg)
         evidence['mount_confirmed_by'] = operator
         errors = []
         fit = None
-        bridge_attempted = False
+        sensor_attempted = False
 
         def run(observations):
-            nonlocal bridge_attempted
+            nonlocal sensor_attempted, fit
             initial = self._observe_stopped(axes, observations, 'before_rod_scan')
             self._require_lift_clearance(initial)
             self._client._check_motion_cancel()
-            bridge_attempted = True
-            bridge.test_connection()
+            sensor_attempted = True
+            connect_sensor()
 
             def home():
                 self._require_move_success('home the calibration rod lift', self._client.home_to_top(lift))
                 positions = self._observe_stopped(('Up/Down',), observations, 'rod_at_top')
                 self._require_lift_clearance(positions)
 
-            def sample(target):
+            def move_to_point(target, speed_index):
                 if not lower <= target <= upper:
                     raise HardwareError('Rod scan target is outside its planned travel.')
-                home()
                 self._client._check_motion_cancel()
-                zero = bridge.zero()
-                move = self._client.updown_move(lift, target, 1)
+                move = self._client.updown_move(lift, target, speed_index)
                 self._require_move_success('position the calibration rod', move)
                 stopped = self._observe_stopped(('Up/Down',), observations, 'rod_at_target')['Up/Down']
                 if (abs(stopped - target) > plan.readback_tolerance
                         or self._client.check_internal_status(lift, 4) != 0):
                     raise HardwareError('The rod lift did not verify the planned scan point.')
                 self._client._check_motion_cancel()
-                return RodReading(target, stopped, bridge.measure(), zero)
+                return stopped
 
             try:
                 try:
-                    proposal = scan_rod(plan, sample, readings, cancelled=cancelled)
+                    fit = execute(move_to_point, home)
                 except RodFitError:
                     home()
                     raise
@@ -2260,7 +2308,7 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
                 if any(final[name] != initial[name] for name in axes if name != 'Up/Down'):
                     raise HardwareError('A stationary axis changed position during the rod scan.')
                 evidence['final_stopped_positions'] = final
-                return asdict(proposal)
+                return asdict(fit)
             finally:
                 observations.append(dict(phase='rod_readings', samples=[asdict(reading) for reading in readings]))
 
@@ -2269,19 +2317,19 @@ class DCMotorBackendAdapter(_BaseBackend, DCMotorBackend):
             self.set_cancel_check(cancelled)
             self.connect(port, self._station_baud)
             evidence['motor_profile'] = self._safety_profile()
-            parameters = dict(plan=asdict(plan), mount_confirmed_by=operator, bridge=evidence['bridge'])
-            fit = RodFit(**self._run_motion('susceptibility_rod_scan', axes, parameters, run,
-                                            timeout_s=360 + 30 * len(plan.positions)))
+            parameters = dict(plan=asdict(plan), mount_confirmed_by=operator)
+            parameters[sensor_name] = evidence[sensor_name]
+            self._run_motion(action, axes, parameters, run, timeout_s=timeout_s)
         except Exception as exc:
             errors.append(str(exc) or type(exc).__name__)
         finally:
             self.set_cancel_check(previous_cancel)
-            if bridge_attempted:
+            if sensor_attempted:
                 try:
-                    bridge.disconnect()
-                    evidence['bridge_closed'] = True
+                    sensor.disconnect()
+                    evidence[f'{sensor_name}_closed'] = True
                 except Exception as exc:
-                    errors.append(f'Bridge close failed. {exc}')
+                    errors.append(f'{sensor_name.capitalize()} close failed. {exc}')
             try:
                 pending = self._safety_store.pending()
                 if pending is not None:

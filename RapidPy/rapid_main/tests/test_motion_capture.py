@@ -52,11 +52,13 @@ class _Reading:
 class StreamClient:
     """2G stand-in whose signal depends on the station's height and angle."""
 
-    def __init__(self, station: Station, *, fail=False, gate: threading.Event | None = None) -> None:
+    def __init__(self, station: Station, *, fail=False, gate: threading.Event | None = None,
+                 sample_completed=None) -> None:
         self.station = station
         self.fail = fail
         self.gate = gate
         self.latches = 0
+        self.sample_completed = sample_completed
 
     def latch(self, axis="A", *, settle_s=0.0, count_hold_s=None, data_hold_s=None):
         if self.gate is not None:
@@ -72,6 +74,8 @@ class StreamClient:
             z, theta = self.station.position, math.radians(self.station.angle)
         coupling = math.exp(-0.5 * ((z - MEAS) / 900.0) ** 2)
         value = {"X": 2.0 * math.cos(theta + 0.5), "Y": 2.0 * math.sin(theta + 0.5), "Z": 1.0}[axis] * coupling
+        if axis == "Z" and self.sample_completed is not None:
+            self.sample_completed()
         return _Reading(0.0, -value)
 
 
@@ -107,10 +111,11 @@ class SlowVertical:
 
 
 class SlowTurning:
-    def __init__(self, station: Station, *, fail_at: float | None = None) -> None:
+    def __init__(self, station: Station, *, fail_at: float | None = None, wait_for_samples=None) -> None:
         self.station = station
         self.fail_at = fail_at
         self._observer = None
+        self.wait_for_samples = wait_for_samples
 
     @contextmanager
     def observe_positions(self, callback):
@@ -124,12 +129,17 @@ class SlowTurning:
         if self.fail_at is not None and float(angle_deg) == self.fail_at:
             return MotionOutcome(target=angle_deg, actual=self.station.angle, ok=False, detail="stall")
         start = self.station.angle
-        for step in range(1, 13):
+        wait_for_samples = self.wait_for_samples if self._observer is not None else None
+        first_step = 0 if wait_for_samples is not None else 1
+        for step in range(first_step, 13):
             with self.station.lock:
                 self.station.angle = start + (angle_deg - start) * step / 12
             if self._observer is not None:
                 self._observer(self.station.angle, t_monotonic=time.perf_counter())
-            time.sleep(0.004)
+            if wait_for_samples is None:
+                time.sleep(0.004)
+            else:
+                wait_for_samples()
         return MotionOutcome(target=angle_deg, actual=float(angle_deg), ok=True)
 
     def angle(self):
@@ -240,9 +250,28 @@ class MotionCaptureAcquisitionTests(unittest.TestCase):
 
     def test_sidecar_files_include_physical_fits(self):
         station = Station()
+        samples = threading.Condition()
+        completed = 0
+
+        def sample_completed():
+            nonlocal completed
+            with samples:
+                completed += 1
+                samples.notify()
+
+        def wait_for_position_samples():
+            with samples:
+                # A triplet may already be in flight. The next complete triplet
+                # must have been captured wholly at the reported angle.
+                required = completed + 2
+                self.assertTrue(samples.wait_for(lambda: completed >= required, timeout=5),
+                                "The fake SQUID did not sample the reported angle.")
+
         with tempfile.TemporaryDirectory() as tmp:
-            recorder = MotionCaptureRecorder(StreamClient(station), MotionCaptureConfig(timing=FAST, output_dir=tmp))
-            service, _ = _service(recorder, station=station)
+            stream = StreamClient(station, sample_completed=sample_completed)
+            recorder = MotionCaptureRecorder(stream, MotionCaptureConfig(timing=FAST, output_dir=tmp))
+            turning = SlowTurning(station, wait_for_samples=wait_for_position_samples)
+            service, _ = _service(recorder, station=station, turning=turning)
             service.acquire()
             folder = recorder.last_written
             self.assertIsNotNone(folder)

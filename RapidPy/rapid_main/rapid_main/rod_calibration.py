@@ -7,9 +7,13 @@ import json
 import math
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from PySide6 import QtCore
+
+if TYPE_CHECKING:
+    from .squid_rod_calibration import SquidRodFit
 
 
 ROD_PROCEDURE = 'calibration/susceptibility-rod'
@@ -153,13 +157,18 @@ def simulate_rod_scan(plan, readings, *, cancelled):
 @dataclass(frozen=True)
 class RodScanResult:
     artifact: Path
-    fit: RodFit | None
+    fit: RodFit | SquidRodFit | None
     error: str
     simulated: bool
     recovery_required: bool
 
 
 class RodScanJob:
+    schema = ROD_SCHEMA
+    procedure_id = ROD_PROCEDURE
+    procedure_name = 'Susceptibility Rod Scan'
+    simulate = staticmethod(simulate_rod_scan)
+
     def __init__(self, plan, path, *, operator, config_hash, scan=None):
         self.plan = plan
         self.path = Path(path)
@@ -181,7 +190,7 @@ class RodScanJob:
             with handle:
                 try:
                     if simulated:
-                        fit = simulate_rod_scan(self.plan, readings, cancelled=cancelled)
+                        fit = self.simulate(self.plan, readings, cancelled=cancelled)
                     else:
                         fit = self.scan(self.plan, readings, station_evidence, cancelled=cancelled)
                     if cancelled():
@@ -189,7 +198,7 @@ class RodScanJob:
                 except Exception as exc:
                     fit = None
                     error = str(exc) or type(exc).__name__
-                payload = dict(schema=ROD_SCHEMA, procedure_id=ROD_PROCEDURE, procedure_name='Susceptibility Rod Scan',
+                payload = dict(schema=self.schema, procedure_id=self.procedure_id, procedure_name=self.procedure_name,
                                operator=self.operator, config_hash=self.config_hash, started_at=started,
                                completed_at=datetime.now(timezone.utc).isoformat(), simulated=simulated,
                                passed=fit is not None, plan=asdict(self.plan),

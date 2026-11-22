@@ -2778,3 +2778,22 @@ verified bundle is local under `.tmp/rod-calibration-release/dist/RapidPyMain`.
 
 Bench acceptance with the certified standard remains open, along with the
 separate automatic loading, SQUID rod scan, and U-channel workflows.
+
+SQUID rod calibration checkpoint (2026-11-22). The operator can select
+**SQUID Rod Scan** in the Calibration Center. The scan records a baseline
+and coarse and fine passes with verified lift readbacks, locates the signed
+peak on the strongest axis, and repeats both the fitted center reading and
+the baseline. It saves raw and corrected XYZ readings, baseline drift, and
+measurement and zero position proposals. Live mode borrows the routed lift
+and native SQUID link for the duration of the scan and its journaled cleanup.
+The motion targets stay within the accepted measurement travel. Proposals
+are reviewed separately before applying station settings.
+
+The staged source passed all 14 rod calibration tests, including the five
+new SQUID cases. The offscreen SQUID form fit both 752 × 720 and 1280 × 720.
+The Bartington form still scrolls horizontally at the narrower width.
+The Windows package passed offline startup and smoke checks for six panels
+and six helpers. The full suite passed all 1,477 tests in 767.332 seconds
+after synchronizing a motion-capture fixture with its fake turn endpoints.
+Physical repeatability, automatic rod loading, and U-channel scans remain
+open.

@@ -1131,7 +1131,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.set_status("Queue run is already active.")
             return False
         if getattr(getattr(self, '_calibration_panel', None), 'rod_scan_active', False):
-            self.set_status('Wait for the susceptibility rod scan to finish before starting the queue.')
+            self.set_status('Wait for the rod scan to finish before starting the queue.')
             return False
 
         if hasattr(self._measurement, "is_active") and self._measurement.is_active():
@@ -2998,9 +2998,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _prepare_rod_scan(self, request, folder):
         from functools import partial
-        from .diagnostic_services import DCMotorBackendAdapter, SusceptibilityBackendAdapter
+        from .diagnostic_services import DCMotorBackendAdapter, SquidBackendAdapter, SusceptibilityBackendAdapter
         from .hardware_contracts import _build_motor_controller_config
         from .rod_calibration import RodScanJob, plan_rod_scan
+        from .squid_rod_calibration import SquidRodRequest, SquidRodScanJob, coil_factors, plan_squid_rod
 
         if self._shutdown_cleanup_requested or self._has_active_automation():
             raise DeviceOwnershipError('Wait for the active workflow to finish before scanning the rod.')
@@ -3009,37 +3010,55 @@ class MainWindow(QtWidgets.QMainWindow):
         operator = str(config.general.operator or '').strip()
         if not simulator and not operator:
             raise ValueError('Sign in before running the live rod calibration.')
-        station, susceptibility = config.motor_station, config.susceptibility
-        plan = plan_rod_scan(request,
-            coil=susceptibility.coil_position or (-22700 if simulator else 0),
-            travel_limit=config.motion.meas_pos or (-97500 if simulator else 0),
-            counts_per_cm=station.lift_counts_per_cm or (961 if simulator else 0),
-            moment_factor_cgs=susceptibility.moment_factor_cgs)
+        counts_per_cm = config.motor_station.lift_counts_per_cm or (961 if simulator else 0)
+        meas_pos = config.motion.meas_pos or (-97500 if simulator else 0)
+        is_squid = isinstance(request, SquidRodRequest)
+        if is_squid:
+            plan = plan_squid_rod(request, zero_pos=config.motion.zero_pos or (-50000 if simulator else 0),
+                                  meas_pos=meas_pos, counts_per_cm=counts_per_cm,
+                                  axis_factors_emu=coil_factors(config.calibration), settle_s=config.squid.settle_time)
+            resource, sensor_class, sensor_settings = 'squid', SquidBackendAdapter, config.squid
+            job_class, artifact_prefix = SquidRodScanJob, 'squid-rod'
+        else:
+            susceptibility = config.susceptibility
+            plan = plan_rod_scan(request, coil=susceptibility.coil_position or (-22700 if simulator else 0),
+                                 travel_limit=meas_pos, counts_per_cm=counts_per_cm,
+                                 moment_factor_cgs=susceptibility.moment_factor_cgs)
+            resource, sensor_class, sensor_settings = 'susceptibility', SusceptibilityBackendAdapter, susceptibility
+            job_class, artifact_prefix = RodScanJob, 'susceptibility-rod'
         fingerprint = config_fingerprint(config)
         scan = None
         if not simulator:
-            motors, bridge = self._dc_motor_backend, self._susceptibility_backend
+            motors = self._dc_motor_backend
+            sensor_attribute = f'_{resource}_backend'
+            sensor = getattr(self, sensor_attribute)
             if (config.general.nocomm is not False or not isinstance(motors, DCMotorBackendAdapter)
-                    or not isinstance(bridge, SusceptibilityBackendAdapter)
+                    or not isinstance(sensor, sensor_class)
                     or motors._client.config != _build_motor_controller_config(config)
-                    or asdict(bridge._cfg) != asdict(susceptibility)):
-                raise ValueError('Restore the accepted live motor and Bartington bridge settings.')
-            if QtWidgets.QMessageBox.question(self, 'Confirm mounted susceptibility standard',
+                    or asdict(sensor._cfg) != asdict(sensor_settings)):
+                raise ValueError(f'Restore the accepted live motor and {resource} settings.')
+            if is_squid and config.squid.range_label != '1×':
+                raise ValueError('Select the calibrated 1× SQUID range before running the magnetic rod scan.')
+            deepest_travel = plan.meas_pos if is_squid else min(plan.positions)
+            if QtWidgets.QMessageBox.question(self, 'Confirm mounted calibration standard',
                     f'Confirm that {request.standard} is securely mounted, the lift is at top, '
-                    f'the changer opening and travel to {min(plan.positions):,d} counts are clear, '
+                    f'the changer opening and travel to {deepest_travel:,d} counts are clear, '
                     'and field outputs are off.',
                     QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
                     QtWidgets.QMessageBox.StandardButton.No) != QtWidgets.QMessageBox.StandardButton.Yes:
                 return None
             if (self._shutdown_cleanup_requested or self._has_active_automation()
                     or config_fingerprint(self.config) != fingerprint
-                    or motors is not self._dc_motor_backend or bridge is not self._susceptibility_backend):
+                    or motors is not self._dc_motor_backend or sensor is not getattr(self, sensor_attribute)):
                 raise DeviceOwnershipError('The station changed while confirming the mounted standard.')
-            scan = partial(motors.run_rod_scan, bridge=bridge, port=config.changer.port, operator=operator)
+            if is_squid:
+                scan = partial(motors.run_squid_rod_scan, squid=sensor, config=deepcopy(config), operator=operator)
+            else:
+                scan = partial(motors.run_rod_scan, bridge=sensor, port=config.changer.port, operator=operator)
 
-        path = Path(folder).expanduser() / f'susceptibility-rod-{uuid.uuid4().hex}.json'
-        job = RodScanJob(plan, path, operator=operator or 'No-Comm', config_hash=fingerprint, scan=scan)
-        lease = self.acquire_devices(('measurement', 'changer', 'susceptibility', 'vacuum', 'af_demag'),
+        path = Path(folder).expanduser() / f'{artifact_prefix}-{uuid.uuid4().hex}.json'
+        job = job_class(plan, path, operator=operator or 'No-Comm', config_hash=fingerprint, scan=scan)
+        lease = self.acquire_devices(('measurement', 'changer', resource, 'vacuum', 'af_demag'),
                                      'rod_calibration', allow_reentrant=False)
         return job, lease
 

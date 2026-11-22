@@ -22,6 +22,7 @@ from rapid_main.calibration_registry import (
 )
 from rapid_main.hardware_contracts import MeasurementBackend
 from rapid_main.rod_calibration import RodScanRequest, RodScanWorker
+from rapid_main.squid_rod_calibration import SquidRodFit, SquidRodRequest
 from rapid_main.thermal import (
     ThermalSafetyLimits,
     compile_thermal_routine,
@@ -108,6 +109,7 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         self._procedure.addItem("IRM Voltage Calibration", "irm_voltage")
         self._procedure.addItem("Thermal Routine Planning", "thermal_routine")
         self._procedure.addItem("Susceptibility Rod Scan", "susceptibility_rod")
+        self._procedure.addItem("SQUID Rod Scan", "squid_rod")
         self._procedure.currentIndexChanged.connect(self._on_procedure_changed)
         fl.addRow("Procedure:", self._procedure)
 
@@ -232,20 +234,23 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         fl.addRow("", self._thermal_box)
 
         self._rod_box = QtWidgets.QGroupBox("Bartington susceptibility standard")
-        rod_form = QtWidgets.QFormLayout(self._rod_box)
+        rod_form = self._rod_form = QtWidgets.QFormLayout(self._rod_box)
         rod_form.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
         self._rod_standard = QtWidgets.QLineEdit()
         self._rod_height = self._spin(.001, 100, 2, " cm")
         self._rod_spacing = self._spin(.008, 10, .4, " cm")
         self._rod_spacing.setToolTip("The lift advances half this distance between readings.")
         self._rod_reference = QtWidgets.QLineEdit()
+        self._rod_reference.setToolTip("Enter the standard's certified moment susceptibility in CGS units.")
+        self._rod_drift_limit = QtWidgets.QLineEdit("1e-6")
         self._rod_threshold = self._spin(.01, 99.99, 10, " %")
         self._rod_artifact_dir = QtWidgets.QLineEdit(str(self._registry.root.parent))
         rod_form.addRow("Standard identity:", self._rod_standard)
         rod_form.addRow("Standard height:", self._rod_height)
         rod_form.addRow("Scan spacing:", self._rod_spacing)
-        rod_form.addRow("Certified moment susceptibility (CGS):", self._rod_reference)
-        rod_form.addRow("Fit and verification threshold:", self._rod_threshold)
+        rod_form.addRow("Moment susceptibility (CGS):", self._rod_reference)
+        rod_form.addRow("Max baseline drift (emu):", self._rod_drift_limit)
+        rod_form.addRow("Fit threshold:", self._rod_threshold)
         rod_form.addRow("Artifact folder:", self._rod_artifact_dir)
         self._rod_run = QtWidgets.QPushButton("Run Rod Scan")
         self._rod_run.clicked.connect(self._run_rod_scan)
@@ -386,11 +391,18 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
             self._tolerance.setValue(float(info["tolerance_default"]))
         is_irm = key == "irm_voltage"
         is_thermal = key == "thermal_routine"
-        is_rod = key == "susceptibility_rod"
+        is_squid_rod = key == "squid_rod"
+        is_rod = is_squid_rod or key == "susceptibility_rod"
         is_baseline = not (is_irm or is_thermal or is_rod)
         self._irm_box.setVisible(is_irm)
         self._thermal_box.setVisible(is_thermal)
         self._rod_box.setVisible(is_rod)
+        if is_rod:
+            self._rod_form.setRowVisible(self._rod_reference, not is_squid_rod)
+            self._rod_form.setRowVisible(self._rod_drift_limit, is_squid_rod)
+            self._rod_box.setTitle("SQUID magnetic standard" if is_squid_rod else "Bartington susceptibility standard")
+            self._rod_spacing.setToolTip("Fine spacing. The coarse pass uses ten times this distance."
+                if is_squid_rod else "The lift advances half this distance between readings.")
         for widget in (
             self._mode, self._expected, self._samples, self._tolerance, self._manual_value,
             self._baseline_context, self._baseline_operator, self._baseline_artifact_dir,
@@ -481,14 +493,18 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
             folder = self._rod_artifact_dir.text().strip()
             if not folder:
                 raise ValueError("Enter an artifact folder.")
+            is_squid = self._procedure.currentData() == "squid_rod"
+            input_field = self._rod_drift_limit if is_squid else self._rod_reference
             try:
-                reference = float(self._rod_reference.text())
+                reference = float(input_field.text())
             except ValueError as exc:
-                raise ValueError("Enter the certified moment susceptibility as a number in CGS units.") from exc
+                label = "maximum baseline drift in emu" if is_squid else "certified susceptibility in CGS units"
+                raise ValueError(f"Enter a number for the {label}.") from exc
             if self._rod_scan_provider is None:
-                raise ValueError("A susceptibility rod scan backend is unavailable.")
-            request = RodScanRequest(self._rod_standard.text().strip(), self._rod_height.value(),
-                                     self._rod_spacing.value(), reference, self._rod_threshold.value())
+                raise ValueError("A rod scan backend is unavailable.")
+            request_type = SquidRodRequest if is_squid else RodScanRequest
+            request = request_type(self._rod_standard.text().strip(), self._rod_height.value(),
+                                   self._rod_spacing.value(), reference, self._rod_threshold.value())
             prepared = self._rod_scan_provider(request, folder)
             if prepared is None:
                 self._status.setText("Rod scan canceled before connecting.")
@@ -501,7 +517,7 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
             self._procedure.setEnabled(False)
             self._rod_run.setEnabled(False)
             self._rod_stop.setEnabled(True)
-            self._status.setText(f"Scanning {request.standard} at {len(job.plan.positions)} lift positions…")
+            self._status.setText(f"Running {job.procedure_name} with {request.standard}…")
             self._rod_worker.start()
         except Exception as exc:
             if self._rod_worker is not None:
@@ -542,9 +558,16 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         else:
             fit = result.fit
             self._status.setText(f"{label} complete. Calibration proposal saved.")
-            lines = [f"Proposed coil position   {fit.coil:,d} counts",
-                     f"Proposed moment factor   {fit.moment_factor_cgs:.9g}",
-                     f"Independent center reading   {fit.verification_reading_cgs:.9g} CGS"]
+            if isinstance(fit, SquidRodFit):
+                drift = max(map(abs, fit.baseline_drift_emu))
+                lines = [f"Proposed measurement position   {fit.measurement_position:,d} counts",
+                         f"Proposed zero position   {fit.zero_position:,d} counts",
+                         f"Independent center reading ({fit.selected_axis})   {fit.verification_emu:.9g} emu",
+                         f"Maximum baseline drift   {drift:.9g} emu"]
+            else:
+                lines = [f"Proposed coil position   {fit.coil:,d} counts",
+                         f"Proposed moment factor   {fit.moment_factor_cgs:.9g}",
+                         f"Independent center reading   {fit.verification_reading_cgs:.9g} CGS"]
             self._set_last_calibration_artifact(None if result.simulated else result.artifact,
                                                 suggested_operator=worker.job.operator)
         self._result.setPlainText("\n".join([label, *lines, f"Evidence   {result.artifact}"]))

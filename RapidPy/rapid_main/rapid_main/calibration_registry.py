@@ -168,13 +168,18 @@ class CalibrationRegistry:
             raise CalibrationRegistryError("calibration artifact has no procedure_id")
         if artifact_payload.get("passed") is False or artifact_payload.get("status") == "FAIL":
             raise CalibrationRegistryError("a failed calibration artifact cannot be approved")
-        if procedure_id == "calibration/susceptibility-rod":
+        rod_schema = {
+            "calibration/susceptibility-rod": ("rapidpy.calibration.susceptibility_rod.v1", "bridge_closed"),
+            "calibration/squid-rod": ("rapidpy.calibration.squid_rod.v1", "squid_closed"),
+        }.get(procedure_id)
+        if rod_schema is not None:
+            schema, sensor_closed = rod_schema
             evidence = artifact_payload.get("station_evidence")
-            if (artifact_payload.get("schema") != "rapidpy.calibration.susceptibility_rod.v1"
+            if (artifact_payload.get("schema") != schema
                     or artifact_payload.get("passed") is not True or artifact_payload.get("simulated") is not False
                     or not isinstance(evidence, dict) or not evidence.get("mount_confirmed_by")
                     or not evidence.get("final_stopped_positions") or evidence.get("motor_closed") is not True
-                    or evidence.get("bridge_closed") is not True or not artifact_payload.get("proposal")):
+                    or evidence.get(sensor_closed) is not True or not artifact_payload.get("proposal")):
                 raise CalibrationRegistryError("rod approval requires a passed live scan with verified final settlement")
 
         timestamp = _as_utc(now)
