@@ -136,6 +136,21 @@ the center and baseline readings and records a measurement and zero position
 proposal. Review the evidence and independently verify fit and positioning
 before changing station settings.
 
+For either rod calibration, **Standard tray slot** selects automatic loading.
+Choose the slot containing the standard and confirm the empty control rod and
+the calibrated empty scan slot. A chain station also needs the current physical
+chain reference. RAPID uses the native queue station to load the standard,
+check its measured height against the certified height, and return it to its
+original slot. A disagreement in height returns the standard before sensor
+acquisition. Approval requires evidence of the original-slot return and
+verified station shutdown. The default **Mounted by operator** uses the manual
+mount workflow. No-Comm records a selected tray slot in the simulated scan.
+
+If a tray scan is interrupted with the station still owned, use **Shutdown
+Interrupted Queue** in Diagnostics. Use **Retry Queue Shutdown** when only
+original connection closure remains. The original journal retains the standard
+identity, slot, and last verified transfer state.
+
 **Diagnostics → U-channel Scan** handles mounted long cores and EPR tubes.
 Import the station's `MinUpDownPos`, `FloorPos`, and `UpDownMotor1cm`. Use the
 accepted SQUID calibration at 1× and measure the extension from the carriage
@@ -173,31 +188,23 @@ Qt preferences instead of changing the operator's registry or saved queue.
 
 ## Remaining full-replacement gates
 
-This is a **pilot candidate**. The source audit identified software integrations
-that must not be mistaken for physical acceptance alone:
+This is a **pilot candidate**. Calibrated axial and transverse AF, independent
+MCC ARM bias, capacitor pulse IRM with a dedicated backfield polarity relay,
+and synchronized RRM have native execution and recovery paths. Each requires
+accepted station configuration, physical interlock tests, and reference results.
 
-- Backfield IRM needs the legacy dedicated polarity relay mapping. Negative
-  requests cannot run through the unsigned ramp or be silently clamped to zero.
-- RRM requires synchronized turning-motor spin, selected-coil AF ramp, and
-  verified stop (`VB6/RockmagStep.cls`). Planning labels do not implement it.
-- Full AF treatment requires coil centering, axial and two transverse passes,
-  orientation changes, and station field-to-voltage calibration. One ADwin
-  ramp does not prove parity with `VB6/RockmagStep.cls`.
-- ARM/pulse IRM needs independent bias/pulse circuitry integration. The present
-  effective-peak calculation is not evidence of equivalent ARM physics or
-  pulse-IRM behavior.
-- MCC/DAC and transverse motor execution have planning APIs but need production
-  adapter binding and loopback/position evidence.
-- Thermal treatment remains manual/external; automated furnace operation needs
+- Transverse probe auto-positioning has angle/field analysis. The linked motor,
+  calibrated AF ramp, and gaussmeter peak scan still require integration.
+- Thermal treatment remains manual/external. Automated furnace operation needs
   an identified controller, protocol, readback, and interlocks.
-- Automatic rod loading still needs parity work. Mounted Bartington and SQUID
-  rods, U-channel cores, and EPR tubes need bench acceptance with the station's
-  standards and fixtures.
+- Bartington and SQUID rod scans need bench acceptance for manual mounts and
+  automatic tray loading. U-channel cores and EPR tubes need acceptance with the
+  station's fixtures.
 
-These integrations remain open. Vendor driver installation, fresh-Windows
-deployment, mixed-DPI display review, physical fault/recovery tests, scientific
-reference comparisons, and lab approval also remain pending. The portable app
-does not install kernel drivers. Follow
+Vendor driver installation, fresh-Windows deployment, mixed-DPI display review,
+physical fault and recovery tests, scientific reference comparisons, and lab
+approval remain pending. The portable app relies on station driver installation.
+Follow
 `docs/rapid_hardware_acceptance_procedure_2026-08-29.md` for bench qualification.
 
 ## Verification checkpoint — 3 October 2026

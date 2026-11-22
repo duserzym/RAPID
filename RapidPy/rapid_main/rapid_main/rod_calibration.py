@@ -28,6 +28,7 @@ class RodScanRequest:
     spacing_cm: float
     reference_cgs: float
     threshold_percent: float
+    tray_slot: int | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,8 @@ def plan_rod_scan(request: RodScanRequest, *, coil: int, travel_limit: int,
                   counts_per_cm, moment_factor_cgs)
     if not isinstance(request.standard, str) or not request.standard.strip():
         raise ValueError('Enter the reference standard identity.')
+    if request.tray_slot is not None and (type(request.tray_slot) is not int or request.tray_slot < 1):
+        raise ValueError('Enter the registered tray slot of the calibration standard.')
     if any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0 for value in quantities):
         raise ValueError('Enter positive finite standard, scan, and calibration quantities.')
     if request.threshold_percent >= 100:

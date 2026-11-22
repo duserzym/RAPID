@@ -2,6 +2,7 @@
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import copy
+import json
 import math
 import uuid
 
@@ -34,9 +35,13 @@ def _require_acquisition_slot(geometry, observations):
     samples = {item['axis']: item['samples'] for item in observations}
     if not geometry.station.use_xy_table:
         geometry.require_empty_chain_slot(samples['changer_x'])
-    elif geometry.station.slot_from_xy_counts(samples['changer_x'][-1]['position_raw'],
-                                              samples['changer_y'][-1]['position_raw']) != geometry.context.hole:
-        raise HardwareSafetyError('Queue acquisition requires the original calibrated empty hole.')
+    else:
+        expected = (geometry.context.hole if getattr(geometry, 'is_holder', False) else
+                    geometry.station.nearest_empty(geometry.context.original_slot))
+        x, y = samples['changer_x'], samples['changer_y']
+        if len(x) != 2 or len(y) != 2 or any(geometry.station.slot_from_xy_counts(left['position_raw'],
+                right['position_raw']) != expected for left, right in zip(x, y)):
+            raise HardwareSafetyError('Queue acquisition requires the original calibrated empty hole.')
 
 
 def _evidence(kind, backend, result, operation):
@@ -77,7 +82,7 @@ def _evidence(kind, backend, result, operation):
     return record.to_dict()
 
 
-def run_queue_acquisition(backend, kind, acquire):
+def run_queue_acquisition(backend, kind, acquire, *, rod_plan=None):
     """Begin before instrument I/O; settlement never releases the specimen grip."""
     geometry = backend._queue_specimen_geometry
     geometry.height(backend._sample_name)
@@ -94,12 +99,29 @@ def run_queue_acquisition(backend, kind, acquire):
     height = geometry.context.sample_height
     positions = (geometry.positions(backend._sample_name) if kind in {'squid', 'flux_recovery'} else
                  (math.floor(backend._config.susceptibility.coil_position + height / 2),))
+    if rod_plan is not None:
+        if (instruments is None or kind not in {'squid', 'susceptibility'} or getattr(geometry, 'is_holder', False)
+                or rod_plan.request.standard != backend._sample_name
+                or rod_plan.request.tray_slot != geometry.context.original_slot):
+            raise HardwareSafetyError('Tray calibration requires the original loaded standard and scientific instruments.')
+        root = geometry.session.store._queue(geometry.session.token)
+        recorded = root['plan']['commands']
+        snapshot = json.loads(json.dumps(asdict(rod_plan), allow_nan=False))
+        if (not isinstance(recorded, dict) or recorded.get('kind') != 'tray_rod_calibration'
+                or recorded.get('calibration_plan') != snapshot or root['run_id'] != backend._run_id):
+            raise HardwareSafetyError('The acquisition must match the original tray calibration journal.')
+        positions = rod_plan.positions
     if any(type(value) is not int or not -(2**31) <= value < 2**31 for value in positions):
         raise HardwareSafetyError('Acquisition targets exceed the accepted motor count range.')
     operation = dict(action=kind, sample_id=backend._sample_name, run_id=backend._run_id,
                      is_holder=getattr(geometry, 'is_holder', False),
                      specimen_geometry=geometry.context.to_dict(), positions=list(positions))
-    verify_slot = operation['is_holder'] or not geometry.station.use_xy_table
+    verify_slot = rod_plan is not None or operation['is_holder'] or not geometry.station.use_xy_table
+    if rod_plan is not None:
+        operation.update(purpose='rod_calibration', rod_plan=asdict(rod_plan))
+        from .queue_field_outputs import field_outputs_proof
+        fields = backend._queue_coordinator.fields
+        operation['field_outputs_proof'] = field_outputs_proof(geometry.session, fields.require(geometry.session))
     if instruments is not None:
         operation['instruments'] = copy.deepcopy(instruments.profile)
     profile = backend._acquisition_safety_profile()
@@ -124,16 +146,20 @@ def run_queue_acquisition(backend, kind, acquire):
                 _require_acquisition_slot(geometry, initial)
                 geometry.height(backend._sample_name, own_stage_token=token)
             result = acquire()
-            if kind == 'susceptibility' and len(backend._susceptibility_records) != previous_susc_count + 1:
+            if rod_plan is not None:
+                evidence = asdict(result)
+            elif kind == 'susceptibility' and len(backend._susceptibility_records) != previous_susc_count + 1:
                 raise HardwareSafetyError('Susceptibility did not produce a new acquisition record.')
-            evidence = _evidence(kind, backend, result, operation)
+            if rod_plan is None:
+                evidence = _evidence(kind, backend, result, operation)
             # Configuration, routing, identity and cancellation may change during a read.
             geometry.height(backend._sample_name, own_stage_token=token)
             if backend._halt_check is not None and backend._halt_check():
                 raise InterruptedError('Queue acquisition cancelled before settlement.')
         except Exception as exc:
             error = str(exc) or type(exc).__name__
-            if kind == 'susceptibility' and len(backend._susceptibility_records) == previous_susc_count + 1:
+            if (rod_plan is None and kind == 'susceptibility'
+                    and len(backend._susceptibility_records) == previous_susc_count + 1):
                 failed = backend._susceptibility_records[-1]
                 if isinstance(failed, SusceptibilityAcquisitionRecord):
                     evidence = failed.to_dict()

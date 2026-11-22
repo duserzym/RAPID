@@ -2839,3 +2839,29 @@ and is available under `.tmp/uchannel-recovery-release/dist/RapidPyMain`.
 In the offscreen four-pass test, the Run button returned in 1.17 ms. The
 worker saved all 4,052 readings and published 4,004 profile points in 7.601
 seconds. The longest measured UI timer interval was 73.43 ms.
+
+Automatic tray standard checkpoint (2026-11-22). **Standard tray slot** in
+Calibration Center enables native pickup and supported return for the
+Bartington and SQUID rod scans. The named operator confirms the empty rod and
+the calibrated scan hole. Chain stations also capture the current physical
+slot. The measurement stage checks the loaded standard's measured height
+against its certificate and borrows the original queue instruments. A
+completed scan verifies return to the original slot and terminal shutdown
+before it can be approved. A hardware fault retains the original transfer
+identity, station reservation, and recovery journal.
+
+Seven focused tests passed, including Bartington on XY, SQUID on chain, a
+scientific height mismatch with no detector I/O, a read fault with retained
+grip, and the desktop and registry paths. An offscreen confirmation probe
+verified both station modes reserve the original resources without creating
+a hardware journal or issuing commands in the dialog. Both rod forms showed
+the slot selector and run button at 1280 × 720. Halting after one injected
+reading retained the grip and original slot with a pending recovery stage.
+Physical H8 acceptance remains open. The portable guide now reflects the
+native AF, ARM, pulse IRM, and RRM paths and the open transverse probe scan
+integration.
+
+The full staged suite passed all 1,496 tests in 822.912 seconds. The Windows
+bundle and its updated operator guide are available in
+`.tmp/tray-rod-release/dist/RapidPyMain`. Offline startup and smoke checks
+passed for six panels and six helpers.

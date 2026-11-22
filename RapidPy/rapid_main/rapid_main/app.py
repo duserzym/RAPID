@@ -1643,6 +1643,7 @@ class MainWindow(QtWidgets.QMainWindow):
         session = self._queue_native_session
         if (not self._uses_native_queue() or (session is not None and not shutdown)
                 or self._shutdown_cleanup_requested
+                or getattr(getattr(self, '_calibration_panel', None), 'rod_scan_active', False)
                 or self._queue_active or self._queue_command_thread is not None or self._measurement.is_active()
                 or self._queue_pending_finalize is not None):
             self.set_status('Queue recovery requires an idle native station. Wait for the original worker to exit.')
@@ -3045,9 +3046,17 @@ class MainWindow(QtWidgets.QMainWindow):
                                  moment_factor_cgs=susceptibility.moment_factor_cgs)
             resource, sensor_class, sensor_settings = 'susceptibility', SusceptibilityBackendAdapter, susceptibility
             job_class, artifact_prefix = RodScanJob, 'susceptibility-rod'
+        suffix = '' if is_channel else '.json'
+        path = Path(folder).expanduser() / f'{artifact_prefix}-{uuid.uuid4().hex}{suffix}'
         fingerprint = config_fingerprint(config)
         scan = None
-        if not simulator:
+        lease = None
+        if not simulator and not is_channel and request.tray_slot is not None:
+            prepared = self._prepare_tray_rod_scan(plan, config, fingerprint, operator)
+            if prepared is None:
+                return None
+            scan, lease = prepared
+        elif not simulator:
             motors = self._dc_motor_backend
             sensor_attribute = f'_{resource}_backend'
             sensor = getattr(self, sensor_attribute)
@@ -3087,12 +3096,64 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 scan = partial(motors.run_rod_scan, bridge=sensor, port=config.changer.port, operator=operator)
 
-        suffix = '' if is_channel else '.json'
-        path = Path(folder).expanduser() / f'{artifact_prefix}-{uuid.uuid4().hex}{suffix}'
         job = job_class(plan, path, operator=operator or 'No-Comm', config_hash=fingerprint, scan=scan)
-        lease = self.acquire_devices(('measurement', 'changer', resource, 'vacuum', 'af_demag'),
-                                     'rod_calibration', allow_reentrant=False)
+        if lease is None:
+            lease = self.acquire_devices(('measurement', 'changer', resource, 'vacuum', 'af_demag'),
+                                         'rod_calibration', allow_reentrant=False)
         return job, lease
+
+    def _prepare_tray_rod_scan(self, plan, config, fingerprint, operator):
+        from .queue_startup import QueueNativeStartup
+        from .tray_rod import TrayRodReservation, TrayRodScan, validate_tray_standard
+
+        if not self._uses_native_queue():
+            raise ValueError('Automatic standard loading requires the accepted native queue station.')
+        station = validate_tray_standard(config, plan)
+        backend, vacuum = self._measurement_backend, self._vacuum_backend
+        if config_fingerprint(backend._config) != fingerprint:
+            raise ValueError('Restore the accepted measurement and station settings before loading the standard.')
+        QueueNativeStartup.station_bindings(backend, vacuum)
+        request = plan.request
+        if QtWidgets.QMessageBox.question(self, 'Confirm empty rod and tray standard',
+                f'Confirm that the control rod is empty, the work area is clear, and {request.standard} '
+                f'is seated in tray slot {request.tray_slot}. Confirm that slot '
+                f'{station.nearest_empty(request.tray_slot)} is empty for the scan.',
+                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No) != QtWidgets.QMessageBox.StandardButton.Yes:
+            return None
+        chain_slot = None
+        if not station.use_xy_table:
+            chain_slot, confirmed = QtWidgets.QInputDialog.getInt(self, 'Confirm Physical Chain Slot',
+                'Enter the numbered chain slot currently under the empty rod.',
+                station.slot_min - 1, station.slot_min - 1, station.slot_max)
+            if not confirmed or not station.slot_min <= chain_slot <= station.slot_max:
+                return None
+        if (self._shutdown_cleanup_requested or self._has_active_automation()
+                or config_fingerprint(self.config) != fingerprint or config_fingerprint(backend._config) != fingerprint
+                or backend is not self._measurement_backend or vacuum is not self._vacuum_backend):
+            raise DeviceOwnershipError('The station changed while confirming the tray standard.')
+        scan = TrayRodScan(backend, vacuum, plan, operator=operator, chain_slot=chain_slot)
+        lease = self.acquire_devices(('measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptibility'),
+                                     'queue_workflow', allow_reentrant=False)
+        return scan, TrayRodReservation(scan, lease, self._settle_tray_rod_scan)
+
+    def _settle_tray_rod_scan(self, scan, lease):
+        startup = scan.startup
+        if startup is None:
+            lease.release()
+            return
+        self._queue_native_startup, self._queue_native_session = startup, startup.session
+        self._queue_lease = lease
+        if self._release_queue_lease():
+            return
+        self.set_flow_state('error')
+        terminal = scan.backend._queue_terminal_cleanup
+        action = 'Retry Queue Shutdown' if terminal is not None and terminal._close_token else 'Shutdown Interrupted Queue'
+        message = f'Tray calibration still owns the native station. Use {action} in Diagnostics.'
+        if self._shutdown_cleanup_requested:
+            self._diagnostic_shutdown_blocked(message)
+        else:
+            self.set_status(message)
 
     def _launch_irm_voltage_calibration(self) -> None:
         self._nav_select(5)

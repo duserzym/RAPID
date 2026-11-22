@@ -146,6 +146,7 @@ grip through the dummy specimen release.
 | H5 | Compare saved files byte-for-byte where formats are identical | Differences explained and recorded, or fixed |
 | H6 | With the magnetic rod standard securely mounted and the accepted lift travel clear, open **Diagnostics → Calibrate Rod** and select **SQUID Rod Scan**. Repeat the scan at the accepted 1× range and lab drift limit. | Attach both `squid-rod-*.json` records. Compare coarse and fine peaks, fitted measurement and zero positions, center verification, and absolute baseline drift against the accepted station and VB6 reference results. Verify final lift home and stationary changer axes. Confirm any proposed positions independently before applying settings. |
 | H7 | With the approved core or EPR tube mount, use **Diagnostics → U-channel Scan**. Review the measured assembly extension, the computed span, and the 0° reference. Run one pass, then repeat with four passes after verifying turn clearance at lift top. | Attach the two `uchannel-*` bundles. Verify loaded travel, zero positions, drift, angles, and final top/0° readbacks. Compare the raw CSV in legacy SQUID units and the corrected emu profile against the station reference. |
+| H8 | Place each certified standard in an approved tray slot. Select the slot in Calibration Center and repeat H6 or S11 using automatic loading on the station's configured changer. | Attach the rod artifact and native queue evidence. Verify measured height, grip, the calibrated empty scan slot, support before release, return to the original slot, and verified transport shutdown. With a controlled interruption, verify retention of the original grip and queue recovery state. |
 
 ---
 
@@ -188,7 +189,7 @@ family still has a software preflight blocker.
 | # | Step | Expected |
 |---|---|---|
 | K1 | Run the compiled Hawaiian AF preset in No-Communication mode | Output stays under `SIMULATED/`; `rockmag_run.json` names the compiled routine and exact completed labels; the artifact index digest matches the file |
-| K2 | Attempt Rockmag the Works in hardware mode before the backfield route exists (and before SUSC holder/bridge inputs are accepted) | Plan blocks before ordinary hardware preflight or treatment dispatch and writes an `ABORTED` rockmag artifact naming the blocker |
+| K2 | Attempt Rockmag the Works in hardware mode with the backfield polarity route unconfigured or the required SUSC holder/bridge evidence missing | Plan blocks before treatment dispatch and writes an `ABORTED` rockmag artifact naming the blocker |
 | K3 | After AF acceptance, run Hawaiian AF on a reference specimen | Every requested label is treated and measured once in order; raw treatment/SQUID traffic, safe return, holder version, and rockmag artifact share one run ID |
 | K4 | Halt between two rockmag steps | No partial accepted bundle is published; abort artifact lists only the completed prefix and the halt/final phase |
 | K5 | Resume the interrupted specimen | Previously published labels are not duplicated; skipped duplicate labels and the remaining completed suffix are explicit |
@@ -233,7 +234,8 @@ as a replacement rather than transition/testing software.
 | Rejection and recovery | Section 7 |
 | Motion and interlocks | Section 5 |
 | Safe halt | M8, D3, D4 |
-| Holder integrity | Section 8 |
+| Holder integrity | H1–H3 |
+| Rod and long-scan acquisition | H6–H8 and S11 |
 | Output parity | H4, H5 |
 | Restart behavior | Section 9 |
 | VRM acquisition | Section 10 |

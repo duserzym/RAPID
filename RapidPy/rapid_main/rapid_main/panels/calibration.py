@@ -239,6 +239,9 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         rod_form = self._rod_form = QtWidgets.QFormLayout(self._rod_box)
         rod_form.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
         self._rod_standard = QtWidgets.QLineEdit()
+        self._rod_tray_slot = QtWidgets.QSpinBox()
+        self._rod_tray_slot.setRange(0, 32767)
+        self._rod_tray_slot.setSpecialValueText("Mounted by operator")
         self._rod_height = self._spin(.001, 100, 2, " cm")
         self._rod_spacing = self._spin(.008, 10, .4, " cm")
         self._rod_spacing.setToolTip("The lift advances half this distance between readings.")
@@ -248,6 +251,7 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
         self._rod_threshold = self._spin(.01, 99.99, 10, " %")
         self._rod_artifact_dir = QtWidgets.QLineEdit(str(self._registry.root.parent))
         rod_form.addRow("Standard identity:", self._rod_standard)
+        rod_form.addRow("Standard tray slot:", self._rod_tray_slot)
         rod_form.addRow("Standard height:", self._rod_height)
         rod_form.addRow("Scan spacing:", self._rod_spacing)
         rod_form.addRow("Moment susceptibility (CGS):", self._rod_reference)
@@ -585,7 +589,8 @@ class CalibrationCenterPanel(QtWidgets.QWidget):
             raise ValueError(f"Enter a number for the {label}.") from exc
         request_type = SquidRodRequest if is_squid else RodScanRequest
         return request_type(self._rod_standard.text().strip(), self._rod_height.value(),
-                            self._rod_spacing.value(), reference, self._rod_threshold.value())
+                            self._rod_spacing.value(), reference, self._rod_threshold.value(),
+                            tray_slot=self._rod_tray_slot.value() or None)
 
     def _run_rod_scan(self) -> None:
         if self.rod_scan_active or self._rod_configuring:

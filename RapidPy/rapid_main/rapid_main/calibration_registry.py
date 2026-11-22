@@ -183,6 +183,13 @@ class CalibrationRegistry:
                     or not evidence.get("final_stopped_positions") or evidence.get("motor_closed") is not True
                     or evidence.get(sensor_closed) is not True or not artifact_payload.get("proposal")):
                 raise CalibrationRegistryError("rod approval requires a passed live scan with verified final settlement")
+            plan = artifact_payload.get("plan")
+            request = plan.get("request") if isinstance(plan, dict) else None
+            slot = request.get("tray_slot") if isinstance(request, dict) else None
+            if slot is not None:
+                transfer = evidence.get("tray_transfer")
+                if not self._verified_tray_return(transfer, slot, request.get("standard")):
+                    raise CalibrationRegistryError("tray calibration approval requires the verified original-slot return")
 
         timestamp = _as_utc(now)
         digest = hashlib.sha256(artifact_bytes).hexdigest()
@@ -230,6 +237,19 @@ class CalibrationRegistry:
                     pass
             raise
         return record
+
+    @staticmethod
+    def _verified_tray_return(transfer, slot, standard):
+        if type(slot) is not int or not isinstance(transfer, dict) or not transfer.get("queue_token"):
+            return False
+        for name, phase in (("loaded", "lifted"), ("returned", "clear")):
+            state = transfer.get(name)
+            if (not isinstance(state, dict) or state.get("phase") != phase or state.get("original_slot") != slot
+                    or state.get("queue_token") != transfer["queue_token"] or state.get("sample_id") != standard):
+                return False
+        shutdown = transfer.get("shutdown")
+        return (isinstance(shutdown, dict) and shutdown.get("safe_state_confirmed") is True
+                and shutdown.get("simulated") is False and bool(transfer.get("acquisition_record_id")))
 
     def activate(
         self,

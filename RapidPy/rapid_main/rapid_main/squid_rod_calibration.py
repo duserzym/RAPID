@@ -21,6 +21,7 @@ class SquidRodRequest:
     spacing_cm: float
     drift_limit_emu: float
     threshold_percent: float
+    tray_slot: int | None = None
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,8 @@ def plan_squid_rod(request: SquidRodRequest, *, zero_pos: int, meas_pos: int, co
                   request.threshold_percent, counts_per_cm, settle_s)
     if not isinstance(request.standard, str) or not request.standard.strip():
         raise ValueError('Enter the magnetic reference standard identity.')
+    if request.tray_slot is not None and (type(request.tray_slot) is not int or request.tray_slot < 1):
+        raise ValueError('Enter the registered tray slot of the magnetic standard.')
     if any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0 for value in quantities):
         raise ValueError('Use positive finite rod dimensions, fit threshold, drift limit, and lift scale.')
     if (request.threshold_percent >= 100 or settle_s > 60 or len(axis_factors_emu) != 3
