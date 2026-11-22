@@ -33,7 +33,7 @@ _bootstrap_common_imports()
 from .config import AppConfig, _auto_find_ini, load_config, read_calibration_from_ini, save_config
 from .models import MeasurementSample
 from .session_manifest import load_handoff_context, write_vrm_output_manifest
-from .squid_serial import SquidCommunicationError, SquidSerialClient
+from .squid_serial import SimulatedSquidClient, SquidCommunicationError, SquidSerialClient
 from rapidpy_common.ui import apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon, workspace_window_size
 from rapidpy_common.resources import asset_directory
 
@@ -82,7 +82,7 @@ class AcquisitionWorker(QtCore.QObject):
 
     def __init__(
         self,
-        client: SquidSerialClient,
+        client: SquidSerialClient | SimulatedSquidClient,
         interval_s: float,
         spacing_mode: str,
         parent: QtCore.QObject | None = None,
@@ -150,8 +150,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self.setFont(compact_font)
         self._assets_dir = _assets_dir()
 
-        self._config = load_config()
-        self._client = SquidSerialClient()
+        self._handoff = load_handoff_context()
+        self._simulated = self._handoff.get("nocomm") is True
+        self._client: SquidSerialClient | SimulatedSquidClient | None = None
+        if self._simulated:
+            self.setWindowTitle("RapidPy VRM Logger — Simulated")
+            self._client = SimulatedSquidClient()
+        elif self._handoff["association_status"] != "invalid":
+            self._client = SquidSerialClient()
+        self._config = load_config() if self._client is not None and not self._simulated else AppConfig()
         self._thread: QtCore.QThread | None = None
         self._worker: AcquisitionWorker | None = None
         self._csv_handle = None
@@ -169,6 +176,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_ui()
         self._apply_style()
         self._load_into_widgets()
+        if self._simulated or self._client is None:
+            for widget in (self.port_combo, self.refresh_btn, self.connect_btn, self.disconnect_btn):
+                widget.setEnabled(False)
+        if self._simulated:
+            self._set_status("Simulated SQUID ready. Take a baseline to begin.")
+        elif self._client is None:
+            self.baseline_btn.setEnabled(False)
+            self._set_status(f"VRM launch blocked. {self._handoff['error']}")
 
         # resize() must come after _build_ui() so it isn't overridden by
         # the window's computed minimum size hint during the first show.
@@ -220,7 +235,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         title = QtWidgets.QLabel("VRM Decay Logger")
         title.setObjectName("title")
-        subtitle = QtWidgets.QLabel("Three-axis SQUID live view + CSV logging")
+        subtitle = QtWidgets.QLabel("Simulated SQUID · CSV output under SIMULATED" if self._simulated
+                                    else "Three-axis SQUID live view + CSV logging")
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
         controls_layout.addWidget(title)
@@ -339,6 +355,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.status_label = QtWidgets.QLabel("Idle")
         self.status_label.setObjectName("status")
+        self.status_label.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.status_label.setWordWrap(True)
         controls_layout.addWidget(self.status_label)
 
         console_title = QtWidgets.QLabel("Console")
@@ -478,9 +496,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.range_fact_spin.setValue(self._config.range_fact)
         self.ini_path_edit.setText(self._config.ini_path)
         self.file_edit.setText(self._config.output_file)
+        if self._simulated:
+            intended = self._handoff.get("intended_output_dir")
+            if isinstance(intended, str) and intended.strip():
+                self.file_edit.setText(str(Path(intended) / "vrm_log.csv"))
 
         # Auto-detect and apply INI calibration on first launch
-        if not self._config.ini_path:
+        if self._client is not None and not self._simulated and not self._config.ini_path:
             auto_ini = _auto_find_ini()
             if auto_ini is not None:
                 self.ini_path_edit.setText(str(auto_ini))
@@ -498,6 +520,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.resize(max_w, max_h)
 
     def _refresh_ports(self) -> None:
+        if self._client is None or self._simulated:
+            return
         current = self.port_combo.currentText()
         self.port_combo.clear()
         ports = sorted(p.device for p in list_ports.comports())
@@ -516,6 +540,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.console_output.appendPlainText(f"[{timestamp}] {message}")
 
     def _connect(self) -> None:
+        if self._client is None or self._simulated or self._thread is not None:
+            return
         port = self.port_combo.currentText().strip()
         if not port:
             QtWidgets.QMessageBox.warning(self, "Missing Port", "Choose a serial port first.")
@@ -530,6 +556,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_status(f"Connected to {port} at 1200,N,8,1")
 
     def _disconnect(self) -> None:
+        if self._client is None or self._simulated:
+            return
         if self._thread is not None:
             QtWidgets.QMessageBox.information(
                 self,
@@ -558,7 +586,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _take_baseline(self) -> None:
         """Take a single SQUID reading and store it as the baseline."""
-        if not self._client.is_connected:
+        if self._client is None or not self._client.is_connected:
             QtWidgets.QMessageBox.warning(self, "Not Connected", "Connect to SQUID serial port first.")
             return
         if self._worker is not None:
@@ -570,7 +598,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_status("Taking baseline reading…")
         QtWidgets.QApplication.processEvents()
         try:
-            x, y, z = self._client.read_xyz_volts()
+            if self._simulated:
+                x, y, z = self._client.take_baseline()
+            else:
+                x, y, z = self._client.read_xyz_volts()
         except Exception as exc:
             self._set_status(f"Baseline error: {exc}")
             self.baseline_btn.setEnabled(True)
@@ -613,7 +644,9 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def _start_logging(self) -> None:
-        if not self._client.is_connected:
+        if self._thread is not None:
+            return
+        if self._client is None or not self._client.is_connected:
             QtWidgets.QMessageBox.warning(self, "Not Connected", "Connect to SQUID serial first.")
             return
 
@@ -623,14 +656,14 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         output_path = Path(self.file_edit.text().strip())
-        if not output_path.name:
+        if not output_path.name or output_path.name == "..":
             QtWidgets.QMessageBox.warning(self, "Output Missing", "Choose a CSV output path.")
             return
 
         # --- CSV exists check ---
         append_to_existing = False
         overwrite = False
-        if output_path.exists() and output_path.stat().st_size > 0:
+        if not self._simulated and output_path.exists() and output_path.stat().st_size > 0:
             dlg = QtWidgets.QMessageBox(self)
             dlg.setWindowTitle("CSV File Already Exists")
             dlg.setText(f"<b>{output_path.name}</b> already exists.")
@@ -658,9 +691,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 append_to_existing = True
 
         try:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
+            session_id = str(uuid.uuid4())
+            if self._simulated:
+                simulated_dir = output_path.parent.resolve() / "SIMULATED"
+                if simulated_dir.resolve() != simulated_dir:
+                    raise ValueError("Choose an output folder with a local SIMULATED directory.")
+                output_path = simulated_dir / session_id / f"{output_path.stem}.csv"
+            output_path.parent.mkdir(parents=True, exist_ok=not self._simulated)
             is_new_file = not append_to_existing
-            open_mode = "w" if overwrite else "a"
+            open_mode = "x" if self._simulated else ("w" if overwrite else "a")
             self._csv_handle = output_path.open(open_mode, newline="", encoding="utf-8")
             self._csv_writer = csv.writer(self._csv_handle)
             if is_new_file:
@@ -680,13 +719,16 @@ class MainWindow(QtWidgets.QMainWindow):
                         "display_unit",
                     ]
                 )
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
+            if self._csv_handle is not None:
+                self._csv_handle.close()
+                self._csv_handle = self._csv_writer = None
             QtWidgets.QMessageBox.critical(self, "File Error", str(exc))
             return
 
         self._session_start_epoch = time.time()
         self._abs_axis.set_session_start(self._session_start_epoch)
-        handoff_context = load_handoff_context()
+        handoff_context = self._handoff
         run_association = str(
             handoff_context.get("run_association_status", "unassociated")
         )
@@ -700,7 +742,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
             )
         self._session_record = {
-            "session_id": str(uuid.uuid4()),
+            "session_id": session_id,
             "output_path": output_path,
             "write_mode": (
                 "overwrite" if overwrite else "append" if append_to_existing else "new"
@@ -719,7 +761,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 "range_factor": float(self.range_fact_spin.value()),
             },
             "handoff_context": handoff_context,
-            "device_port": self.port_combo.currentText().strip(),
+            "device_port": "" if self._simulated else self.port_combo.currentText().strip(),
         }
 
         self._time.clear()
@@ -743,13 +785,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._worker.sample_ready.connect(self._handle_sample)
         self._worker.failed.connect(self._handle_worker_error)
         self._worker.status.connect(self._set_status)
-        self._worker.finished.connect(self._worker_finished)
         self._worker.finished.connect(self._thread.quit)
-        self._worker.finished.connect(self._worker.deleteLater)
+        self._thread.finished.connect(self._worker.deleteLater)
+        self._thread.finished.connect(self._worker_finished)
         self._thread.finished.connect(self._thread.deleteLater)
 
         self._thread.start()
-        self._append_console("Live plotting and CSV logging active.")
+        self._append_console(f"Logging to {output_path}")
 
     def _stop_logging(self) -> None:
         if self._worker is not None:
@@ -780,7 +822,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 calibration=record["calibration"],
                 handoff_context=record["handoff_context"],
                 device_port=str(record["device_port"]),
-                provenance="live_hardware",
+                provenance="simulated" if self._simulated else "live_hardware",
                 error=str(record["error"]),
             )
             self._append_console(f"Finalized VRM session manifest: {manifest_path}")
@@ -957,8 +999,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self._csv_writer = None
             self._finalize_session()
 
-        self._client.disconnect()
-        self._save_from_widgets()
+        if self._client is not None and not self._simulated:
+            self._client.disconnect()
+            self._save_from_widgets()
         event.accept()
 
     def _save_from_widgets(self) -> None:

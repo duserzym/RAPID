@@ -100,7 +100,9 @@ def _check_attachments(root: Path, record: dict, candidate: str, *, station_test
                 except ValueError as exc:
                     raise ValueError(f"Evidence attachment is not valid JSON: {filename}") from exc
                 if isinstance(metadata, dict):
+                    provenance = metadata.get("provenance")
                     if station_test and (metadata.get("simulated") is True
+                            or (isinstance(provenance, dict) and provenance.get("simulated") is True)
                             or str(metadata.get("schema")) in _OFFLINE_SCHEMAS):
                         raise ValueError(f"Offline evidence cannot qualify a station case: {filename}")
                     _check_version(metadata.get("software_version"), candidate)

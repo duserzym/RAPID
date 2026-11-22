@@ -16,6 +16,14 @@ Lightweight VRM decay logger and live viewer for 3-axis SQUID output, based on V
 - Config persistence in `~/.rapidpy_vrm_config.json`
 - Custom `VRM` icon for app window and compiled executables
 
+## Practice from RAPID
+
+With No-Communication enabled in the main app, open **Diagnostics → VRM Data
+Collection**. The logger supplies a simulated SQUID decay. Take a baseline,
+start logging, and stop to finalize the CSV and session manifest. Each session
+has its own directory under `SIMULATED` next to the selected CSV path. The
+manifest identifies the source as simulated.
+
 ## Visual Theme
 
 Applied palette (UMN-inspired maroon and gold):

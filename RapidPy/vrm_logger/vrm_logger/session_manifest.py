@@ -110,15 +110,17 @@ def validate_handoff_context(
 
 def load_handoff_context(env: Mapping[str, str] | None = None) -> dict[str, object]:
     source = os.environ if env is None else env
-    raw_path = source.get(VRM_CONTEXT_ENV, "").strip()
-    if not raw_path:
+    raw_path = source.get(VRM_CONTEXT_ENV)
+    if raw_path is None:
         return {
             "schema": "rapidpy.vrm.standalone_context.v1",
             "association_status": "standalone",
             "run_association_status": "unassociated",
             "reason": "no main-app handoff context was provided",
         }
-    path = Path(raw_path)
+    if not raw_path.strip():
+        return _handoff_error(None, "The main-app handoff path is empty.")
+    path = Path(raw_path.strip())
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:

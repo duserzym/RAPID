@@ -166,6 +166,56 @@ def _check_measurement_backup(app, root):
         return len(archives) == 1 and load_magic_directory(archives[0]).specimens[0].steps[0].demag_label == "NRM"
 
 
+def _check_vrm_practice(app, root):
+    from PySide6 import QtCore
+    from rapid_main.vrm import VRM_CONTEXT_ENV, build_vrm_launch_context, write_vrm_launch_context
+    from vrm_logger.app import MainWindow
+    from vrm_logger.session_manifest import file_sha256
+
+    output_dir = root / "vrm-output"
+    context = build_vrm_launch_context(nocomm=True, intended_output_dir=output_dir)
+    handoff = write_vrm_launch_context(root, context=context)
+    previous_handoff = os.environ.get(VRM_CONTEXT_ENV)
+    os.environ[VRM_CONTEXT_ENV] = str(handoff)
+    window = None
+
+    def wait_until(predicate):
+        timer = QtCore.QElapsedTimer()
+        timer.start()
+        while not predicate() and timer.elapsed() < 5000:
+            app.processEvents()
+            QtCore.QThread.msleep(10)
+        return predicate()
+
+    try:
+        window = MainWindow()
+        if window.connect_btn.isEnabled() or not window.baseline_btn.isEnabled():
+            return False
+        window.interval_spin.setValue(0.05)
+        window.baseline_btn.click()
+        window.start_btn.click()
+        if not wait_until(lambda: len(window._time) >= 2):
+            return False
+        window.stop_btn.click()
+        if not wait_until(lambda: window._thread is None):
+            return False
+        manifests = list((output_dir / "SIMULATED").glob("*/*.vrm.json"))
+        if len(manifests) != 1:
+            return False
+        manifest = json.loads(manifests[0].read_bytes())
+        csv_path = manifests[0].with_name("vrm_log.csv")
+        return (manifest["provenance"]["simulated"] is True and manifest["outcome"] == "operator_stopped"
+                and manifest["row_count"] >= 2 and manifest["output_sha256"] == file_sha256(csv_path))
+    finally:
+        if window is not None:
+            window.close()
+            window.deleteLater()
+        if previous_handoff is None:
+            os.environ.pop(VRM_CONTEXT_ENV, None)
+        else:
+            os.environ[VRM_CONTEXT_ENV] = previous_handoff
+
+
 def _check_sample_index_registry(window, root):
     from rapid_main.dialogs.sample_select import SampleSelectDialog
 
@@ -237,16 +287,19 @@ def run_smoke_test() -> int:
             measurement_archive = _check_measurement_archive(root)
             measurement_backup = _check_measurement_backup(app, root)
             sample_index_registry = _check_sample_index_registry(window, root)
+            vrm_practice = _check_vrm_practice(app, root)
             report = {
                 "schema": "rapidpy.release_smoke.v1", "simulated": True,
                 "software_version": software_version(),
                 "ok": (window.config.general.nocomm and all(helpers.values()) and transverse_probe
-                       and webcam_decode and measurement_archive and measurement_backup and sample_index_registry),
+                       and webcam_decode and measurement_archive and measurement_backup and sample_index_registry
+                       and vrm_practice),
                 "transverse_probe": transverse_probe,
                 "webcam_decode": webcam_decode,
                 "measurement_archive": measurement_archive,
                 "measurement_backup": measurement_backup,
                 "sample_index_registry": sample_index_registry,
+                "vrm_practice": vrm_practice,
                 "compact_display_check": True,
                 "panels": window._stack.count(), "helpers": helpers,
                 "width": window.width(), "height": window.height(),

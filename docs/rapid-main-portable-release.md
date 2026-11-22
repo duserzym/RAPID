@@ -33,13 +33,19 @@ The individual diagnostic entry points are also available.
 
 The smoke test uses temporary configuration and INI preferences, forces
 No-Communication, constructs all six main panels, imports all six helper entry
-points, decodes a generated video clip in Webcam Monitor, and prints JSON.
+points, decodes a generated video clip in Webcam Monitor, verifies a simulated
+VRM recording, and prints JSON.
 It uses an isolated configuration and leaves instrument connections untouched.
 Startup diagnostics are read-only. Configuration normally
 lives in `~/.rapid/config.json`; `RAPID_CONFIG` selects a different file.
 Windows preferences and queue recovery state belong to the operator account.
 Main-window helper launches use separate bundled processes; VRM retains its
 ownership leases and handoff environment.
+
+In No-Communication mode, **Diagnostics → VRM Data Collection** opens the
+simulated SQUID. Select **Take Baseline**, **Start Logging**, and **Stop** to
+practice the recording workflow. The logger writes each session's CSV and
+manifest in its own `SIMULATED` subfolder next to the selected output path.
 
 **View → Webcam Monitor** lists USB cameras by their operating-system device
 identity and opens supported RTSP or HTTP(S) streams through Qt Multimedia.

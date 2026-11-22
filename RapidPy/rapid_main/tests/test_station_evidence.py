@@ -86,6 +86,11 @@ class StationEvidenceTests(unittest.TestCase):
         self.assertEqual(result["cases"]["rockmag/K1"]["verdict"], "pass")
         self.assertIn("Offline evidence", result["errors"][0]["error"])
 
+        self.attachment.write_bytes(b'{"schema":"rapidpy.vrm.session_manifest.v2","provenance":{"simulated":true}}')
+        result = self.audit(self.record("vrm/V2"))
+        self.assertEqual(result["cases"]["vrm/V2"]["verdict"], "invalid")
+        self.assertIn("Offline evidence", result["errors"][0]["error"])
+
     def test_station_case_rejects_an_attachment_from_another_runtime_revision(self):
         self.attachment.write_text(json.dumps({"simulated": False, "software_version": "4.0.0+" + "3" * 40}),
                                    encoding="utf-8")

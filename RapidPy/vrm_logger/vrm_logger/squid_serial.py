@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import time
 from typing import Final
@@ -9,6 +10,28 @@ import serial
 
 class SquidCommunicationError(RuntimeError):
     """Raised when the SQUID serial line fails or returns invalid data."""
+
+
+class SimulatedSquidClient:
+    """Generate an in-memory decay signal for VRM practice."""
+
+    is_connected = True
+    _baseline = (0.40, -0.25, 1.10)
+
+    def __init__(self) -> None:
+        self._started_at: float | None = None
+
+    def take_baseline(self) -> tuple[float, float, float]:
+        self._started_at = None
+        return self._baseline
+
+    def read_xyz_volts(self) -> tuple[float, float, float]:
+        now = time.monotonic()
+        if self._started_at is None:
+            self._started_at = now
+        decay = math.exp(-(now - self._started_at) / 12.0)
+        x, y, z = self._baseline
+        return x + 0.12 * decay, y - 0.09 * decay, z + 0.04 * decay
 
 
 FLOAT_RE: Final[re.Pattern[str]] = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")

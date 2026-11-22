@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PySide6 import QtCore, QtWidgets
+
 from rapid_main.app import MainWindow as RapidMainWindow
 from rapid_main.device_ownership import DeviceOwnershipManager
 from rapid_main.vrm import (
@@ -22,6 +24,7 @@ from vrm_logger.session_manifest import (
     vrm_manifest_path,
     write_vrm_output_manifest,
 )
+from vrm_logger.app import MainWindow as VrmWindow
 
 
 class VrmIntegrationTests(unittest.TestCase):
@@ -107,6 +110,84 @@ class VrmIntegrationTests(unittest.TestCase):
         self.assertEqual(invalid["association_status"], "invalid")
         self.assertIn("unsupported handoff schema", invalid["error"])
         self.assertEqual(standalone["association_status"], "standalone")
+        self.assertEqual(load_handoff_context({VRM_CONTEXT_ENV: ""})["association_status"], "invalid")
+
+    def test_practice_window_records_a_simulated_session_without_serial_access(self) -> None:
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        self.addCleanup(app.setStyleSheet, app.styleSheet())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            handoff = write_vrm_launch_context(root, context=self._context(intended_output_dir=root))
+            live_csv = root / "vrm_log.csv"
+            live_csv.write_bytes(b"existing live output\n")
+            with (patch.dict("os.environ", {VRM_CONTEXT_ENV: str(handoff)}),
+                  patch("vrm_logger.app.load_config") as load,
+                  patch("vrm_logger.app.save_config") as save,
+                  patch("vrm_logger.app.SquidSerialClient") as serial,
+                  patch("vrm_logger.app.list_ports.comports") as ports):
+                window = VrmWindow()
+                try:
+                    self.assertIn("Simulated", window.windowTitle())
+                    self.assertFalse(window.connect_btn.isEnabled())
+                    self.assertEqual(Path(window.file_edit.text()), live_csv)
+                    window.interval_spin.setValue(0.05)
+                    window.baseline_btn.click()
+                    window.start_btn.click()
+                    timer = QtCore.QElapsedTimer()
+                    timer.start()
+                    while len(window._time) < 2 and timer.elapsed() < 5000:
+                        app.processEvents()
+                        QtCore.QThread.msleep(5)
+                    self.assertGreaterEqual(len(window._time), 2)
+                    window.stop_btn.click()
+                    timer.restart()
+                    while window._thread is not None and timer.elapsed() < 5000:
+                        app.processEvents()
+                        QtCore.QThread.msleep(5)
+                    self.assertIsNone(window._thread)
+                finally:
+                    window.close()
+                    window.deleteLater()
+                    app.processEvents()
+                serial.assert_not_called()
+                ports.assert_not_called()
+                load.assert_not_called()
+                save.assert_not_called()
+
+            output, = (root / "SIMULATED").glob("*/vrm_log.csv")
+            manifest, = output.parent.glob("*.vrm.json")
+            payload = json.loads(manifest.read_bytes())
+            self.assertTrue(payload["provenance"]["simulated"])
+            self.assertEqual(payload["device"]["port"], "")
+            self.assertEqual(payload["handoff_context"]["sample_id"], "VRM_DEMO")
+            self.assertEqual(payload["outcome"], "operator_stopped")
+            self.assertGreaterEqual(payload["row_count"], 2)
+            self.assertEqual(payload["output_sha256"], hashlib.sha256(output.read_bytes()).hexdigest())
+            self.assertEqual(live_csv.read_bytes(), b"existing live output\n")
+
+    def test_invalid_window_handoff_keeps_serial_unavailable(self) -> None:
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        self.addCleanup(app.setStyleSheet, app.styleSheet())
+        with tempfile.TemporaryDirectory() as directory:
+            bad_context = Path(directory) / "missing.json"
+            with (patch.dict("os.environ", {VRM_CONTEXT_ENV: str(bad_context)}),
+                  patch("vrm_logger.app.load_config") as load,
+                  patch("vrm_logger.app.SquidSerialClient") as serial,
+                  patch("vrm_logger.app.list_ports.comports") as ports):
+                window = VrmWindow()
+                try:
+                    self.assertIn("VRM launch blocked", window.status_label.text())
+                    self.assertFalse(window.connect_btn.isEnabled())
+                    self.assertFalse(window.baseline_btn.isEnabled())
+                    window._connect()
+                    window._refresh_ports()
+                finally:
+                    window.close()
+                    window.deleteLater()
+                    app.processEvents()
+                serial.assert_not_called()
+                ports.assert_not_called()
+                load.assert_not_called()
 
     def test_vrm_logger_finalizes_hashed_immutable_session_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -2929,3 +2929,9 @@ station procedure and stamps its built revision into runtime evidence.
 pending copies across restarts and retries them for their original destination.
 Retries verify the accepted artifact index and reuse the matching specimen history
 archive when a newer run has replaced that publication.
+
+**VRM practice checkpoint (2026-11-22).** The VRM helper honors the main app's
+No-Communication handoff. Operators can take a simulated baseline, log decay
+data, and verify a finalized `.vrm.json` beside the CSV in a separate session
+folder. The portable verifier runs this workflow and the station audit rejects
+simulated VRM evidence for physical cases.
