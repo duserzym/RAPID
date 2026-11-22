@@ -1480,15 +1480,28 @@ class MainWindow(QtWidgets.QMainWindow):
         from rapidpy_common.queue_safety import QueueSafetyStore
         from .queue_restart import QueueRestartRecovery, RestartShutdownAttestation, require_interrupted_native_queue
 
-        if (not self._uses_native_queue() or self._queue_native_session is not None
+        session = self._queue_native_session
+        if (not self._uses_native_queue() or (session is not None and not shutdown)
                 or self._shutdown_cleanup_requested
-                or self._queue_active or self._queue_command_thread is not None or self._measurement.is_active()):
-            self.set_status('Restart recovery requires an idle native station. Use Retry Queue Shutdown for a live queue owner.')
+                or self._queue_active or self._queue_command_thread is not None or self._measurement.is_active()
+                or self._queue_pending_finalize is not None):
+            self.set_status('Queue recovery requires an idle native station. Wait for the original worker to exit.')
             return False
 
         backend, vacuum = self._measurement_backend, self._vacuum_backend
         recovery = None
+        resources = ('measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptibility')
+        leases = []
         try:
+            startup = self._queue_native_startup if session is not None else None
+            if session is not None:
+                if (startup is None or startup.session is not session or session._owner is not None
+                        or session._lease is None
+                        or any(self._ownership.owner_of(resource) != 'queue_workflow' for resource in resources)):
+                    raise RuntimeError('Live shutdown requires the original queue lease and all device reservations.')
+                terminal = backend._queue_terminal_cleanup
+                if terminal is not None and terminal._close_token is not None:
+                    raise RuntimeError('Use Retry Queue Shutdown to settle the original journaled closes.')
             state = QueueSafetyStore(backend._safety_store.path).read()
             operator = self.config.general.operator
             attestation = None
@@ -1507,11 +1520,16 @@ class MainWindow(QtWidgets.QMainWindow):
                     return False
                 attestation = RestartShutdownAttestation.confirm(state, operator, specimen_secured=True,
                     empty_rod=True, work_area_clear=True)
-            recovery = QueueRestartRecovery(backend, vacuum, state, operator=operator, shutdown=attestation)
-            # Only the original-stage capability and OS lease allow entry here.
-            # Ordinary editor/diagnostic requests still use the fault guard.
-            lease = self._ownership.acquire_many(('measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptibility'),
-                                                'queue_restart_recovery', allow_reentrant=False)
+            if (self._queue_native_session is not session or self._queue_active or self._shutdown_cleanup_requested
+                    or self._queue_command_thread is not None or self._measurement.is_active()
+                    or self._queue_pending_finalize is not None):
+                raise RuntimeError('The original queue changed during shutdown confirmation.')
+            recovery = QueueRestartRecovery(backend, vacuum, state, operator=operator, shutdown=attestation,
+                                            live_startup=startup)
+            if session is None:
+                # Ordinary diagnostics still use their global fault guard.
+                lease = self._ownership.acquire_many(resources, 'queue_restart_recovery', allow_reentrant=False)
+                leases = [lease, recovery]
         except Exception as exc:
             if recovery is not None:
                 recovery.release()
@@ -1536,7 +1554,7 @@ class MainWindow(QtWidgets.QMainWindow):
             state = 'idle'
         self._queue_pending_finalize = dict(state=state, reason=reason, return_to_safe=False,
             clear_plan=True, clear_current=True, clear_command=True, failure_reason='Interrupted queue recovery failed')
-        self._start_queue_command_worker(None, recovery.run, [lease, recovery], recover_on_error=False)
+        self._start_queue_command_worker(None, recovery.run, leases, recover_on_error=False)
         self.set_flow_state('returning')
         self.set_status(starting)
         return True

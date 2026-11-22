@@ -1,5 +1,6 @@
 """Only original verified shutdown and interrupted cutoff may be handled on restart."""
 import copy
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -388,3 +389,110 @@ class QueueRestartTests(QueueStartupFixture, unittest.TestCase):
         self.assertEqual(state['stage']['plan']['action'], 'restart_shutdown')
         self.assertEqual(state['stage']['status'], 'aborted')
         self.store.verify_history(state)
+
+
+class LiveQueueShutdownTests(QueueStartupFixture, unittest.TestCase):
+    def interrupt_live_queue(self):
+        startup = self.prepare()
+        with self.arm_xy_edges():
+            worker = self.command(self.backend.start_queue_lifetime)
+        self.assertTrue(worker.ok, worker.error)
+        self.load_backend()
+        instruments = startup.instruments
+        cfg = self.backend._config.squid
+        handle = SimpleNamespace(port=cfg.port, baudrate=cfg.baud, parity='N', bytesize=8, stopbits=1,
+                                 is_open=True)
+
+        def close():
+            self.assertEqual(self.store.pending()['stage']['record']['status'], 'release_ready')
+            handle.is_open = False
+
+        handle.close = close
+        with startup.session.claim():
+            child = startup.session.child_store
+            token = child.begin('acquisition', {'action': 'squid'}, self.backend._acquisition_safety_profile())
+            self.backend._geometry_stage_token = token
+            instruments.raw._serial = handle
+            instruments.validate()
+            self.backend._geometry_stage_token = None
+        self.lift_serial().position, self.lift_serial().status = 0, 16
+        return startup, handle
+
+    def shutdown_live(self, startup):
+        state = self.store.pending()
+        attestation = RestartShutdownAttestation.confirm(state, 'Operator', specimen_secured=True,
+            empty_rod=True, work_area_clear=True)
+        recovery = QueueRestartRecovery(self.backend, self.vacuum, state, operator='Operator',
+            shutdown=attestation, live_startup=startup)
+        return self.command(recovery.run)
+
+    def test_live_abort_settles_original_handles_without_replaying_motion(self):
+        startup, squid = self.interrupt_live_queue()
+        original = self.store.pending()
+        motors = [(client._serial, len(client._serial.writes)) for client in self.motor._connections.values()]
+        vacuum_writes = len(self.vacuum_serial.writes)
+        with patch.object(serial, 'Serial', side_effect=AssertionError('Original transports were still open')):
+            worker = self.shutdown_live(startup)
+        self.assertTrue(worker.ok, worker.error)
+        current = self.store.read()
+        self.assertEqual(current['token'], original['token'])
+        self.assertEqual(current['stage']['token'], original['stage']['token'])
+        self.assertEqual(current['stage']['plan'], original['stage']['plan'])
+        self.assertEqual(current['stage']['record']['scope'], 'live')
+        self.assertEqual(current['stage']['record']['instrument_closures']['closed'],
+            dict(squid=True, susceptibility=True))
+        self.assertEqual(current['record']['settlement']['outcome'], 'aborted')
+        self.assertEqual([cmd for cmd in self.vacuum_serial.writes[vacuum_writes:] if cmd != b'\r'],
+            [b'C', b'10V00', b'D', b'10M00'])
+        self.assertFalse(squid.is_open or self.vacuum_serial.is_open)
+        for stream, before in motors:
+            self.assertFalse(stream.is_open)
+            expected = [b'@16 3 0\r\n', b'@16 12 1 7\r\n', b'@16 12 1 7\r\n']
+            if stream.port == 'COM5':
+                expected.append(b'@16 20\r\n')
+            self.assertEqual(stream.writes[before:], expected * 2)
+        self.assertIsNone(self.backend._queue_startup)
+        self.assertIsNone(self.backend._queue_specimen_geometry)
+        self.assertIsNotNone(startup.session._lease)
+        self.store.verify_history(current)
+
+    def test_unverified_clearance_keeps_original_grip_connection(self):
+        startup, squid = self.interrupt_live_queue()
+        self.lift_serial().status = 0
+        before = list(self.vacuum_serial.writes)
+        worker = self.shutdown_live(startup)
+        self.assertFalse(worker.ok)
+        self.assertIn('top-reference switch', worker.error)
+        self.assertEqual(self.vacuum_serial.writes, before)
+        self.assertTrue(self.vacuum_serial.is_open and squid.is_open)
+        self.assertIs(self.vacuum._queue_binding.session, startup.session)
+        self.assertEqual(self.store.pending()['stage']['record']['status'], 'failed')
+
+    def test_failed_science_close_keeps_original_handle_for_verified_retry(self):
+        startup, squid = self.interrupt_live_queue()
+        with patch.object(squid, 'close', side_effect=OSError('injected SQUID close')):
+            worker = self.shutdown_live(startup)
+        self.assertFalse(worker.ok)
+        self.assertIn('injected SQUID close', worker.error)
+        record = self.store.pending()['stage']['record']
+        self.assertTrue(record['vacuum_handle_closed'])
+        self.assertIs(startup.instruments.raw._serial, squid)
+        self.assertFalse(record['instrument_closures']['closed']['squid'])
+        self.assertIs(self.backend._safety_store, startup.session.child_store)
+
+        self.vacuum_serial = SerialInterface({'10V00': 'CLOSED', '10M00': 'OFF'})
+        worker = self.shutdown_live(startup)
+        self.assertTrue(worker.ok, worker.error)
+        self.assertFalse(squid.is_open)
+        self.assertIsNone(self.store.pending())
+
+    def test_changed_motor_handle_is_refused_before_journal_or_io(self):
+        startup, _ = self.interrupt_live_queue()
+        pending, commands = self.store.pending(), list(self.commands)
+        vacuum_writes = list(self.vacuum_serial.writes)
+        with patch.object(self.motor._connections['COM5'], '_serial', LiftSerial(port='COM5')):
+            worker = self.shutdown_live(startup)
+        self.assertFalse(worker.ok)
+        self.assertIn('original live station', worker.error)
+        self.assertEqual((self.store.pending(), self.commands, self.vacuum_serial.writes),
+            (pending, commands, vacuum_writes))

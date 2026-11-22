@@ -3,7 +3,7 @@ import copy
 from dataclasses import asdict
 import uuid
 
-from rapidpy_common.hardware_safety import HardwareSafetyError
+from rapidpy_common.hardware_safety import HardwareSafetyError, _canonical
 
 
 class QueueInstrumentLifetime:
@@ -139,6 +139,19 @@ class QueueInstrumentLifetime:
                 or stage['plan'].get('action') != 'queue_terminal_close'
                 or stage['plan'].get('instruments', {}).get('profile') != self.profile):
             raise HardwareSafetyError('Original pending terminal close stage is required to settle instruments.')
+        self._close(name)
+
+    def close_for_shutdown(self, name, readiness):
+        root = self.validate()
+        stage = root['stage']
+        if (not stage or stage['status'] != 'pending' or readiness.scope != 'live'
+                or readiness.status != 'release_ready' or readiness.stage_token != stage['token']
+                or _canonical(stage['record']) != _canonical(readiness.to_dict())):
+            raise HardwareSafetyError('Original live shutdown readiness is required to close scientific instruments.')
+        self.closing = True
+        self._close(name)
+
+    def _close(self, name):
         if self.closed[name]:
             return
         adapter = self.squid if name == 'squid' else self.bridge

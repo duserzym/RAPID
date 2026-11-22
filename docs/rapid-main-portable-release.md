@@ -48,11 +48,16 @@ ownership leases and handoff environment.
    whose transport closures were already verified. Field cutoff and motor stop
    leave the original queue latched until specimen support and vacuum are settled.
 8. To abort the interrupted queue and shut down the station, sign in and open
-   **Diagnostics > Shut Down Interrupted Queue…**. Confirm only after all
+   **Diagnostics > Shut Down Interrupted Queue…**. This is available after the
+   original worker has exited or after restarting RAPID. Confirm only after all
    specimens are secured independently of vacuum, the control rod is empty,
    and the work area is clear. RAPID requires fresh field cutoff, stopped axes,
    lift clearance, positive valve and pump OFF replies, and transport closure
-   before recording the queue as aborted. A failed check leaves it pending.
+   before recording the queue as aborted. With the original app session still
+   open, RAPID also closes the original SQUID and susceptibility connections.
+   A failed check leaves the queue pending. Use **Retry Queue Shutdown** when
+   RAPID had already recorded the original terminal connection closures as the
+   remaining operation.
    Review interrupted rows after settling the station. Re-run starts a new
    acquisition, while Skip and Abort exclude the row.
 

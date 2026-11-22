@@ -57,10 +57,15 @@ class RoutedMotorSerialClient(MotorSerialClient):
                 self.disconnect()
                 raise
 
-    def connect_for_stop(self, owner, *, baudrate=57600, timeout=.35):
+    def connect_for_stop(self, owner, *, baudrate=57600, timeout=.35, original_handles=None):
         """Attempt each port independently. Retain a failed close for the same recovery."""
         with self._io_lock:
-            if not owner or (self._connections and self._stop_owner != owner):
+            original_session = original_handles is not None and self._stop_owner in (None, owner)
+            retains_original = original_session and all(
+                port in original_handles and client is original_handles[port][0]
+                and client._serial is original_handles[port][1] for port, client in self._connections.items())
+            if (not owner or (original_handles is not None and not retains_original)
+                    or (self._connections and self._stop_owner != owner and not retains_original)):
                 raise HardwareError('The original stop recovery must own any retained motor handles.')
             self._stop_owner = owner
             self._connection_id = None  # These handles cannot establish a motion reference.
@@ -71,6 +76,8 @@ class RoutedMotorSerialClient(MotorSerialClient):
                     client = MotorSerialClient(self.config, trace=self._trace)
                     self._connections[port] = client
                 try:
+                    if client._serial is not None and not client.is_connected:
+                        raise HardwareError('The retained motor transport is not open.')
                     if not client.is_connected:
                         client.open_for_stop(port, baudrate, timeout)
                     if not client.is_connected or str(client._serial.port).upper() != port:

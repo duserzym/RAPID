@@ -173,7 +173,7 @@ def validate_queue_state(state):
     if stage['status'] == 'held' and (not _verified_vacuum_stage(stage) or state['history_head'] is None):
         raise ValueError('queue vacuum hold lacks native acknowledgement evidence')
     if stage['status'] == 'aborted':
-        _validate_restart_shutdown(stage, bindings)
+        _validate_restart_shutdown(stage, state['profile'])
         if state['history_head'] is None:
             raise ValueError('Aborted stage lacks linked shutdown evidence.')
         if state['status'] == 'verified':
@@ -184,13 +184,21 @@ def validate_queue_state(state):
         raise ValueError('queue was cleared with an unfinished stage')
 
 
-def _validate_restart_shutdown(stage, bindings):
+def _validate_restart_shutdown(stage, profile):
     """A stopped axis alone cannot establish a completed interrupted-queue abort."""
     record = stage['record']
+    bindings = profile['stage_profiles']
     attestation = record['shutdown_attestation']
     vacuum = record['vacuum_release']
     fields = record['field_record']
     samples = record['motor_observations']
+    scope = record.get('scope', 'restart')
+    closures = record.get('instrument_closures')
+    if (scope not in {'live', 'restart'} or (scope == 'live'
+            and (not isinstance(closures, dict) or closures['profile'] != profile['resources']['instruments']
+                 or set(closures['closed']) != {'squid', 'susceptibility'}
+                 or any(closures['closed'][name] is not True for name in closures['closed'])))):
+        raise ValueError('Live abort requires closure of both original scientific instruments.')
     if (record['schema'] != 'rapidpy.queue_restart_containment.v1' or record['status'] != 'aborted'
             or record['stage_token'] != stage['token'] or record['stage_family'] != stage['family']
             or record['safe_state_confirmed'] is not False or record['simulated'] is not False or record['errors']
@@ -454,12 +462,12 @@ class QueueSafetyStore(HardwareSafetyStore):
                 raise HardwareSafetyError('Original restart shutdown release intent is required.')
             ready = stage['record']
             if any(ready.get(key) != snapshot.get(key) for key in ('field_record', 'fields_off_verified',
-                    'motor_observations', 'motors_stopped_verified', 'clearance_verified', 'stage_token')):
+                    'motor_observations', 'motors_stopped_verified', 'clearance_verified', 'stage_token', 'scope')):
                 raise HardwareSafetyError('Restart shutdown evidence changed after authorizing OFF.')
             self.verify_history(state)
             stage.update(status='aborted', record=snapshot)
             try:
-                _validate_restart_shutdown(stage, profile['stage_profiles'])
+                _validate_restart_shutdown(stage, profile)
             except (ValueError, KeyError, TypeError) as exc:
                 raise HardwareSafetyError(str(exc)) from exc
             root = QueueSafeStateRecord(True, True, True).to_dict()

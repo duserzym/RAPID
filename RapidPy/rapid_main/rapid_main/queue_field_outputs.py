@@ -124,10 +124,12 @@ class QueueFieldOutputs:
     def cutoff_for_containment(self, session, intent):
         root = self._validate(session)
         stage = root['stage']
-        if (session.is_recovery is not True or not stage or stage['status'] != 'pending'
+        scope = 'restart' if session.is_recovery else 'live'
+        if (scope != intent.scope or (scope == 'live' and intent.shutdown_attestation is None)
+                or not stage or stage['status'] != 'pending'
                 or stage['record'] != _snapshot(intent.to_dict()) or intent.status != 'started'):
-            raise HardwareSafetyError('The original persisted restart containment intent is required.')
-        operation = dict(action='restart_containment_cutoff', queue_stage_token=stage['token'],
+            raise HardwareSafetyError('The original persisted containment intent is required.')
+        operation = dict(action=f'{scope}_containment_cutoff', queue_stage_token=stage['token'],
                          attempt_id=intent.record_id, operator=intent.operator)
         return self._perform_cutoff(session, operation, root['run_id'])
 

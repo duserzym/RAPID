@@ -143,11 +143,17 @@ class RestartShutdownAttestation:
 
 
 class QueueRestartRecovery:
-    def __init__(self, backend, vacuum, expected_state, *, operator, shutdown=None):
+    def __init__(self, backend, vacuum, expected_state, *, operator, shutdown=None, live_startup=None):
         require_interrupted_native_queue(expected_state)
-        if (backend._config.general.nocomm is not False or not isinstance(operator, str) or not operator.strip()
-                or getattr(backend._safety_store, 'session', None) is not None):
-            raise HardwareSafetyError('Restart recovery requires the idle native station and a named operator.')
+        if backend._config.general.nocomm is not False or not isinstance(operator, str) or not operator.strip():
+            raise HardwareSafetyError('Queue recovery requires the native station and a named operator.')
+        original_session = getattr(backend._safety_store, 'session', None)
+        if live_startup is None and original_session is not None:
+            raise HardwareSafetyError('Restart recovery requires the idle native station.')
+        if live_startup is not None and (not isinstance(live_startup, QueueNativeStartup)
+                or live_startup.backend is not backend or live_startup.vacuum is not vacuum
+                or live_startup.session is not original_session or original_session.is_recovery or shutdown is None):
+            raise HardwareSafetyError('Live shutdown requires the original queue owner and operator confirmation.')
         if shutdown is None:
             self.kind = restart_stage(expected_state)
         else:
@@ -156,14 +162,18 @@ class QueueRestartRecovery:
             shutdown.require(expected_state, operator)
             self.kind = 'shutdown'
         self._shutdown = shutdown
+        self._live_startup = live_startup
         self._expected = _canonical(expected_state)
         self._backend, self._vacuum, self._operator = backend, vacuum, operator.strip()
-        store = QueueSafetyStore(backend._safety_store.path)
-        self.session = QueueWorkflowSession.recover(store, expected_state['profile'])
+        if live_startup is None:
+            store = QueueSafetyStore(backend._safety_store.path)
+            self.session = QueueWorkflowSession.recover(store, expected_state['profile'])
+        else:
+            self.session = live_startup.session
         try:
             self._state()
         except BaseException:
-            self.session.release()
+            self.release()
             raise
 
     def _state(self):
@@ -174,11 +184,15 @@ class QueueRestartRecovery:
         return state
 
     def release(self):
-        self.session.release()
+        if self._live_startup is None:
+            self.session.release()
 
     def run(self):
         with self.session.claim():
             state = self._state()
+            if self._live_startup is not None:
+                self._run_live_shutdown(state)
+                return
             stopping = self.kind in {'containment', 'shutdown'}
             stage = state['stage']
             stop_owner = (state['token'], stage['token']) if stopping and stage is not None else None
@@ -194,20 +208,57 @@ class QueueRestartRecovery:
                 fields.verify_off(self.session, recovery=True, recovery_operator=self._operator)
                 return
             if stopping:
-                if self.kind == 'shutdown' and (stage is None or stage['status'] != 'pending'):
-                    self.session.child_store.begin('motion', dict(action='restart_shutdown',
-                        interrupted_stage_token=stage['token'] if stage is not None else None), table.profile)
-                    state = self.session.store._queue(self.session.token)
-                    stop_owner = (state['token'], state['stage']['token'])
-                self._contain(state, table, fields, stop_owner)
+                self._start_containment(state, table, fields)
                 return
             record = _terminal_record(self.session.store, state, self._operator)
             self.session.store.finish_queue(self.session.token, state['profile'], record)
 
+    def _run_live_shutdown(self, state):
+        from .hardware_contracts import _build_motor_controller_config
+        from .queue_station import QueueStationGeometry
+        startup = self._live_startup
+        backend = self._backend
+        terminal = backend._queue_terminal_cleanup
+        if terminal is not None and terminal._close_token is not None:
+            raise HardwareSafetyError('Use Retry Queue Shutdown to settle the original journaled closes.')
+        startup._validate()
+        binding = self._vacuum._queue_binding
+        controller = self._vacuum._pump_only_controller
+        serial = getattr(controller, '_serial', None)
+        vacuum_handles = (binding, controller, serial)
+        if (state['profile']['stage_profiles']['motion'] != startup.table.profile
+                or startup.table.geometry != QueueStationGeometry.from_config(backend._config, use_xy_table=True)
+                or startup.table.motor.config != _build_motor_controller_config(backend._config)
+                or backend._config.motor_station.ports != {key: axis.port for key, axis in startup.table.axes.items()}
+                or backend._config.motor_station.addresses != {key: axis.address for key, axis in startup.table.axes.items()}
+                or backend._config.motor_station.baud != 57600
+                or asdict(backend._config.vacuum) != asdict(self._vacuum._cfg)
+                or self._vacuum.queue_station_binding() != state['profile']['stage_profiles']['vacuum']
+                or (binding is not None and binding.session is not self.session)
+                or (startup.vacuum_handles is None and (binding is not None or serial is not None))
+                or (startup.vacuum_handles is not None and any(
+                    old is not current for old, current in zip(startup.vacuum_handles, vacuum_handles)))
+                or any(port not in startup.motor_handles or client is not startup.motor_handles[port][0]
+                       or client._serial is not startup.motor_handles[port][1]
+                       for port, client in startup.table.motor._connections.items())):
+            raise HardwareSafetyError('Restore the original live station configuration and handles before shutdown.')
+        self._start_containment(state, startup.table, startup.fields)
+
+    def _start_containment(self, state, table, fields):
+        stage = state['stage']
+        if self.kind == 'shutdown' and (stage is None or stage['status'] != 'pending'):
+            action = 'live_shutdown' if self._live_startup is not None else 'restart_shutdown'
+            self.session.child_store.begin('motion', dict(action=action,
+                interrupted_stage_token=stage['token'] if stage is not None else None), table.profile)
+            state = self.session.store._queue(self.session.token)
+        self._contain(state, table, fields, (state['token'], state['stage']['token']))
+
     def _contain(self, state, table, fields, stop_owner):
         stage = state['stage']
+        startup = self._live_startup
         intent = QueueContainmentRecord(stage['token'], stage['family'], self._operator,
-            state['history_head'], shutdown_attestation=asdict(self._shutdown) if self._shutdown else None)
+            state['history_head'], shutdown_attestation=asdict(self._shutdown) if self._shutdown else None,
+            scope='live' if startup is not None else 'restart')
         child = self.session.child_store
         # This records intent ahead of even a serial open or an output cutoff.
         # The original plan stays latched and earlier evidence stays linked.
@@ -228,9 +279,11 @@ class QueueRestartRecovery:
         clearance = False
         vacuum_record = None
         vacuum_closed = False
+        instrument_closures = None
         motor = table.motor
         try:
-            available, open_errors = motor.connect_for_stop(stop_owner, baudrate=self._backend._config.motor_station.baud)
+            available, open_errors = motor.connect_for_stop(stop_owner, baudrate=self._backend._config.motor_station.baud,
+                original_handles=startup.motor_handles if startup is not None else None)
             motor_errors.extend(open_errors)
             samples, failure = table._stopped(available_ports=available)
             if failure:
@@ -239,7 +292,11 @@ class QueueRestartRecovery:
             if self._shutdown is not None and stopped and not errors:
                 try:
                     table._clearance(samples)
-                    self._vacuum.queue_connect(self.session)
+                    try:
+                        self._vacuum.queue_connect(self.session)
+                    finally:
+                        if startup is not None:
+                            startup.remember_vacuum_handles()
                     # Confirm that clearance and stationarity still hold on the
                     # live motor connection immediately before vacuum commands.
                     samples, error = table._stopped(available_ports=available)
@@ -252,21 +309,27 @@ class QueueRestartRecovery:
                         fields_off_verified=True, motor_observations=samples, motors_stopped_verified=True,
                         clearance_verified=True)
                     child.finish(stage['token'], stage['profile'], ready)
-                    vacuum_record = self._vacuum.queue_release_for_restart_shutdown(self.session, ready)
+                    vacuum_record = self._vacuum.queue_release_for_shutdown(self.session, ready)
                     if not vacuum_record.safe_state_confirmed:
                         errors.append('Vacuum OFF: ' + vacuum_record.error)
+                    elif startup is not None:
+                        instrument_closures = self._close_live_instruments(startup.instruments, ready, errors)
                 except Exception as exc:
-                    errors.append(f'Restart shutdown: {exc}')
+                    errors.append(f'Queue shutdown: {exc}')
         except Exception as exc:
             motor_errors.append(f'Motor stop: {exc}')
         finally:
             vacuum_binding = self._vacuum._queue_binding
-            if self._shutdown is not None and vacuum_binding is not None and vacuum_binding.session is self.session:
+            if (self._shutdown is not None and vacuum_binding is not None and vacuum_binding.session is self.session
+                    and (startup is None or vacuum_record is not None and vacuum_record.safe_state_confirmed)):
                 try:
-                    self._vacuum.queue_close_restart_transport(self.session)
+                    self._vacuum.queue_close_shutdown_transport(self.session, vacuum_record)
                     vacuum_closed = True
                 except Exception as exc:
                     errors.append(f'Vacuum close: {exc}')
+                finally:
+                    if startup is not None:
+                        startup.remember_vacuum_handles()
             try:
                 motor.disconnect()
                 closed = not motor._connections
@@ -274,6 +337,9 @@ class QueueRestartRecovery:
                     motor_errors.append('Retained recovery motor connections are still open.')
             except Exception as exc:
                 motor_errors.append(f'Motor close: {exc}')
+            finally:
+                if startup is not None:
+                    startup.remember_motor_handles()
 
         errors.extend(motor_errors)
         aborted = (self._shutdown is not None and not errors and clearance and vacuum_closed
@@ -285,13 +351,26 @@ class QueueRestartRecovery:
                          motor_observations=samples, motors_stopped_verified=stopped,
                          motor_handles_closed=closed, errors=tuple(errors), clearance_verified=clearance,
                          vacuum_release=vacuum_record.to_dict() if vacuum_record is not None else None,
-                         vacuum_handle_closed=vacuum_closed)
+                         vacuum_handle_closed=vacuum_closed, instrument_closures=instrument_closures)
         if aborted:
             self.session.store.finish_interrupted_queue(self.session.token, stage['token'], state['profile'], result)
+            if startup is not None:
+                self._backend._detach_queue_lifetime(self.session)
         else:
             child.finish(stage['token'], stage['profile'], result)
         if errors:
-            raise HardwareSafetyError('Restart containment is incomplete: ' + '; '.join(errors))
+            raise HardwareSafetyError('Queue containment is incomplete: ' + '; '.join(errors))
+
+    @staticmethod
+    def _close_live_instruments(instruments, readiness, errors):
+        for name in ('squid', 'susceptibility'):
+            try:
+                instruments.close_for_shutdown(name, readiness)
+            except Exception as exc:
+                errors.append(f'{name} close: {exc}')
+        if not instruments.is_settled():
+            errors.append('Original scientific instrument handles remain unsettled.')
+        return dict(profile=instruments.profile, closed=dict(instruments.closed))
 
 
 @dataclass(frozen=True)
@@ -314,6 +393,8 @@ class QueueContainmentRecord:
     clearance_verified: bool = False
     vacuum_release: dict | None = None
     vacuum_handle_closed: bool = False
+    scope: str = 'restart'
+    instrument_closures: dict | None = None
     safe_state_confirmed: bool = field(default=False, init=False)
     simulated: bool = field(default=False, init=False)
 

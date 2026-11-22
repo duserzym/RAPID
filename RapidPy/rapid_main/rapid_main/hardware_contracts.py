@@ -794,17 +794,22 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         if (state['token'] != coordinator.session.token or state['status'] != 'verified'
                 or state['record'] != record.to_dict()):
             raise HardwareError('The original queue terminal record must verify before detaching its backend.')
-        self._safety_store = coordinator.session.store
+        self._detach_queue_lifetime(coordinator.session)
+        return record
+
+    def _detach_queue_lifetime(self, session):
+        self._safety_store = session.store
         self._queue_coordinator = None
         self._queue_terminal_cleanup = None
         self._queue_startup = None
         self._queue_operator_stages = None
         self._queue_instruments = None
         self._connected = False
+        self._queue_specimen_geometry = None
+        self._geometry_stage_token = None
         self._retain_transport_recoveries()
         self._bracketed = None
         self._bracketed_geometry_signature = None
-        return record
 
     def retry_queue_terminal_settlement(self):
         """Retry only the original journaled closes/publication, never return motion."""

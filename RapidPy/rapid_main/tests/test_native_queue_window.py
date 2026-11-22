@@ -371,6 +371,33 @@ class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestC
         self.assertEqual(record['stage']['status'], 'aborted')
         self.assertTrue(all(self.window._ownership.owner_of(key) is None for key in RESOURCES))
 
+    def test_shutdown_interrupted_live_queue_retains_ownership_until_worker_exits(self):
+        self.assertTrue(self.start(), self.window._sb_status.text())
+        session = self.window._queue_native_session
+        self.lift_serial().position, self.lift_serial().status = 0, 16
+        with session.claim():
+            token = session.child_store.begin('acquisition', {'action': 'squid'},
+                self.backend._acquisition_safety_profile())
+        self.window._finalize_queue_run('error', reason='Interrupted test acquisition', return_to_safe=False)
+        pending = self.store.pending()
+        before = len(self.commands), list(self.vacuum_serial.writes)
+        with patch.object(QtWidgets.QMessageBox, 'question', lambda *args: QtWidgets.QMessageBox.StandardButton.No):
+            self.assertFalse(self.window.shutdown_interrupted_queue())
+        self.assertEqual((len(self.commands), self.vacuum_serial.writes), before)
+        self.assertEqual(self.store.pending(), pending)
+
+        with patch.object(QtWidgets.QMessageBox, 'question', lambda *args: QtWidgets.QMessageBox.StandardButton.Yes):
+            self.assertTrue(self.window.shutdown_interrupted_queue(), self.window._sb_status.text())
+        self.assertIs(self.window._queue_native_session, session)
+        self.assertTrue(all(self.window._ownership.owner_of(key) == 'queue_workflow' for key in RESOURCES))
+        self.wait_for(lambda: self.window._queue_command_thread is None)
+        state = self.store.read()
+        self.assertEqual(state['stage']['status'], 'aborted', self.window._sb_status.text())
+        self.assertEqual(state['stage']['token'], token)
+        self.assertIsNone(self.window._queue_native_session)
+        self.assertIsNone(session._lease)
+        self.assertTrue(all(self.window._ownership.owner_of(key) is None for key in RESOURCES))
+
     def test_ui_shutdown_retry_rejects_unfinished_field_stage(self):
         self.assertTrue(self.start(), self.window._sb_status.text())
         self.cap_voltage = .5

@@ -115,6 +115,16 @@ class QueueNativeStartup:
         self.completed = False
         self.started = False
         self.last_record = None
+        self.motor_handles = {}
+        self.vacuum_handles = None
+
+    def remember_motor_handles(self):
+        self.motor_handles = {port: (client, client._serial)
+                              for port, client in self.table.motor._connections.items()}
+
+    def remember_vacuum_handles(self):
+        controller = self.vacuum._pump_only_controller
+        self.vacuum_handles = (self.vacuum._queue_binding, controller, getattr(controller, '_serial', None))
 
     def _validate(self):
         self.session.child_store._owned()
@@ -161,6 +171,8 @@ class QueueNativeStartup:
             operation['connection_id'] = self.table.motor._connection_id
         except Exception as exc:
             error = str(exc) or type(exc).__name__
+        finally:
+            self.remember_motor_handles()
         if self.table.motor.is_connected:
             cleanup, cleanup_error = self.table._stopped()
         elif not error:
@@ -230,7 +242,10 @@ class QueueNativeStartup:
         self.started = True
         fields = self.fields.verify_off(self.session)
         pose = self._connect_and_stop(fields)
-        self.vacuum.queue_connect(self.session)
+        try:
+            self.vacuum.queue_connect(self.session)
+        finally:
+            self.remember_vacuum_handles()
         self.vacuum.queue_set_outputs(self.session, pump_enabled=True, valve_connected=False,
             transfer_pose=pose, field_outputs_off_verified=fields)
         self._home_empty_lift(fields)

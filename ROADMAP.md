@@ -2568,3 +2568,26 @@ scientific output and orientation acceptance, chain transfers, active VB6
 auxiliary tools, fresh-machine deployment, performance, and physical station
 qualification remain open. Station acceptance includes confirming the actual
 controller's positive OFF replies and the lift clearance checks.
+
+Live interrupted queue shutdown checkpoint (2026-11-22). The same operator
+confirmation now works after the original native worker exits, with RAPID still
+open. The worker uses the queue's existing OS lease and six device reservations.
+It stops the original axes in place, rechecks clearance, and verifies fresh field
+cutoff and both vacuum OFF replies. Satisfied checks allow it to close the original
+vacuum, motor, SQUID, and susceptibility handles. The queue keeps its original
+stage and remains pending on any failure. A rejected clearance leaves the original
+vacuum connection intact. Failed scientific close retains the exact handle for
+retry. The verified root and actual worker exit are required before releasing the
+reservations. An already journaled terminal close still uses Retry Queue Shutdown.
+
+The staged source passed 1,414 tests in 671.926 seconds and exited with code 0
+after Qt and watchdog teardown. Injected faults covered changed motor handles,
+missing clearance, a failed scientific close and retry with the original handle.
+The desktop test checked confirmation and release of all six reservations after
+actual worker exit. The Windows bundle passed packaged startup and offline
+smoke for six panels and six helpers. It is available locally under
+`.tmp/live-shutdown-release/dist/RapidPyMain`.
+
+The abort leaves earlier scientific and treatment evidence linked. Stage-specific
+reentry, independent legacy Up import, remaining scientific and VB6 workflow parity,
+fresh-machine deployment, performance, and physical station qualification remain open.

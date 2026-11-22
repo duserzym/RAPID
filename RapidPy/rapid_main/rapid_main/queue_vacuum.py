@@ -55,6 +55,7 @@ class QueueVacuumBinding:
         self.error = ''
         self._connected_once = False
         self._recovery_required = False
+        self.shutdown_release = None
         self._validate_owner()
 
     def _validate_owner(self):
@@ -180,12 +181,13 @@ class QueueVacuumBinding:
         self.adapter.output_state_known = True
         return record
 
-    def release_for_restart_shutdown(self, evidence):
+    def release_for_shutdown(self, evidence):
         """OFF only, using the current shutdown readiness record in the original stage."""
         from .queue_restart import QueueContainmentRecord
         root = self._validate_owner()
         stage = root['stage']
-        if (self.session.is_recovery is not True or not isinstance(evidence, QueueContainmentRecord)
+        scope = 'restart' if self.session.is_recovery else 'live'
+        if (not isinstance(evidence, QueueContainmentRecord) or evidence.scope != scope
                 or not stage or stage['status'] != 'pending' or evidence.stage_token != stage['token']
                 or evidence.status != 'release_ready' or evidence.shutdown_attestation is None
                 or evidence.fields_off_verified is not True or evidence.motors_stopped_verified is not True
@@ -193,14 +195,17 @@ class QueueVacuumBinding:
                 or any(evidence.shutdown_attestation.get(key) is not True
                        for key in ('specimen_secured', 'empty_rod', 'work_area_clear'))
                 or stage['record'] != json.loads(json.dumps(evidence.to_dict()))):
-            raise HardwareSafetyError('Persist original restart shutdown support, clearance and cutoff evidence before release.')
+            raise HardwareSafetyError('Persist original shutdown support, clearance and cutoff evidence before release.')
         controller = self.adapter._require_controller()
         self._validate_controller(controller)
+        self.shutdown_release = None
         result = self._apply_outputs(controller, False)
         if result.safe_state_confirmed and not restart_vacuum_off_acknowledged(result.raw_acknowledgements):
             error = 'Valve or pump reply did not positively acknowledge OFF.'
             self.error = error
             return replace(result, safe_state_confirmed=False, output_state_acknowledged=False, error=error)
+        if result.safe_state_confirmed:
+            self.shutdown_release = result
         return result
 
     def _apply_outputs(self, controller, enabled, *, pump_ready=False):
