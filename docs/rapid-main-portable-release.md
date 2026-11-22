@@ -47,6 +47,12 @@ ownership leases and handoff environment.
    pending motion, measurement, treatment or vacuum stages, or publish a shutdown
    whose transport closures were already verified. Field cutoff and motor stop
    leave the original queue latched until specimen support and vacuum are settled.
+8. To abort the interrupted queue and shut down the station, sign in and open
+   **Diagnostics > Shut Down Interrupted Queue…**. Confirm only after all
+   specimens are secured independently of vacuum, the control rod is empty,
+   and the work area is clear. RAPID requires fresh field cutoff, stopped axes,
+   lift clearance, positive valve and pump OFF replies, and transport closure
+   before recording the queue as aborted. A failed check leaves it pending.
    Review interrupted rows after settling the station. Re-run starts a new
    acquisition, while Skip and Abort exclude the row.
 

@@ -141,19 +141,25 @@ def validate_queue_state(state):
     if isinstance(count, bool) or not isinstance(count, int) or count < 0:
         raise ValueError('invalid queue stage count')
     _head(state['history_head'])
+    settlement = {}
     if state['status'] == 'verified':
         record = state['record']
         _validate_queue_record(record)
         if (not isinstance(record, dict) or record.get('safe_state_confirmed') is not True
                 or record.get('simulated') is not False):
             raise ValueError('queue lacks verified physical evidence')
+        settlement = record.get('settlement', {})
+        if not isinstance(settlement, dict):
+            raise ValueError('invalid queue settlement')
     stage = state['stage']
+    if settlement.get('outcome') == 'aborted' and (stage is None or stage['status'] != 'aborted'):
+        raise ValueError('A verified queue abort requires its original aborted stage.')
     if stage is None:
         if count != 0 or state['history_head'] is not None:
             raise ValueError('missing queue stage')
         return
     _token(stage['token'])
-    if (stage['family'] not in bindings or stage['status'] not in {'pending', 'verified', 'held'}
+    if (stage['family'] not in bindings or stage['status'] not in {'pending', 'verified', 'held', 'aborted'}
             or _canonical(stage['profile']) != _canonical(bindings[stage['family']])
             or not isinstance(stage['plan'], dict) or not isinstance(stage['sample_id'], str)
             or not isinstance(stage['run_id'], str) or count == 0):
@@ -166,8 +172,64 @@ def validate_queue_state(state):
             raise ValueError('queue stage lacks verified physical evidence')
     if stage['status'] == 'held' and (not _verified_vacuum_stage(stage) or state['history_head'] is None):
         raise ValueError('queue vacuum hold lacks native acknowledgement evidence')
-    if state['status'] == 'verified' and stage['status'] != 'verified':
+    if stage['status'] == 'aborted':
+        _validate_restart_shutdown(stage, bindings)
+        if state['history_head'] is None:
+            raise ValueError('Aborted stage lacks linked shutdown evidence.')
+        if state['status'] == 'verified':
+            if (settlement.get('outcome') != 'aborted' or settlement.get('stage_token') != stage['token']
+                    or settlement.get('record_id') != stage['record']['record_id']):
+                raise ValueError('Queue abort does not match its original shutdown evidence.')
+    if state['status'] == 'verified' and stage['status'] not in {'verified', 'aborted'}:
         raise ValueError('queue was cleared with an unfinished stage')
+
+
+def _validate_restart_shutdown(stage, bindings):
+    """A stopped axis alone cannot establish a completed interrupted-queue abort."""
+    record = stage['record']
+    attestation = record['shutdown_attestation']
+    vacuum = record['vacuum_release']
+    fields = record['field_record']
+    samples = record['motor_observations']
+    if (record['schema'] != 'rapidpy.queue_restart_containment.v1' or record['status'] != 'aborted'
+            or record['stage_token'] != stage['token'] or record['stage_family'] != stage['family']
+            or record['safe_state_confirmed'] is not False or record['simulated'] is not False or record['errors']
+            or any(record[key] is not True for key in ('fields_off_verified', 'motors_stopped_verified',
+                'motor_handles_closed', 'clearance_verified', 'vacuum_handle_closed'))
+            or any(attestation[key] is not True for key in ('specimen_secured', 'empty_rod', 'work_area_clear'))
+            or not isinstance(record['operator'], str) or not record['operator'].strip()
+            or attestation['operator'] != record['operator']
+            or fields['schema'] != 'rapidpy.queue_field_outputs.v1'
+            or fields['safe_state_confirmed'] is not True or fields['simulated'] is not False
+            or fields['station_profile'] != bindings['field_outputs']
+            or set(samples) != set(bindings['motion']['axes'])
+            or any(len(axis) != 2 or axis[0]['position_raw'] != axis[1]['position_raw']
+                   or any(type(item['position_raw']) is not int or type(item['velocity_register']) is not int
+                          or item['velocity_register'] != 0 for item in axis) for axis in samples.values())
+            or vacuum['schema'] != 'rapidpy.queue_vacuum_release.v1' or vacuum['operation'] != 'release'
+            or vacuum['safe_state_confirmed'] is not True or vacuum['simulated'] is not False
+            or vacuum['station_binding'] != bindings['vacuum']
+            or vacuum['valve_connected'] is not False or vacuum['pump_enabled'] is not False
+            or vacuum['output_state_acknowledged'] is not True
+            or vacuum['error'] or not restart_vacuum_off_acknowledged(vacuum['command_evidence'])):
+        raise ValueError('Restart abort requires confirmed support, clearance, cutoff, OFF and transport closure.')
+    _token(record['record_id'])
+
+
+def restart_vacuum_off_acknowledged(commands):
+    """Require known positive confirmations or explicit OFF state replies."""
+    if not isinstance(commands, (list, tuple)) or len(commands) != 2:
+        return False
+    expected = (('10V00', {'ACK', 'CLOSED', 'VALVE CLOSED'}),
+                ('10M00', {'ACK', 'OFF', 'MOTOR OFF', 'PUMP OFF'}))
+    for item, (command, replies) in zip(commands, expected):
+        if (not isinstance(item, dict) or item.get('command') != command
+                or not isinstance(item.get('reply'), str)):
+            return False
+        reply = ' '.join(item['reply'].upper().replace('-', ' ').split())
+        if reply not in replies:
+            return False
+    return True
 
 
 class QueueSafetyStore(HardwareSafetyStore):
@@ -194,7 +256,7 @@ class QueueSafetyStore(HardwareSafetyStore):
         plan, profile = _snapshot(plan), _snapshot(profile)
         with self._locked():
             state = self._queue(token)
-            if state['stage'] and state['stage']['status'] == 'pending':
+            if state['stage'] and state['stage']['status'] in {'pending', 'aborted'}:
                 raise HardwareSafetyError('The unfinished queue stage requires recovery before another stage can begin.')
             self.verify_history(state, latest_only=True)
             binding = state['profile']['stage_profiles'].get(family)
@@ -376,6 +438,33 @@ class QueueSafetyStore(HardwareSafetyStore):
             state['record'] = snapshot
             if record.safe_state_confirmed is True and record.simulated is False:
                 state['status'] = 'verified'
+            validate_queue_state(state)
+            self._write(state)
+
+    def finish_interrupted_queue(self, token, stage_token, profile, record):
+        """Publish the aborted stage and safe root in the same atomic snapshot."""
+        snapshot = _record_snapshot(record)
+        with self._locked():
+            state = self._queue(token, profile)
+            stage = state['stage']
+            if (not stage or stage['status'] != 'pending' or stage['token'] != stage_token
+                    or not stage['record'] or stage['record'].get('status') != 'release_ready'
+                    or stage['record'].get('record_id') != snapshot.get('record_id')
+                    or stage['record'].get('shutdown_attestation') != snapshot.get('shutdown_attestation')):
+                raise HardwareSafetyError('Original restart shutdown release intent is required.')
+            ready = stage['record']
+            if any(ready.get(key) != snapshot.get(key) for key in ('field_record', 'fields_off_verified',
+                    'motor_observations', 'motors_stopped_verified', 'clearance_verified', 'stage_token')):
+                raise HardwareSafetyError('Restart shutdown evidence changed after authorizing OFF.')
+            self.verify_history(state)
+            stage.update(status='aborted', record=snapshot)
+            try:
+                _validate_restart_shutdown(stage, profile['stage_profiles'])
+            except (ValueError, KeyError, TypeError) as exc:
+                raise HardwareSafetyError(str(exc)) from exc
+            root = QueueSafeStateRecord(True, True, True).to_dict()
+            root['settlement'] = dict(outcome='aborted', stage_token=stage_token, record_id=snapshot['record_id'])
+            state.update(status='verified', record=root, history_head=self._publish_event(state, stage))
             validate_queue_state(state)
             self._write(state)
 

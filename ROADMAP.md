@@ -2544,3 +2544,27 @@ The updated portable bundle passed packaged startup and six-panel, six-helper
 offline smoke, and lives locally in `.tmp/containment-release/dist/RapidPyMain`.
 Verified specimen support, safe vacuum settlement, earlier verified stages,
 and physical station qualification remain open.
+
+Interrupted queue shutdown checkpoint (2026-11-22). After a restart, a named
+operator can attest independent specimen support, an empty rod, and a clear
+work area for the exact interrupted journal snapshot. RAPID records the
+confirmation before opening recovery transports. It checks field cutoff and
+all axes stopped, then rereads lift clearance before issuing valve and pump
+OFF. Positive replies for both commands and closure of the recovery transports
+are required. The original stage and its plan remain in history, and a single
+journal replacement records the aborted outcome and verified station shutdown.
+If no stage was pending, RAPID adds a shutdown stage linked to the previous
+stage, when present. Failed checks or journal publication keep the queue pending.
+
+The staged source passed 1,409 tests in 633.496 seconds, including injected
+clearance and OFF failures, interrupted journal publication, and the desktop
+confirmation flow. The working checkout, which also includes companion edits,
+passed 1,412 tests. Both processes exited with code 0. The staged Windows
+bundle passed packaged startup and offline smoke for all six panels and six
+helpers. It is available locally under `.tmp/shutdown-release/dist/RapidPyMain`.
+
+In-process abort with retained original handles, independent legacy Up import,
+scientific output and orientation acceptance, chain transfers, active VB6
+auxiliary tools, fresh-machine deployment, performance, and physical station
+qualification remain open. Station acceptance includes confirming the actual
+controller's positive OFF replies and the lift clearance checks.

@@ -2199,6 +2199,27 @@ class VacuumBackendAdapter(_BaseBackend, VacuumBackend):
             finally:
                 self._operation_active = False
 
+    def queue_release_for_restart_shutdown(self, session, evidence):
+        with self._state_lock:
+            if self._queue_binding is None or self._queue_binding.session is not session:
+                raise HardwareError('The restart must own the original vacuum connection.')
+            return self._queue_binding.release_for_restart_shutdown(evidence)
+
+    def queue_close_restart_transport(self, session):
+        """Close only the recovery transport, even when an OFF acknowledgement failed."""
+        with self._state_lock:
+            session.child_store._owned()
+            if (not session.is_recovery or self._queue_binding is None
+                    or self._queue_binding.session is not session):
+                raise HardwareError('The restart must own the original vacuum connection.')
+            self.output_state_known = False
+            if self._pump_only_controller is not None:
+                self._pump_only_controller.disconnect()
+                if self._pump_only_controller._serial is not None:
+                    raise HardwareError('The original vacuum handle remains open.')
+            self._queue_binding = None
+            self._hold_session = None
+
     def is_pump_on(self) -> bool:
         if not self.output_state_known:
             raise HardwareUnavailableError('Vacuum output state has not been acknowledged in this session.')

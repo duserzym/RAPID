@@ -1,12 +1,13 @@
 """Borrow the native vacuum transport under a claimed durable queue owner."""
 import copy
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from datetime import datetime, timezone
+import json
 import math
 import uuid
 
 from rapidpy_common.hardware_safety import HardwareSafetyError
-from rapidpy_common.queue_safety import QueueWorkflowSession
+from rapidpy_common.queue_safety import QueueWorkflowSession, restart_vacuum_off_acknowledged
 from rapidpy_common.vacuum_diagnostic_safety import vacuum_binding
 
 
@@ -166,6 +167,43 @@ class QueueVacuumBinding:
             token = child.begin('vacuum', {'action': 'pump_ready' if pump_ready else 'enable' if enabled else 'release',
                                          'field_outputs_proof': field_proof,
                                          'transfer_pose': transfer_pose.record.to_dict() if transfer_pose else None}, self.profile)
+        record = self._apply_outputs(controller, enabled, pump_ready=pump_ready)
+        try:
+            child.finish(token, self.profile, record)
+        except Exception:
+            self.error = 'Queue vacuum evidence could not be persisted; the original stage remains pending.'
+            raise
+        if record.error:
+            raise HardwareSafetyError('Queue vacuum state remains unverified: ' + record.error)
+        self.held = enabled or pump_ready
+        self.error = ''
+        self.adapter.output_state_known = True
+        return record
+
+    def release_for_restart_shutdown(self, evidence):
+        """OFF only, using the current shutdown readiness record in the original stage."""
+        from .queue_restart import QueueContainmentRecord
+        root = self._validate_owner()
+        stage = root['stage']
+        if (self.session.is_recovery is not True or not isinstance(evidence, QueueContainmentRecord)
+                or not stage or stage['status'] != 'pending' or evidence.stage_token != stage['token']
+                or evidence.status != 'release_ready' or evidence.shutdown_attestation is None
+                or evidence.fields_off_verified is not True or evidence.motors_stopped_verified is not True
+                or evidence.clearance_verified is not True
+                or any(evidence.shutdown_attestation.get(key) is not True
+                       for key in ('specimen_secured', 'empty_rod', 'work_area_clear'))
+                or stage['record'] != json.loads(json.dumps(evidence.to_dict()))):
+            raise HardwareSafetyError('Persist original restart shutdown support, clearance and cutoff evidence before release.')
+        controller = self.adapter._require_controller()
+        self._validate_controller(controller)
+        result = self._apply_outputs(controller, False)
+        if result.safe_state_confirmed and not restart_vacuum_off_acknowledged(result.raw_acknowledgements):
+            error = 'Valve or pump reply did not positively acknowledge OFF.'
+            self.error = error
+            return replace(result, safe_state_confirmed=False, output_state_acknowledged=False, error=error)
+        return result
+
+    def _apply_outputs(self, controller, enabled, *, pump_ready=False):
         self.held = True
         self.adapter.output_state_known = False
         reset = getattr(controller, 'reset_acknowledgements', None)
@@ -200,17 +238,8 @@ class QueueVacuumBinding:
             not enabled and not pump_ready and not error, error, record_id=uuid.uuid4().hex,
             timestamp_iso=datetime.now(timezone.utc).isoformat(), pump_enabled=enabled or pump_ready,
             valve_connected=enabled, output_state_acknowledged=not bool(error))
-        try:
-            child.finish(token, self.profile, record)
-        except Exception:
-            self.error = 'Queue vacuum evidence could not be persisted; the original stage remains pending.'
-            raise
         if error:
             self.error = error
-            raise HardwareSafetyError('Queue vacuum state remains unverified: ' + error)
-        self.held = enabled or pump_ready
-        self.error = ''
-        self.adapter.output_state_known = True
         return record
 
     def detach(self):

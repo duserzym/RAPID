@@ -53,7 +53,7 @@ class QueueNativeStartup:
         return instance
 
     @staticmethod
-    def station_bindings(backend, vacuum, *, stop_owner=None):
+    def station_bindings(backend, vacuum, *, stop_owner=None, restart_vacuum_token=None):
         """Build and verify idle station bindings without opening transports."""
         from rapidpy_common.motor_routing import RoutedMotorSerialClient
         from .diagnostic_services import VacuumBackendAdapter
@@ -64,10 +64,14 @@ class QueueNativeStartup:
                 or getattr(backend, '_queue_specimen_geometry', None) is not None
                 or getattr(backend._safety_store, 'session', None) is not None):
             raise HardwareSafetyError('Restore the original idle native backend and close retained motor handles before startup.')
+        prior = getattr(getattr(vacuum, '_queue_binding', None), 'session', None)
+        retained_restart_vacuum = (prior is not None and prior.is_recovery is True and prior._lease is None
+                                   and prior.token == restart_vacuum_token)
         if (not isinstance(vacuum, VacuumBackendAdapter) or vacuum.simulated is not False
-                or vacuum._queue_binding is not None
+                or (vacuum._queue_binding is not None and not retained_restart_vacuum)
                 or (vacuum._hold_session is not None and vacuum._hold_session.active)
-                or (vacuum._pump_only_controller is not None and vacuum._pump_only_controller._serial is not None)
+                or (vacuum._pump_only_controller is not None and vacuum._pump_only_controller._serial is not None
+                    and not retained_restart_vacuum)
                 or vacuum._safety_store.path.resolve() != backend._safety_store.path.resolve()):
             raise HardwareSafetyError('Startup requires the idle original native vacuum and the same fixed safety journal.')
         geometry = QueueStationGeometry.from_config(backend._config, use_xy_table=True)

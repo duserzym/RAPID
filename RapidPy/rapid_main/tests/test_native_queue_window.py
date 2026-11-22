@@ -348,6 +348,29 @@ class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestC
         with self.store.operation_lease():
             self.assertIn('still requires station recovery', self.window._sb_status.text())
 
+    def test_restart_shutdown_requires_confirmation_and_settles_original_queue(self):
+        startup = self.prepare()
+        startup.session.release()
+        self.backend._safety_store = self.store
+        self.backend._queue_startup = None
+        self.backend._queue_instruments = None
+        original = self.store.pending()
+        before = list(self.commands), list(self.vacuum_serial.writes)
+        with patch.object(QtWidgets.QMessageBox, 'question', lambda *args: QtWidgets.QMessageBox.StandardButton.No):
+            self.assertFalse(self.window.shutdown_interrupted_queue())
+        self.assertEqual((self.commands, self.vacuum_serial.writes), before)
+        self.assertEqual(self.store.pending(), original)
+
+        with patch.object(QtWidgets.QMessageBox, 'question', lambda *args: QtWidgets.QMessageBox.StandardButton.Yes):
+            self.assertTrue(self.window.shutdown_interrupted_queue(), self.window._sb_status.text())
+        self.assertTrue(all(self.window._ownership.owner_of(key) == 'queue_restart_recovery' for key in RESOURCES))
+        self.wait_for(lambda: self.window._queue_command_thread is None)
+        self.assertIsNone(self.store.pending(), self.window._sb_status.text())
+        record = self.store.read()
+        self.assertEqual(record['token'], original['token'])
+        self.assertEqual(record['stage']['status'], 'aborted')
+        self.assertTrue(all(self.window._ownership.owner_of(key) is None for key in RESOURCES))
+
     def test_ui_shutdown_retry_rejects_unfinished_field_stage(self):
         self.assertTrue(self.start(), self.window._sb_status.text())
         self.cap_voltage = .5

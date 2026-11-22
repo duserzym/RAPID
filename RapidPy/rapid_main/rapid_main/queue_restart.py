@@ -1,6 +1,7 @@
 """Recover explicitly supported native stages after the original worker is gone."""
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
+import hashlib
 import json
 import uuid
 
@@ -10,11 +11,15 @@ from .queue_startup import QueueNativeStartup
 from .queue_terminal import QueueTerminalSafeStateRecord
 
 
-def restart_stage(state):
-    """Classify recorded evidence. The operation lease is still required to act."""
+def require_interrupted_native_queue(state):
     if (not state or state['family'] != 'queue' or state['status'] != 'pending'
             or state['profile'].get('helper') != 'rapid_main_queue'):
         raise HardwareSafetyError('No interrupted native queue is recorded.')
+
+
+def restart_stage(state):
+    """Classify recorded evidence. The operation lease is still required to act."""
+    require_interrupted_native_queue(state)
     stage = state['stage']
     if stage is not None:
         action = stage['plan'].get('action')
@@ -110,12 +115,47 @@ def _terminal_record(store, state, operator):
                                  original_close_event=state['history_head'])))
 
 
+@dataclass(frozen=True)
+class RestartShutdownAttestation:
+    queue_token: str
+    snapshot_sha256: str
+    operator: str
+    specimen_secured: bool
+    empty_rod: bool
+    work_area_clear: bool
+    recorded_iso: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    @classmethod
+    def confirm(cls, state, operator, *, specimen_secured, empty_rod, work_area_clear):
+        require_interrupted_native_queue(state)
+        if not isinstance(operator, str) or not operator.strip():
+            raise HardwareSafetyError('A named operator must confirm restart shutdown.')
+        result = cls(state['token'], hashlib.sha256(_canonical(state)).hexdigest(), operator.strip(),
+                     specimen_secured, empty_rod, work_area_clear)
+        result.require(state, operator)
+        return result
+
+    def require(self, state, operator):
+        if (self.queue_token != state['token'] or self.snapshot_sha256 != hashlib.sha256(_canonical(state)).hexdigest()
+                or self.operator != operator.strip() or self.specimen_secured is not True
+                or self.empty_rod is not True or self.work_area_clear is not True):
+            raise HardwareSafetyError('Confirm independent specimen support, an empty rod and a clear work area for this queue.')
+
+
 class QueueRestartRecovery:
-    def __init__(self, backend, vacuum, expected_state, *, operator):
-        self.kind = restart_stage(expected_state)
+    def __init__(self, backend, vacuum, expected_state, *, operator, shutdown=None):
+        require_interrupted_native_queue(expected_state)
         if (backend._config.general.nocomm is not False or not isinstance(operator, str) or not operator.strip()
                 or getattr(backend._safety_store, 'session', None) is not None):
             raise HardwareSafetyError('Restart recovery requires the idle native station and a named operator.')
+        if shutdown is None:
+            self.kind = restart_stage(expected_state)
+        else:
+            if type(shutdown) is not RestartShutdownAttestation:
+                raise HardwareSafetyError('Explicit restart shutdown confirmation is required.')
+            shutdown.require(expected_state, operator)
+            self.kind = 'shutdown'
+        self._shutdown = shutdown
         self._expected = _canonical(expected_state)
         self._backend, self._vacuum, self._operator = backend, vacuum, operator.strip()
         store = QueueSafetyStore(backend._safety_store.path)
@@ -139,9 +179,11 @@ class QueueRestartRecovery:
     def run(self):
         with self.session.claim():
             state = self._state()
-            stop_owner = ((state['token'], state['stage']['token']) if self.kind == 'containment' else None)
+            stopping = self.kind in {'containment', 'shutdown'}
+            stage = state['stage']
+            stop_owner = (state['token'], stage['token']) if stopping and stage is not None else None
             table, fields, _, profile = QueueNativeStartup.station_bindings(self._backend, self._vacuum,
-                                                                             stop_owner=stop_owner)
+                stop_owner=stop_owner, restart_vacuum_token=state['token'] if self.kind == 'shutdown' else None)
             # Transport ownership IDs belong to their original process. Every
             # actual setting and participating circuit must still match.
             expected = json.loads(_canonical(state['profile']))
@@ -151,7 +193,12 @@ class QueueRestartRecovery:
             if self.kind == 'field_outputs':
                 fields.verify_off(self.session, recovery=True, recovery_operator=self._operator)
                 return
-            if self.kind == 'containment':
+            if stopping:
+                if self.kind == 'shutdown' and (stage is None or stage['status'] != 'pending'):
+                    self.session.child_store.begin('motion', dict(action='restart_shutdown',
+                        interrupted_stage_token=stage['token'] if stage is not None else None), table.profile)
+                    state = self.session.store._queue(self.session.token)
+                    stop_owner = (state['token'], state['stage']['token'])
                 self._contain(state, table, fields, stop_owner)
                 return
             record = _terminal_record(self.session.store, state, self._operator)
@@ -160,7 +207,7 @@ class QueueRestartRecovery:
     def _contain(self, state, table, fields, stop_owner):
         stage = state['stage']
         intent = QueueContainmentRecord(stage['token'], stage['family'], self._operator,
-                                        state['history_head'])
+            state['history_head'], shutdown_attestation=asdict(self._shutdown) if self._shutdown else None)
         child = self.session.child_store
         # This records intent ahead of even a serial open or an output cutoff.
         # The original plan stays latched and earlier evidence stays linked.
@@ -178,6 +225,9 @@ class QueueRestartRecovery:
         motor_errors = []
         stopped = False
         closed = False
+        clearance = False
+        vacuum_record = None
+        vacuum_closed = False
         motor = table.motor
         try:
             available, open_errors = motor.connect_for_stop(stop_owner, baudrate=self._backend._config.motor_station.baud)
@@ -186,9 +236,37 @@ class QueueRestartRecovery:
             if failure:
                 motor_errors.append(failure)
             stopped = not motor_errors and set(samples) == set(table.axes)
+            if self._shutdown is not None and stopped and not errors:
+                try:
+                    table._clearance(samples)
+                    self._vacuum.queue_connect(self.session)
+                    # Confirm that clearance and stationarity still hold on the
+                    # live motor connection immediately before vacuum commands.
+                    samples, error = table._stopped(available_ports=available)
+                    if error:
+                        stopped = False
+                        raise HardwareSafetyError(error)
+                    table._clearance(samples)
+                    clearance = True
+                    ready = replace(intent, status='release_ready', field_record=field_record.to_dict(),
+                        fields_off_verified=True, motor_observations=samples, motors_stopped_verified=True,
+                        clearance_verified=True)
+                    child.finish(stage['token'], stage['profile'], ready)
+                    vacuum_record = self._vacuum.queue_release_for_restart_shutdown(self.session, ready)
+                    if not vacuum_record.safe_state_confirmed:
+                        errors.append('Vacuum OFF: ' + vacuum_record.error)
+                except Exception as exc:
+                    errors.append(f'Restart shutdown: {exc}')
         except Exception as exc:
             motor_errors.append(f'Motor stop: {exc}')
         finally:
+            vacuum_binding = self._vacuum._queue_binding
+            if self._shutdown is not None and vacuum_binding is not None and vacuum_binding.session is self.session:
+                try:
+                    self._vacuum.queue_close_restart_transport(self.session)
+                    vacuum_closed = True
+                except Exception as exc:
+                    errors.append(f'Vacuum close: {exc}')
             try:
                 motor.disconnect()
                 closed = not motor._connections
@@ -198,13 +276,20 @@ class QueueRestartRecovery:
                 motor_errors.append(f'Motor close: {exc}')
 
         errors.extend(motor_errors)
-        result = replace(intent, status='failed' if errors else 'contained',
+        aborted = (self._shutdown is not None and not errors and clearance and vacuum_closed
+                   and vacuum_record is not None and vacuum_record.safe_state_confirmed is True)
+        result = replace(intent, status='aborted' if aborted else 'failed' if errors else 'contained',
                          completed_iso=datetime.now(timezone.utc).isoformat(),
                          field_record=field_record.to_dict() if field_record is not None else None,
                          fields_off_verified=field_record is not None and field_record.safe_state_confirmed,
                          motor_observations=samples, motors_stopped_verified=stopped,
-                         motor_handles_closed=closed, errors=tuple(errors))
-        child.finish(stage['token'], stage['profile'], result)
+                         motor_handles_closed=closed, errors=tuple(errors), clearance_verified=clearance,
+                         vacuum_release=vacuum_record.to_dict() if vacuum_record is not None else None,
+                         vacuum_handle_closed=vacuum_closed)
+        if aborted:
+            self.session.store.finish_interrupted_queue(self.session.token, stage['token'], state['profile'], result)
+        else:
+            child.finish(stage['token'], stage['profile'], result)
         if errors:
             raise HardwareSafetyError('Restart containment is incomplete: ' + '; '.join(errors))
 
@@ -225,6 +310,10 @@ class QueueContainmentRecord:
     motors_stopped_verified: bool = False
     motor_handles_closed: bool = False
     errors: tuple[str, ...] = ()
+    shutdown_attestation: dict | None = None
+    clearance_verified: bool = False
+    vacuum_release: dict | None = None
+    vacuum_handle_closed: bool = False
     safe_state_confirmed: bool = field(default=False, init=False)
     simulated: bool = field(default=False, init=False)
 

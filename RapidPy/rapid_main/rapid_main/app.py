@@ -1470,8 +1470,15 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.Slot()
     def recover_interrupted_queue(self) -> bool:
         """Select an original restart stage without replaying the queue."""
+        return self._start_interrupted_queue_recovery()
+
+    @QtCore.Slot()
+    def shutdown_interrupted_queue(self) -> bool:
+        return self._start_interrupted_queue_recovery(shutdown=True)
+
+    def _start_interrupted_queue_recovery(self, *, shutdown=False):
         from rapidpy_common.queue_safety import QueueSafetyStore
-        from .queue_restart import QueueRestartRecovery, restart_stage
+        from .queue_restart import QueueRestartRecovery, RestartShutdownAttestation, require_interrupted_native_queue
 
         if (not self._uses_native_queue() or self._queue_native_session is not None
                 or self._shutdown_cleanup_requested
@@ -1483,8 +1490,24 @@ class MainWindow(QtWidgets.QMainWindow):
         recovery = None
         try:
             state = QueueSafetyStore(backend._safety_store.path).read()
-            kind = restart_stage(state)
-            recovery = QueueRestartRecovery(backend, vacuum, state, operator=self.config.general.operator)
+            operator = self.config.general.operator
+            attestation = None
+            if shutdown:
+                require_interrupted_native_queue(state)
+                if not isinstance(operator, str) or not operator.strip():
+                    raise ValueError('Sign in before confirming restart shutdown.')
+                answer = QtWidgets.QMessageBox.question(self, 'Confirm interrupted queue shutdown',
+                    f"Abort recorded queue {state['run_id']}?\n\n"
+                    'Confirm that all specimens are secured independently of vacuum, '
+                    'the control rod is empty, and the work area is clear. RAPID will check lift clearance, '
+                    'stop the axes, verify field cutoff, and switch the gripper valve and pump OFF.',
+                    QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                    QtWidgets.QMessageBox.StandardButton.No)
+                if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+                    return False
+                attestation = RestartShutdownAttestation.confirm(state, operator, specimen_secured=True,
+                    empty_rod=True, work_area_clear=True)
+            recovery = QueueRestartRecovery(backend, vacuum, state, operator=operator, shutdown=attestation)
             # Only the original-stage capability and OS lease allow entry here.
             # Ordinary editor/diagnostic requests still use the fault guard.
             lease = self._ownership.acquire_many(('measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptibility'),
@@ -1495,14 +1518,18 @@ class MainWindow(QtWidgets.QMainWindow):
             self.set_status(str(exc))
             return False
 
-        if kind == 'field_outputs':
+        if recovery.kind == 'field_outputs':
             reason = 'Field cutoff verified. The interrupted queue still requires station recovery for motion and vacuum.'
             starting = 'Recovering the original field cutoff.'
             state = 'error'
-        elif kind == 'containment':
+        elif recovery.kind == 'containment':
             reason = 'Field cutoff and stopped axes verified. The original queue remains pending for specimen and vacuum recovery.'
             starting = 'Cutting off field outputs and verifying the original axes stopped in place.'
             state = 'error'
+        elif recovery.kind == 'shutdown':
+            reason = 'Interrupted queue aborted and station shutdown verified. Review its interrupted rows before rerunning.'
+            starting = 'Verifying clearance and shutting down the interrupted queue.'
+            state = 'idle'
         else:
             reason = 'Recorded queue shutdown published. Review interrupted measurement rows before starting another run.'
             starting = 'Publishing the verified shutdown from the original queue journal.'
@@ -2305,6 +2332,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._retry_queue_close_action.setToolTip('Finish closing the original connections after a queue shutdown failure.')
         restart_queue_action = dm.addAction('Recover &Interrupted Queue', self.recover_interrupted_queue)
         restart_queue_action.setToolTip('Verify field cutoff and motor stop, or publish an already verified shutdown after restart.')
+        shutdown_queue_action = dm.addAction('Shut Down Interrupted Queue…', self.shutdown_interrupted_queue)
+        shutdown_queue_action.setToolTip('Confirm the specimen is secured and the rod is empty before verifying vacuum OFF.')
         dm.addSeparator()
         af_sub = dm.addMenu("AF &Demagnetizer")
         af_sub.addAction("Set Up AF Sequence", self._launch_af)

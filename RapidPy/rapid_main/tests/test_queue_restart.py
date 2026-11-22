@@ -3,11 +3,12 @@ import copy
 import unittest
 from unittest.mock import patch
 
-from rapid_main.queue_restart import QueueRestartRecovery, restart_stage
+from rapid_main.queue_restart import QueueRestartRecovery, RestartShutdownAttestation, restart_stage
 from rapidpy_common.hardware import serial
 from rapidpy_common.hardware_safety import HardwareSafetyError
 from tests.test_queue_lift_transfer import LiftSerial
 from tests.test_queue_startup import QueueStartupFixture
+from tests.test_queue_vacuum import SerialInterface
 
 
 class QueueRestartTests(QueueStartupFixture, unittest.TestCase):
@@ -39,8 +40,8 @@ class QueueRestartTests(QueueStartupFixture, unittest.TestCase):
         self.assertEqual(restart_stage(state), 'terminal_close')
         return startup, state
 
-    def recover(self, state):
-        recovery = QueueRestartRecovery(self.backend, self.vacuum, state, operator='Recovery Operator')
+    def recover(self, state, *, shutdown=None):
+        recovery = QueueRestartRecovery(self.backend, self.vacuum, state, operator='Recovery Operator', shutdown=shutdown)
         self.addCleanup(recovery.release)
         return recovery
 
@@ -263,3 +264,127 @@ class QueueRestartTests(QueueStartupFixture, unittest.TestCase):
         self.assertEqual(retained.writes.count(b'@16 3 0\r\n'), 2)
         self.assertFalse(retained.is_open)
         self.assertTrue(self.store.pending()['stage']['record']['motor_handles_closed'])
+
+    def confirm_shutdown(self, state, **overrides):
+        proof = dict(specimen_secured=True, empty_rod=True, work_area_clear=True)
+        proof.update(overrides)
+        return RestartShutdownAttestation.confirm(state, 'Recovery Operator', **proof)
+
+    def shutdown_transports(self, *, lift_top=True, valve_reply='VALVE CLOSED'):
+        vacuum = SerialInterface({'10V00': valve_reply, '10M00': 'MOTOR OFF'})
+        opened = []
+
+        def open_serial(**settings):
+            stream = vacuum if settings['port'] == 'COM11' else LiftSerial(**settings)
+            if settings['port'] == 'COM5' and not lift_top:
+                stream.status = 0
+            opened.append((settings['port'], stream))
+            return stream
+
+        return vacuum, opened, patch.object(serial, 'Serial', side_effect=open_serial)
+
+    def test_shutdown_aborts_original_acquisition_only_after_verified_clearance_and_off(self):
+        original = self.interrupted_stage('acquisition', loaded=True)
+        recovery = self.recover(original, shutdown=self.confirm_shutdown(original))
+        vacuum, opened, transports = self.shutdown_transports()
+        write = vacuum.write
+        stages = []
+
+        def observe(payload):
+            if payload != b'\r':
+                stage = self.store.pending()['stage']
+                self.assertEqual(stage['token'], original['stage']['token'])
+                self.assertTrue(stage['record']['clearance_verified'])
+                stages.append(stage['record']['status'])
+            return write(payload)
+
+        vacuum.write = observe
+        with transports:
+            recovery.run()
+        state = self.store.read()
+        self.assertIsNone(self.store.pending())
+        self.assertEqual(state['record']['settlement']['outcome'], 'aborted')
+        self.assertEqual(state['stage']['status'], 'aborted')
+        self.assertEqual(state['stage']['plan'], original['stage']['plan'])
+        self.assertEqual(state['stage']['token'], original['stage']['token'])
+        record = state['stage']['record']
+        self.assertEqual(record['interrupted_history_head'], original['history_head'])
+        self.assertTrue(record['vacuum_handle_closed'])
+        self.assertFalse(record['safe_state_confirmed'])
+        self.assertEqual(stages, ['release_ready'] * 4)
+        self.assertEqual([cmd for cmd in vacuum.writes if cmd != b'\r'], [b'C', b'10V00', b'D', b'10M00'])
+        self.assertEqual({port for port, _ in opened}, {'COM3', 'COM4', 'COM5', 'COM6', 'COM11'})
+        self.assertTrue(all(not stream.is_open for _, stream in opened))
+        self.store.verify_history(state)
+
+    def test_confirmation_is_strict_and_bound_to_current_evidence(self):
+        original = self.interrupted_stage('motion')
+        with self.assertRaisesRegex(HardwareSafetyError, 'independent specimen support'):
+            self.confirm_shutdown(original, specimen_secured=1)
+        proof = self.confirm_shutdown(original)
+        changed = copy.deepcopy(original)
+        changed['run_id'] = 'new run'
+        before = list(self.commands), list(self.vacuum_serial.writes)
+        with self.assertRaisesRegex(HardwareSafetyError, 'for this queue'):
+            self.recover(changed, shutdown=proof)
+        self.assertEqual((self.commands, self.vacuum_serial.writes), before)
+        self.assertEqual(self.store.pending(), original)
+
+    def test_unverified_lift_clearance_prevents_even_opening_vacuum(self):
+        original = self.interrupted_stage('motion')
+        recovery = self.recover(original, shutdown=self.confirm_shutdown(original))
+        vacuum, opened, transports = self.shutdown_transports(lift_top=False)
+        with transports, self.assertRaisesRegex(HardwareSafetyError, 'top-reference switch'):
+            recovery.run()
+        self.assertNotIn('COM11', {port for port, _ in opened})
+        self.assertEqual(vacuum.writes, [])
+        self.assertEqual(self.store.pending()['stage']['record']['status'], 'failed')
+
+    def test_negative_valve_reply_still_attempts_pump_off_and_leaves_stage_pending(self):
+        original = self.interrupted_stage('motion')
+        recovery = self.recover(original, shutdown=self.confirm_shutdown(original))
+        vacuum, _, transports = self.shutdown_transports(valve_reply='ERROR')
+        with transports, self.assertRaisesRegex(HardwareSafetyError, 'did not positively acknowledge'):
+            recovery.run()
+        self.assertEqual([cmd for cmd in vacuum.writes if cmd != b'\r'], [b'C', b'10V00', b'D', b'10M00'])
+        self.assertFalse(vacuum.is_open)
+        state = self.store.pending()
+        self.assertEqual(state['stage']['token'], original['stage']['token'])
+        self.assertFalse(state['stage']['record']['vacuum_release']['safe_state_confirmed'])
+
+    def test_failed_abort_publication_keeps_original_stage_pending_after_off(self):
+        original = self.interrupted_stage('acquisition', loaded=True)
+        recovery = self.recover(original, shutdown=self.confirm_shutdown(original))
+        vacuum, opened, transports = self.shutdown_transports()
+        write = recovery.session.store._write
+
+        def interrupt_commit(state):
+            if state['status'] == 'verified':
+                raise OSError('root write failed')
+            write(state)
+
+        with transports, patch.object(recovery.session.store, '_write', side_effect=interrupt_commit):
+            with self.assertRaisesRegex(OSError, 'root write failed'):
+                recovery.run()
+
+        pending = self.store.pending()
+        self.assertEqual(pending['stage']['token'], original['stage']['token'])
+        self.assertEqual(pending['stage']['record']['status'], 'release_ready')
+        self.assertEqual([cmd for cmd in vacuum.writes if cmd != b'\r'], [b'C', b'10V00', b'D', b'10M00'])
+        self.assertTrue(all(not stream.is_open for _, stream in opened))
+        self.store.verify_history(pending)
+
+    def test_shutdown_can_settle_interruption_before_the_first_stage(self):
+        startup = self.prepare()
+        self.forget_session(startup)
+        original = self.store.pending()
+        self.assertIsNone(original['stage'])
+        recovery = self.recover(original, shutdown=self.confirm_shutdown(original))
+        _, _, transports = self.shutdown_transports()
+        with transports:
+            recovery.run()
+        state = self.store.read()
+        self.assertEqual(state['stage_count'], 1)
+        self.assertEqual(state['stage']['plan']['action'], 'restart_shutdown')
+        self.assertEqual(state['stage']['status'], 'aborted')
+        self.store.verify_history(state)
