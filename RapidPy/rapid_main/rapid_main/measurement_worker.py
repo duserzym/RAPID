@@ -58,6 +58,8 @@ from rapid_main.specimen_metadata import validate_specimen_provenance
 from rapid_main.specimen_paths import contained_path
 from rapid_main.measurement_checkpoint import (clear_checkpoint, pending_checkpoint, restore_checkpoint,
                                                save_checkpoint, validate_stop_proof)
+from rapid_main.manual_run_recovery import (clear_manual_run, has_interrupted_run, reconcile_manual_run,
+                                             track_manual_run)
 from rapid_main.measurement_progress import MeasurementProgress
 from rapid_main.queue_pair import QueueSide
 from rapid_main.io.rmg_writer import RmgTreatment, describe_rmg_treatment
@@ -178,6 +180,7 @@ class MeasurementWorker(QtCore.QThread):
         external_thermal: ExternalThermalTreatment | None = None,
         checkpoint_profile: str = '',
         continue_from: str | None = None,
+        track_manual: bool = False,
     ) -> None:
         super().__init__(parent)
         self._specimen_provenance = deepcopy(dict(specimen_provenance)) if specimen_provenance is not None else None
@@ -202,6 +205,8 @@ class MeasurementWorker(QtCore.QThread):
         self._run_id = queue_side.run_id if queue_side is not None else str(run_id)
         self._resume = bool(resume)
         self._checkpoint_profile = checkpoint_profile
+        self._track_manual = queue_side is None and bool(track_manual or checkpoint_profile)
+        self._interrupted_run = None
         self._continue_from = continue_from
         self._checkpoint_request = threading.Event()
         self._protect_checkpoint = continue_from is not None
@@ -347,6 +352,10 @@ class MeasurementWorker(QtCore.QThread):
             self._finish_run(aborted=True)
             return
 
+        if has_interrupted_run(self._pair_directory):
+            self._protect_checkpoint = True
+            if reconcile_manual_run(self._pair_directory, self._meta.name) is not None:
+                raise ValueError('Open Live Measure → Review Interrupted Run before starting another measurement.')
         recover_measurement_output(self._pair_directory, self._meta.name)
 
         # The old resume flag only suppressed duplicate file writes after
@@ -525,6 +534,9 @@ class MeasurementWorker(QtCore.QThread):
             if pending_checkpoint(self._pair_directory) != self._continue_from:
                 self._protect_checkpoint = True
                 raise ValueError('A saved run changed while preparing this specimen.')
+            if has_interrupted_run(self._pair_directory):
+                self._protect_checkpoint = True
+                raise ValueError('An interrupted run appeared during preparation. Review the original attempt.')
             self._comm_logger = CommunicationLogger("measurement-worker", port=self._meta.name)
             self._comm_logger.info(
                 "bundle initialized (simulated)" if self._simulated else "bundle initialized"
@@ -552,6 +564,9 @@ class MeasurementWorker(QtCore.QThread):
 
             self.step_started.emit(idx, label)
             try:
+                if self._track_manual and self._interrupted_run is None:
+                    self._protect_checkpoint = True
+                    self._interrupted_run = track_manual_run(bundle, self._progress)
                 self._progress.start_step(idx)
             except Exception as exc:
                 self._emit_error(f'Cannot persist original step intent: {exc}', phase=WorkflowPhase.SAVING)
@@ -762,6 +777,7 @@ class MeasurementWorker(QtCore.QThread):
                     evidence[path.relative_to(self._pair_directory).as_posix()] = digest
                 save_checkpoint(bundle, self._progress, len(self._completed_labels), previous=self._continue_from,
                                 susceptibility=susceptibility_records, evidence=evidence, stop_proof=stop_proof)
+                self._clear_interrupted_run()
                 self.checkpoint_saved = True
             return
 
@@ -1478,8 +1494,14 @@ class MeasurementWorker(QtCore.QThread):
     def _finish_accepted_bundle(self) -> None:
         if self._continue_from is not None:
             clear_checkpoint(self._pair_directory, self._continue_from)
+        self._clear_interrupted_run()
         self._emit_phase(WorkflowPhase.COMPLETE)
         self._finish_run(aborted=False)
+
+    def _clear_interrupted_run(self) -> None:
+        if self._interrupted_run is not None:
+            clear_manual_run(self._interrupted_run)
+            self._interrupted_run = None
 
     def _write_rockmag_run_artifact(self, *, aborted: bool) -> None:
         if self._routine_context is None:

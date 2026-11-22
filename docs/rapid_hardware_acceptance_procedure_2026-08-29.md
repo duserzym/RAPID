@@ -209,9 +209,9 @@ grip through the dummy specimen release.
 
 | # | Step | Expected |
 |---|---|---|
-| I1 | Kill the process mid-run | No accepted measurement published; no staging directory left behind |
+| I1 | Kill the process mid-run, relaunch, and open **Review Interrupted Run** for the original manual specimen | RAPID blocks a fresh run while the treatment is unresolved. A prior accepted publication stays intact. After station recovery and signed operator review, the original staging directory is retained as unpublished evidence. |
 | I2 | Use **Save and Stop After Step** during a manual run, relaunch RAPID, and use **Continue Saved Run** for the same specimen | An existing accepted publication is preserved during the stop. The first treatment after the restart is the next untouched step. The final publication contains every step once and links the original retained evidence. |
-| I3 | Power-cycle the controlling computer mid-run | As I1, plus holder correction file still valid |
+| I3 | Power-cycle the controlling computer mid-run | As I1, plus holder correction file still valid and no treatment is replayed on restart. |
 | I4 | Resume a queue with interrupted rows | Operator must explicitly choose Resume / Re-run / Skip / Abort |
 
 ---

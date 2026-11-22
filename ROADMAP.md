@@ -2942,3 +2942,9 @@ staging files and raw acquisition records in a new app session. It checks
 the original plan, station profile, and holder before running the next
 untouched step. Repeat labels retain their individual positions. Physical
 acceptance remains open for I2 and K5.
+
+**Unplanned manual interruption checkpoint (2026-11-22).** Live Measure records
+an active attempt before treatment. On restart it separates captured readings
+from a treatment with unknown outcome and blocks a fresh run for that specimen
+until an operator records the disposition. Unpublished staging and earlier
+accepted data are preserved. I1 and I3 still require physical station evidence.

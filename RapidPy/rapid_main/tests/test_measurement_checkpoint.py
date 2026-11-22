@@ -14,6 +14,7 @@ from rapid_main.data_model import SpecimenMeta
 from rapid_main.hardware_contracts import NoCommBackend
 from rapid_main.holder_state import HolderStatus
 from rapid_main.magnetometer import BlockAudit, BracketedMeasurementBlock
+from rapid_main.manual_run_recovery import acknowledge_interruption, reconcile_manual_run
 from rapid_main.measurement_checkpoint import pending_checkpoint
 from rapid_main.measurement_worker import MeasurementWorker
 from rapid_main.panels.measurement import MeasurementPanel
@@ -100,7 +101,7 @@ class MeasurementCheckpointTests(unittest.TestCase):
         self.assertEqual(failed.treatments, ['AF10'])
         retry = RecordingBackend()
         rejected = self.run_worker(retry, saved=checkpoint)
-        self.assertIn('later treatment may already have started', rejected._error_messages[0])
+        self.assertIn('Review Interrupted Run', rejected._error_messages[0])
         self.assertEqual(retry.preflights, 0)
         self.assertEqual(pending_checkpoint(self.output), checkpoint)
 
@@ -154,6 +155,8 @@ class MeasurementCheckpointTests(unittest.TestCase):
         self.assertFalse(failed.checkpoint_saved)
         self.assertIn('moving at updown', failed._error_messages[0])
         self.assertIsNone(pending_checkpoint(self.root))
+        attempt = reconcile_manual_run(self.root, 'A')
+        acknowledge_interruption(attempt, operator='Fixture operator', notes='The first fixture specimen was set aside.')
         first = self.run_worker(RoutedFixture(), checkpoint=True, labels=['NRM', 'AF10'])
         self.assertTrue(first.checkpoint_saved, first._error_messages)
         checkpoint = pending_checkpoint(self.root)

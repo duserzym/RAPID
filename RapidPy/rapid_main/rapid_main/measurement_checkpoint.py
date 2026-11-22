@@ -1,4 +1,5 @@
 """Retain and verify a sequence stopped between treatment steps."""
+import hashlib
 from dataclasses import astuple
 import json
 import re
@@ -23,6 +24,41 @@ def _pointer(directory):
 
 def pending_checkpoint(directory):
     return _digest(_pointer(directory))
+
+
+def has_finished_checkpoint(directory, progress):
+    """Recognize a checkpoint saved just before the active-run marker cleared."""
+    path = _pointer(directory)
+    if not path.is_file():
+        return False
+    pointer = json.loads(path.read_bytes())
+    if (not isinstance(pointer, dict) or pointer.get('identity_sha256') != progress.identity_sha256
+            or type(pointer.get('count')) is not int):
+        return False
+    count = pointer['count']
+    total = len(progress.identity['labels'])
+    if not 0 < count < total:
+        return False
+    record, digest = progress._read(f'checkpoint-{count:05d}.json')
+    if (not isinstance(record, dict) or record.get('schema') != _SCHEMA
+            or record.get('identity_sha256') != progress.identity_sha256 or record.get('count') != count
+            or digest != pointer.get('sha256') or any(progress._path(f'{index:05d}-{suffix}.json').exists()
+                for index in range(count, total) for suffix in ('started', 'captured'))):
+        return False
+    if not progress.identity['simulated']:
+        _verify_retained_stop(directory, record)
+    return True
+
+
+def clear_accepted_checkpoint(directory, progress):
+    path = _pointer(directory)
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        return
+    pointer = json.loads(data)
+    if isinstance(pointer, dict) and pointer.get('identity_sha256') == progress.identity_sha256:
+        clear_checkpoint(directory, hashlib.sha256(data).hexdigest())
 
 
 def discard_checkpoint(directory, specimen, expected):
@@ -55,6 +91,18 @@ def validate_stop_proof(proof):
                 or type(sample.get('velocity_register')) is not int or sample['velocity_register'] != 0
                 for sample in samples) or samples[0]['position_raw'] != samples[1]['position_raw']):
             raise ValueError(f'Saved-run stop readback is incomplete or moving at {name}.')
+
+
+def _verify_retained_stop(directory, checkpoint):
+    stop_proof = checkpoint.get('stop_proof')
+    evidence = checkpoint.get('evidence')
+    if not isinstance(stop_proof, str) or not isinstance(evidence, dict) or stop_proof not in evidence:
+        raise ValueError('The saved run lacks its original stop readbacks.')
+    proof = contained_path(absolute_io_path(directory), stop_proof, output=True)
+    data = proof.read_bytes()
+    if hashlib.sha256(data).hexdigest() != evidence[stop_proof]:
+        raise ValueError('The saved-run stop readbacks changed.')
+    validate_stop_proof(json.loads(data))
 
 
 def save_checkpoint(bundle, progress, count, *, previous, susceptibility, evidence, stop_proof):
@@ -109,11 +157,7 @@ def restore_checkpoint(bundle, expected, *, labels, source, simulated):
         if _digest(contained_path(bundle.publish_dir, name, output=True)) != expected_digest:
             raise ValueError(f'The original measurement evidence changed: {name}')
     if not simulated:
-        stop_proof = checkpoint.get('stop_proof')
-        if not stop_proof or stop_proof not in checkpoint['evidence']:
-            raise ValueError('The saved run lacks its original stop readbacks.')
-        proof = contained_path(bundle.publish_dir, stop_proof, output=True)
-        validate_stop_proof(json.loads(proof.read_bytes()))
+        _verify_retained_stop(bundle.publish_dir, checkpoint)
 
     archive_id = checkpoint['archive_id']
     if not isinstance(archive_id, str) or not re.fullmatch(r'[0-9a-f]{64}', archive_id):

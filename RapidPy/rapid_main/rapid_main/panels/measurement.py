@@ -25,6 +25,7 @@ from rapid_main.io.measurement_bundle import SIMULATED_SUBDIR, validate_measurem
 from rapid_main.specimen_paths import specimen_run_directory
 from rapid_main.measurement_worker import MeasurementWorker, StepResult
 from rapid_main.measurement_checkpoint import discard_checkpoint, pending_checkpoint
+from rapid_main.manual_run_recovery import acknowledge_interruption, reconcile_manual_run
 from rapid_main.printing import print_widget_snapshot
 from rapidpy_common.hardware_safety import HardwareSafetyError
 
@@ -246,6 +247,7 @@ class MeasurementPanel(QtWidgets.QWidget):
         self._save_run_btn = QtWidgets.QPushButton("Save and Stop After Step")
         self._save_run_btn.setEnabled(False)
         self._continue_run_btn = QtWidgets.QPushButton("Continue Saved Run")
+        self._review_run_btn = QtWidgets.QPushButton('Review Interrupted Run')
         self._halt_btn.setStyleSheet(
             "QPushButton { color: #b91c1c; }"
             "QPushButton:hover { background: rgba(220,38,38,0.10); }"
@@ -259,8 +261,10 @@ class MeasurementPanel(QtWidgets.QWidget):
         self._halt_btn.clicked.connect(self._on_halt)
         self._save_run_btn.clicked.connect(self._request_checkpoint)
         self._continue_run_btn.clicked.connect(self._continue_saved_run)
+        self._review_run_btn.clicked.connect(self._review_interrupted_run)
 
         for btn in (self._start_btn, self._pause_btn, self._halt_btn, self._save_run_btn, self._continue_run_btn,
+                    self._review_run_btn,
                     self._print_btn, self._plots_btn):
             cl.addWidget(btn)
 
@@ -555,6 +559,58 @@ class MeasurementPanel(QtWidgets.QWidget):
     def _continue_saved_run(self) -> None:
         self.start_measurement_for_sample(self._current_sample, continue_saved=True)
 
+    def _review_interrupted_run(self) -> None:
+        mw = self.window()
+        active = getattr(mw, '_has_active_automation', lambda: False)
+        if self._worker is not None or active():
+            QtWidgets.QMessageBox.warning(self, 'Interrupted Run', 'Finish current station work before reviewing an interruption.')
+            return
+        sample = self._current_sample
+        cfg = getattr(mw, 'config', None)
+        profile = config_fingerprint(cfg) if cfg is not None else ''
+        general = getattr(cfg, 'general', None)
+        backend = _resolve_measurement_backend(mw, NoCommBackend()) or NoCommBackend()
+        simulated = bool(getattr(backend, 'simulated', False))
+        operator = str(getattr(general, 'operator', '')).strip()
+        if simulated and not operator:
+            operator = 'No-Communication operator'
+        root = Path(getattr(general, 'data_dir', '') or Path.home() / 'RAPID_data')
+        try:
+            output = specimen_run_directory(root, sample)
+            published = output / SIMULATED_SUBDIR if simulated else output
+            attempt = reconcile_manual_run(published, sample)
+            if attempt is None:
+                QtWidgets.QMessageBox.information(self, 'Interrupted Run', 'There is no unresolved manual run for this specimen and mode.')
+                return
+            if not operator:
+                QtWidgets.QMessageBox.warning(self, 'Interrupted Run', 'Sign in before recording a live interruption review.')
+                return
+            inspection = QtWidgets.QMessageBox(self)
+            inspection.setWindowTitle('Review Interrupted Run')
+            inspection.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+            inspection.setText(f'Interrupted manual measurement for {sample}')
+            inspection.setInformativeText('Inspect the original record and establish the specimen and station disposition before recording your review.')
+            inspection.setDetailedText(attempt.describe())
+            inspection.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel)
+            inspection.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+            inspection.button(QtWidgets.QMessageBox.StandardButton.Ok).setText('Record Review…')
+            if inspection.exec() != QtWidgets.QMessageBox.StandardButton.Ok:
+                return
+            notes, confirmed = QtWidgets.QInputDialog.getMultiLineText(self, 'Record Interruption Review',
+                'Record the specimen condition, station recovery outcome, and how you will handle this attempt.')
+            if not confirmed:
+                return
+            if (active() or self._worker is not None or sample != self._current_sample
+                    or cfg is not getattr(mw, 'config', None)
+                    or (cfg is not None and config_fingerprint(cfg) != profile)
+                    or bool(getattr(_resolve_measurement_backend(mw, backend), 'simulated', False)) != simulated):
+                raise ValueError('The selected specimen, station mode, or operator changed. Open the review again.')
+            receipt = acknowledge_interruption(attempt, operator=operator, notes=notes)
+            if hasattr(mw, 'set_status'):
+                mw.set_status(f'Interrupted run review recorded at {receipt}')
+        except (OSError, ValueError, HardwareSafetyError) as exc:
+            QtWidgets.QMessageBox.warning(self, 'Interrupted Run', str(exc))
+
     def _request_checkpoint(self) -> None:
         if self._worker is not None:
             self._worker.request_checkpoint()
@@ -660,6 +716,10 @@ class MeasurementPanel(QtWidgets.QWidget):
         saved = None
         try:
             if not queue_run:
+                if reconcile_manual_run(published, meta.name) is not None:
+                    QtWidgets.QMessageBox.warning(self, 'Interrupted Run',
+                        'Open Review Interrupted Run for this specimen before starting another measurement.')
+                    return False
                 saved = pending_checkpoint(published)
             if continue_saved:
                 if saved is None or not checkpoint_profile:
@@ -785,6 +845,7 @@ class MeasurementPanel(QtWidgets.QWidget):
                 queue_side=queue_side,
                 external_thermal=external_thermal,
                 checkpoint_profile=checkpoint_profile,
+                track_manual=cfg is not None and not queue_run and meta.name != 'UNKNOWN',
                 continue_from=saved if continue_saved else None,
                 parent=self,
             )
@@ -802,6 +863,7 @@ class MeasurementPanel(QtWidgets.QWidget):
         self._worker.phase_changed.connect(self._on_phase_changed)
         self._save_run_btn.setEnabled(bool(checkpoint_profile) and len(labels) > 1)
         self._continue_run_btn.setEnabled(False)
+        self._review_run_btn.setEnabled(False)
         self._worker.start()
 
         if hasattr(mw, "start_run"):
@@ -1167,6 +1229,7 @@ class MeasurementPanel(QtWidgets.QWidget):
         self._pause_btn.setText("⏸  Pause Run")
         self._save_run_btn.setEnabled(False)
         self._continue_run_btn.setEnabled(True)
+        self._review_run_btn.setEnabled(True)
         self._release_measurement_ownership()
         sidecar_error: Exception | None = None
         if not aborted:

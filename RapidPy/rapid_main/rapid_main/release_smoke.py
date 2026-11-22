@@ -192,6 +192,35 @@ def _check_measurement_checkpoint(root):
                 and [step['label'] for step in resumed._progress.accepted_steps()] == plan)
 
 
+def _check_manual_interruption(root):
+    from rapid_main.data_model import SpecimenMeta
+    from rapid_main.hardware_contracts import NoCommBackend
+    from rapid_main.manual_run_recovery import acknowledge_interruption, reconcile_manual_run
+    from rapid_main.measurement_worker import MeasurementWorker
+    from rapidpy_common.paths import absolute_io_path
+
+    class InterruptedSimulator(NoCommBackend):
+        def set_demag_step(self, label):
+            raise RuntimeError('Offline interruption fixture')
+
+    with tempfile.TemporaryDirectory(prefix='interruption-', dir=absolute_io_path(root)) as directory:
+        output = Path(directory)
+        meta = SpecimenMeta('offline')
+        original = MeasurementWorker(meta, ['NRM'], output, InterruptedSimulator(), track_manual=True)
+        original.run()
+        interrupted = reconcile_manual_run(original._pair_directory, meta.name)
+        if interrupted is None or 'Treatment may already have occurred' not in interrupted.describe():
+            return False
+        fresh = MeasurementWorker(meta, ['NRM'], output, NoCommBackend())
+        fresh.run()
+        if fresh._progress is not None or not fresh._error_messages:
+            return False
+        receipt = acknowledge_interruption(interrupted, operator='Offline fixture operator',
+                                           notes='Resolved the injected offline interruption.')
+        return (receipt.is_file() and reconcile_manual_run(original._pair_directory, meta.name) is None
+                and not (original._pair_directory / 'measurements.txt').exists())
+
+
 def _check_vrm_practice(app, root):
     from PySide6 import QtCore
     from rapid_main.vrm import VRM_CONTEXT_ENV, build_vrm_launch_context, write_vrm_launch_context
@@ -317,6 +346,7 @@ def run_smoke_test() -> int:
             measurement_archive = _check_measurement_archive(root)
             measurement_backup = _check_measurement_backup(app, root)
             measurement_checkpoint = _check_measurement_checkpoint(root)
+            manual_interruption = _check_manual_interruption(root)
             sample_index_registry = _check_sample_index_registry(window, root)
             vrm_practice = _check_vrm_practice(app, root)
             report = {
@@ -324,12 +354,13 @@ def run_smoke_test() -> int:
                 "software_version": software_version(),
                 "ok": (window.config.general.nocomm and all(helpers.values()) and transverse_probe
                        and webcam_decode and measurement_archive and measurement_backup and sample_index_registry
-                       and vrm_practice and measurement_checkpoint),
+                       and vrm_practice and measurement_checkpoint and manual_interruption),
                 "transverse_probe": transverse_probe,
                 "webcam_decode": webcam_decode,
                 "measurement_archive": measurement_archive,
                 "measurement_backup": measurement_backup,
                 "measurement_checkpoint": measurement_checkpoint,
+                "manual_interruption": manual_interruption,
                 "sample_index_registry": sample_index_registry,
                 "vrm_practice": vrm_practice,
                 "compact_display_check": True,

@@ -125,6 +125,17 @@ publishes the full sequence after the remaining steps finish and the safe
 return succeeds. If a later treatment may already have started, inspect the
 specimen and station before deciding whether to start a fresh run.
 
+### Review an unexpectedly interrupted manual run
+
+After an unexpected exit, select the original specimen in Live Measure and
+open **Review Interrupted Run**. The review shows which steps have captured
+readings and which had an intent recorded without a complete acquisition.
+Establish the state of the instrument and the treated specimen through the
+station recovery procedure. Then record the disposition under your operator
+name. This preserves the original treatment evidence and any unpublished
+output, clears the interrupted run, and permits an intentional new run.
+The review does not issue instrument commands or accept partial measurements.
+
 ### Chain-drive queues
 
 For a chain-drive queue, import the original profile with
