@@ -6,21 +6,27 @@ import threading
 from PySide6 import QtCore, QtWidgets
 
 from ..transverse import plan_transverse_scan
+from ..transverse_scan import TransverseScanPause
 
 
 class _ScanThread(QtCore.QThread):
     progress = QtCore.Signal(str)
+    sampled = QtCore.Signal(object, str)
 
-    def __init__(self, operation, parent):
+    def __init__(self, operation, parent, *, scanning=False):
         super().__init__(parent)
         self.operation = operation
         self.cancel = threading.Event()
+        self.pause = TransverseScanPause() if scanning else None
         self.output = None
         self.error = ""
 
     def run(self):
         try:
-            self.output = self.operation(cancelled=self.cancel.is_set, progress=self.progress.emit)
+            options = {"cancelled": self.cancel.is_set, "progress": self.progress.emit}
+            if self.pause is not None:
+                options.update(pause=self.pause, sampled=self.sampled.emit)
+            self.output = self.operation(**options)
         except Exception as exc:
             self.error = str(exc)
 
@@ -84,9 +90,12 @@ class TransverseScanDialog(QtWidgets.QDialog):
         self.start_button = QtWidgets.QPushButton("Start Scan", clicked=self._start)
         self.apply_button = QtWidgets.QPushButton("Move to Best Angle", clicked=self._apply)
         self.recover_button = QtWidgets.QPushButton("Verify Safe State", clicked=self._recover)
+        self.pause_button = QtWidgets.QPushButton("Pause", clicked=self._toggle_pause)
+        self.pause_button.setToolTip("Pause between readings with the AF outputs off.")
         self.stop_button = QtWidgets.QPushButton("Stop", clicked=self.stop)
         self.close_button = QtWidgets.QPushButton("Close", clicked=self.reject)
-        for button in (self.start_button, self.apply_button, self.recover_button, self.stop_button, self.close_button):
+        for button in (self.start_button, self.apply_button, self.recover_button,
+                       self.pause_button, self.stop_button, self.close_button):
             button.setAutoDefault(False)
             actions.addWidget(button)
         self._inputs = self.start_angle, self.end_angle, self.pitch, self.field, self.port
@@ -131,6 +140,9 @@ class TransverseScanDialog(QtWidgets.QDialog):
         self.recover_button.setVisible(recovery or active and self.action == "recovery")
         self.recover_button.setEnabled(recovery and not active)
         self.stop_button.setEnabled(active and self.action != "recovery")
+        pause = self.worker.pause if active else None
+        self.pause_button.setEnabled(pause is not None and not self.worker.cancel.is_set())
+        self.pause_button.setText("Resume" if pause is not None and pause.requested else "Pause")
         for field in (*self._inputs, self.cleared):
             field.setEnabled(not active and not recovery)
         return recovery
@@ -168,12 +180,33 @@ class TransverseScanDialog(QtWidgets.QDialog):
             self._refresh()
             return
         self.action = action
-        self.worker = _ScanThread(operation, self)
+        self.worker = _ScanThread(operation, self, scanning=action == "scan")
         self.worker.progress.connect(self.message.setText)
+        self.worker.sampled.connect(self._append_sample)
         self.worker.finished.connect(self._finish)
         self._refresh()
         self.message.setText("Starting…" if action != "recovery" else "Verifying safe state…")
         self.worker.start()
+
+    @QtCore.Slot(object, str)
+    def _append_sample(self, sample, checkpoint):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        for column, value in enumerate((sample.requested_deg, sample.actual_deg, sample.peak_mT)):
+            self.table.setItem(row, column, QtWidgets.QTableWidgetItem(f"{value:.6g}"))
+        if checkpoint:
+            self.evidence.setText(checkpoint)
+
+    @QtCore.Slot()
+    def _toggle_pause(self):
+        if not self.active or self.worker.pause is None or self.worker.cancel.is_set():
+            return
+        if self.worker.pause.requested:
+            self.worker.pause.resume()
+        else:
+            self.worker.pause.request()
+            self.message.setText("Pause requested. Waiting for a safe point between readings…")
+        self._refresh()
 
     @QtCore.Slot()
     def _finish(self):
@@ -187,10 +220,6 @@ class TransverseScanDialog(QtWidgets.QDialog):
             self.message.setText(worker.error)
         elif self.action == "scan":
             self.result = result = worker.output
-            self.table.setRowCount(len(result.samples))
-            for row, sample in enumerate(result.samples):
-                for column, value in enumerate((sample.requested_deg, sample.actual_deg, sample.peak_mT)):
-                    self.table.setItem(row, column, QtWidgets.QTableWidgetItem(f"{value:.6g}"))
             self.message.setText(
                 f"{'Simulated peak' if self.simulated else 'Measured peak'} at {result.best.actual_deg:.3f}° "
                 f"({result.best.peak_mT:+.6g} mT)."
@@ -213,6 +242,9 @@ class TransverseScanDialog(QtWidgets.QDialog):
     def stop(self):
         if self.active and self.action != "recovery":
             self.worker.cancel.set()
+            if self.worker.pause is not None:
+                self.worker.pause.resume()
+            self._refresh()
             self.message.setText("Stopping and verifying safe state…")
 
     def done(self, result):

@@ -20,23 +20,27 @@ def _check_transverse_probe(window, app):
     if dialog is None:
         return False
 
-    def wait_for_worker():
+    def wait_until(predicate):
         timer = QtCore.QElapsedTimer()
         timer.start()
-        while dialog.active and timer.elapsed() < 5000:
+        while not predicate() and timer.elapsed() < 5000:
             app.processEvents()
             QtCore.QThread.msleep(10)
-        return not dialog.active
+        return predicate()
 
     try:
         dialog.start_button.click()
-        if not wait_for_worker() or not dialog.apply_button.isEnabled() or dialog.table.rowCount() < 3:
+        dialog.pause_button.click()
+        if not wait_until(lambda: dialog.message.text() == "Paused between readings."):
+            return False
+        dialog.pause_button.click()
+        if not wait_until(lambda: not dialog.active) or not dialog.apply_button.isEnabled() or dialog.table.rowCount() < 3:
             return False
         dialog.apply_button.click()
-        return wait_for_worker() and dialog.message.text().startswith("Simulated angle")
+        return wait_until(lambda: not dialog.active) and dialog.message.text().startswith("Simulated angle")
     finally:
         dialog.stop()
-        wait_for_worker()
+        wait_until(lambda: not dialog.active)
         dialog.close()
         app.processEvents()
 

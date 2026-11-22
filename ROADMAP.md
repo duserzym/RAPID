@@ -2873,3 +2873,8 @@ readbacks and offers a separate move to the measured maximum magnitude.
 The station journal covers both motor axes and the AF outputs. No-Comm
 exercises both scan and move from the same dialog. H9 records the outstanding
 bench comparison, installation and cooling checks, and interruption recovery.
+
+The transverse scan now pauses between readings with AF outputs confirmed off
+and both motor axes stationary. Resume verifies the lift and turning positions
+before the next ramp. Live scans flush each confirmed reading to a checkpoint
+and link it from the terminal or recovery record.

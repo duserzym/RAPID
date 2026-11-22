@@ -12,7 +12,7 @@ from rapid_main.config import AppConfig
 from rapid_main.diagnostic_services import AfDemagBackendAdapter, DCMotorBackendAdapter
 from rapid_main.panels.transverse_scan import TransverseScanDialog
 from rapid_main.transverse import plan_transverse_scan
-from rapid_main.transverse_scan import NativeTransverseScan, SimulatedTransverseScan
+from rapid_main.transverse_scan import NativeTransverseScan, SimulatedTransverseScan, TransverseScanPause
 from rapidpy_common.adwin_af import AdwinBoardConfig, AdwinCoilLimits, AdwinRampResult
 from rapidpy_common.gaussmeter import GaussmeterReading
 from rapidpy_common.hardware import HardwareError, MotorControllerConfig, MoveResult, convert_angle_to_pos
@@ -125,6 +125,71 @@ class NativeTransverseScanTests(unittest.TestCase):
         self.assertTrue(self.store.read()["record"]["safe_state_confirmed"])
         self.meter.disconnect.assert_called_once()
 
+    def test_pause_flushes_completed_reading_and_holds_station_until_resume(self):
+        pause = TransverseScanPause()
+        checkpoints = []
+
+        def sampled(sample, checkpoint):
+            checkpoints.append(checkpoint)
+            if len(checkpoints) == 1:
+                pause.request()
+
+        def progress(message):
+            if not message.startswith("Paused"):
+                return
+            with self.assertRaises(HardwareSafetyError):
+                with HardwareSafetyStore(self.store.path).operation_lease():
+                    self.fail("The paused station released its operation lease.")
+            header, point = [json.loads(line) for line in Path(checkpoints[0]).read_text().splitlines()]
+            self.assertEqual(header["operation_token"], self.store.pending()["token"])
+            self.assertAlmostEqual(point["peak_mT"], -1.2)
+            self.assertTrue(point["af_outputs_off"]["safe_state_confirmed"])
+            self.assertEqual(self.motors._client.turning_motor_rotate.call_count, 1)
+            self.af._controller.run_ramp.assert_called_once()
+            pause.resume()
+
+        result = self.station.scan(self.plan, **{**self.options, "progress": progress}, pause=pause, sampled=sampled)
+        self.assertEqual(len(checkpoints), len(result.samples))
+        self.assertEqual(len(Path(checkpoints[0]).read_text().splitlines()), len(result.samples) + 1)
+        self.assertIn({"readings_checkpoint": checkpoints[0]}, self.store.read()["record"]["observations"])
+
+    def test_pose_change_while_paused_preserves_partial_and_skips_next_ramp(self):
+        pause = TransverseScanPause()
+
+        def progress(message):
+            if message.startswith("Paused"):
+                self.height += 1
+                pause.resume()
+
+        with self.assertRaisesRegex(HardwareError, "Lift position changed at the pause boundary"):
+            self.station.scan(self.plan, **{**self.options, "progress": progress}, pause=pause,
+                              sampled=lambda *_: pause.request())
+        self.af._controller.run_ramp.assert_called_once()
+        self.assertIsNone(self.store.pending())
+        observations = self.store.read()["record"]["observations"]
+        checkpoint = next(record["readings_checkpoint"] for record in observations if "readings_checkpoint" in record)
+        self.assertEqual(len(Path(checkpoint).read_text().splitlines()), 2)
+
+    def test_recovery_preserves_checkpoint_when_shutdown_requires_retry(self):
+        paths = []
+
+        def sampled(_point, checkpoint):
+            paths.append(Path(checkpoint))
+            self.af_failure = self.cancel = True
+
+        with self.assertRaisesRegex(HardwareSafetyError, "recovery required"):
+            self.station.scan(self.plan, **self.options, sampled=sampled)
+        self.assertIsNotNone(self.store.pending())
+        self.assertEqual(len(paths), 1)
+        original = paths[0].read_bytes()
+        self.assertEqual(len(original.splitlines()), 2)
+        self.af_failure = self.cancel = False
+        self.station.recover(**self.options)
+        self.assertIsNone(self.store.pending())
+        self.assertEqual(paths[0].read_bytes(), original)
+        self.assertIn({"readings_checkpoint": str(paths[0])}, self.store.read()["record"]["observations"])
+        self.af._controller.run_ramp.assert_called_once()
+
     def test_recovery_requires_both_channels_and_never_replays_motion(self):
         self.af_failure = self.stop_failure = True
         with self.assertRaisesRegex(HardwareSafetyError, "recovery required"):
@@ -195,5 +260,34 @@ class TransverseDialogTests(unittest.TestCase):
             QtCore.QCoreApplication.processEvents()
             QtTest.QTest.qWait(10)
         self.assertIn("Simulated angle", dialog.message.text())
+        self.assertFalse(dialog.apply_button.isEnabled())
+        app.processEvents()
+
+    def test_stop_while_paused_preserves_table_and_disables_apply(self):
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        dialog = TransverseScanDialog(None, SimulatedTransverseScan(), lambda **_: None, simulated=True)
+        self.addCleanup(dialog.close)
+        dialog.start_button.click()
+        for _ in range(100):
+            if dialog.table.rowCount() > 0:
+                break
+            QtTest.QTest.qWait(5)
+        self.assertTrue(dialog.pause_button.isEnabled())
+        dialog.pause_button.click()
+        for _ in range(100):
+            if dialog.message.text().startswith("Paused"):
+                break
+            QtTest.QTest.qWait(10)
+        self.assertEqual(dialog.message.text(), "Paused between readings.")
+        self.assertEqual(dialog.pause_button.text(), "Resume")
+        count = dialog.table.rowCount()
+        self.assertGreater(count, 0)
+        dialog.stop_button.click()
+        for _ in range(100):
+            if not dialog.active:
+                break
+            QtTest.QTest.qWait(10)
+        self.assertFalse(dialog.active)
+        self.assertEqual(dialog.table.rowCount(), count)
         self.assertFalse(dialog.apply_button.isEnabled())
         app.processEvents()

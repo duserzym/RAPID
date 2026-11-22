@@ -179,8 +179,11 @@ cooling and confirm the probe setup before starting. Set the angular
 pitch, a calibrated transverse field in mT, and the 908A COM port. Close the
 separate 908A Gaussmeter window before scanning. The scan checks stationary
 lift and turning readbacks, then measures a signed DC peak at each angle with
-a calibrated transverse ADwin ramp. The table shows requested angles, actual
-encoder angles and signed peaks in mT.
+a calibrated transverse ADwin ramp. The table shows each verified reading as
+it arrives, with the requested angle, actual encoder angle and signed peak in
+mT. **Pause** waits for the next boundary between readings and verifies AF
+outputs off and both axes stopped. **Resume** rechecks the probe position
+before continuing. The scan keeps the station reserved while paused.
 
 The scan leaves the probe at the last measured angle. Use **Move to Best
 Angle** to turn separately to the measured angle with the largest absolute
@@ -188,7 +191,12 @@ peak. The app verifies that the encoder and original scan evidence still
 match before moving. **Stop** checks both motor axes and the AF outputs.
 If either verification fails, use **Verify Safe State** in the same tool with
 the original station wiring. Recovery stops and verifies the equipment in
-place. No-Comm exercises both actions with simulated readings.
+place. A live scan flushes each verified reading to a JSONL checkpoint in the
+hardware diagnostics folder before it starts the next angle. Stop and
+recovery records reference the checkpoint. Use complete JSONL lines to
+inspect interrupted readings. Start a new scan to obtain a best angle after
+an interruption. No-Comm exercises pause, resume, and move with simulated
+readings.
 
 ## Rebuild and test
 

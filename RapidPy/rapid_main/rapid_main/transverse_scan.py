@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import json
 import math
+import os
+import threading
 import time
 import uuid
 
@@ -53,6 +56,42 @@ class TransverseEvidence:
 def _check_cancel(cancelled):
     if cancelled():
         raise HardwareError("Transverse probe operation stopped.")
+
+
+class TransverseScanPause:
+    def __init__(self):
+        self._resume = threading.Event()
+        self._resume.set()
+
+    @property
+    def requested(self):
+        return not self._resume.is_set()
+
+    def request(self):
+        self._resume.clear()
+
+    def resume(self):
+        self._resume.set()
+
+    def wait_between_points(self, cancelled, progress, *, verify=None):
+        _check_cancel(cancelled)
+        if not self.requested:
+            return
+        if verify is not None:
+            verify()
+        _check_cancel(cancelled)
+        progress("Paused between readings." if verify is None else "Paused. AF outputs are off and both motors are stopped.")
+        while not self._resume.wait(.05):
+            _check_cancel(cancelled)
+        _check_cancel(cancelled)
+        if verify is not None:
+            verify()
+
+
+def _append_reading(handle, record):
+    handle.write(json.dumps(record, allow_nan=False) + "\n")
+    handle.flush()
+    os.fsync(handle.fileno())
 
 
 def _wait(seconds, cancelled):
@@ -116,6 +155,7 @@ class NativeTransverseScan:
                 or proof.get("simulated") is not False):
             raise HardwareSafetyError("ADwin field-off readback is unverified.")
         observations.append({"af_outputs_off": proof})
+        return proof
 
     def _stationary(self, observations, *, require_height=True, ready=None):
         positions, failures, axis_samples = {}, [], {}
@@ -134,7 +174,7 @@ class NativeTransverseScan:
             raise HardwareSafetyError("Stopped motor readback failed. " + ". ".join(failures))
         if require_height and abs(positions["lift"] - self.height) > self.scale:
             raise HardwareError("Place the manually mounted probe at the calibrated AF height (within 1 cm).")
-        return convert_pos_to_angle(positions["turning"], self.rotation_counts)
+        return positions["lift"], convert_pos_to_angle(positions["turning"], self.rotation_counts)
 
     @staticmethod
     def _check_travel(plan, angle):
@@ -142,7 +182,7 @@ class NativeTransverseScan:
         if not low - ANGLE_TOLERANCE_DEG <= angle <= high + ANGLE_TOLERANCE_DEG:
             raise HardwareError("Turning readback is outside the operator-cleared encoder interval.")
 
-    def _move(self, plan, target, observations, cancelled):
+    def _move(self, plan, target, lift_position, observations, cancelled):
         _check_cancel(cancelled)
         self._check_travel(plan, target)
         self.client._motion_cancel_check = cancelled
@@ -150,7 +190,9 @@ class NativeTransverseScan:
             movement = self.client.turning_motor_rotate(self.turning, target)
         finally:
             self.client._motion_cancel_check = None
-        actual = self._stationary(observations)
+        current_lift, actual = self._stationary(observations)
+        if current_lift != lift_position:
+            raise HardwareError("Lift position changed during turning. Verify the probe height.")
         self._check_travel(plan, actual)
         if movement.success is not True or abs(actual - target) > ANGLE_TOLERANCE_DEG:
             raise HardwareError(f"Turning readback {actual:.3f}° missed {target:.3f}°.")
@@ -168,6 +210,9 @@ class NativeTransverseScan:
         peaks = [item for item in record["observations"] if "dc_peak" in item]
         if not peaks or not result.samples or peaks[-1]["actual_deg"] != result.samples[-1].actual_deg:
             raise HardwareSafetyError("The final encoder position does not match the verified scan.")
+
+    def _readings_path(self, token):
+        return self.store.path.parent / "hardware_diagnostics" / f"transverse-{token}.jsonl"
 
     def _transaction(self, operation, *, run=None, previous_scan=None, recovery=False):
         with self.store.operation_lease():
@@ -190,7 +235,7 @@ class NativeTransverseScan:
                     if opened_here:
                         self.client.connect(baudrate=self.motors._station_baud)
                     self._field_off(observations)
-                    result = run(observations)
+                    result = run(observations, token)
             except BaseException as exc:
                 error = f"{type(exc).__name__}: {exc}"
                 raise
@@ -215,6 +260,10 @@ class NativeTransverseScan:
                             self.client.disconnect()
                         except Exception as exc:
                             failures.append(f"Motor connection release: {exc}")
+                if operation.get("action") == "transverse_probe_scan":
+                    path = self._readings_path(token)
+                    if path.is_file():
+                        observations.append({"readings_checkpoint": str(path)})
                 record = TransverseEvidence(
                     "station-" + uuid.uuid4().hex, operation, profile, datetime.now(timezone.utc).isoformat(),
                     tuple(observations), error, ". ".join(failures), not failures,
@@ -228,7 +277,7 @@ class NativeTransverseScan:
                     raise HardwareSafetyError("Transverse station recovery required. " + record.cleanup_error)
         return result, record.treatment_id, str(folder / "record.json")
 
-    def scan(self, plan, *, cancelled, progress):
+    def scan(self, plan, *, cancelled, progress, pause=None, sampled=None):
         ramp = plan_calibrated_af_ramp("Transverse probe scan", plan.field_mT, "transverse", self.config.af_demag)
         if ramp.monitor_peak_v <= 0 or ramp.ramp_peak_v <= 0:
             raise ValueError("The requested field does not produce a nonzero calibrated ramp.")
@@ -240,33 +289,61 @@ class NativeTransverseScan:
             raise ValueError("Select a 908A port distinct from other configured station devices.")
         meter = self.meter_factory(port=plan.meter_port, mode=1)
 
-        def run(observations):
-            self._check_travel(plan, self._stationary(observations))
+        def run(observations, token):
+            lift_position, actual = self._stationary(observations)
+            self._check_travel(plan, actual)
             _check_cancel(cancelled)
             meter.connect(timeout_s=5.)
             meter.set_mode(1)
+            path = self._readings_path(token)
+            path.parent.mkdir(parents=True, exist_ok=True)
             samples = []
-            for index, angle in enumerate(plan.angles_deg, 1):
-                progress(f"Measuring position {index} of {len(plan.angles_deg)} at {angle:g}°")
-                actual = self._move(plan, angle, observations, cancelled)
-                meter.reset_peak()
-                self.wait(1., cancelled)
-                baseline = _read_peak(meter)
-                observations.append({"requested_deg": angle, "actual_deg": actual, "baseline": baseline})
-                self.af.set_halt_check(cancelled)
-                try:
-                    _check_cancel(cancelled)
-                    self.af.apply_calibrated_af(ramp)
-                    observations.append({"af_ramp": asdict(self.af._last_result)})
-                    self.wait(.5, cancelled)
-                    peak = _read_peak(meter)
-                    observations.append({"requested_deg": angle, "actual_deg": actual, "dc_peak": peak})
-                    if peak["range_index"] != baseline["range_index"] or peak["units_index"] != baseline["units_index"]:
-                        raise HardwareError("The 908A range or units changed during a peak acquisition.")
-                    samples.append(TransverseSample(angle, actual, peak["peak_mT"]))
-                finally:
-                    self.af.set_halt_check(None)
-                    self._field_off(observations)
+
+            def verify_pause_position():
+                self._field_off(observations)
+                current_lift, current = self._stationary(observations)
+                self._check_travel(plan, current)
+                if current_lift != lift_position:
+                    raise HardwareError("Lift position changed at the pause boundary. Start a new scan.")
+                if abs(current - actual) > ANGLE_TOLERANCE_DEG:
+                    raise HardwareError("Turning position changed at the pause boundary. Start a new scan.")
+
+            with path.open("x", encoding="utf-8", newline="\n") as readings:
+                _append_reading(readings, {
+                    "schema": "rapidpy.transverse.readings.v1", "operation_token": token,
+                    "plan": asdict(plan), "ramp": asdict(ramp), "simulated": False,
+                })
+                for index, angle in enumerate(plan.angles_deg, 1):
+                    if pause is not None:
+                        pause.wait_between_points(cancelled, progress, verify=verify_pause_position)
+                    progress(f"Measuring position {index} of {len(plan.angles_deg)} at {angle:g}°")
+                    actual = self._move(plan, angle, lift_position, observations, cancelled)
+                    meter.reset_peak()
+                    self.wait(1., cancelled)
+                    baseline = _read_peak(meter)
+                    observations.append({"requested_deg": angle, "actual_deg": actual, "baseline": baseline})
+                    self.af.set_halt_check(cancelled)
+                    try:
+                        _check_cancel(cancelled)
+                        self.af.apply_calibrated_af(ramp)
+                        ramp_result = asdict(self.af._last_result)
+                        observations.append({"af_ramp": ramp_result})
+                        self.wait(.5, cancelled)
+                        peak = _read_peak(meter)
+                        observations.append({"requested_deg": angle, "actual_deg": actual, "dc_peak": peak})
+                        if peak["range_index"] != baseline["range_index"] or peak["units_index"] != baseline["units_index"]:
+                            raise HardwareError("The 908A range or units changed during a peak acquisition.")
+                    finally:
+                        self.af.set_halt_check(None)
+                        field_off = self._field_off(observations)
+                    sample = TransverseSample(angle, actual, peak["peak_mT"])
+                    _append_reading(readings, {
+                        **asdict(sample), "baseline": baseline, "dc_peak": peak, "af_ramp": ramp_result,
+                        "af_outputs_off": field_off,
+                    })
+                    samples.append(sample)
+                    if sampled is not None:
+                        sampled(sample, str(path))
             _check_cancel(cancelled)
             best = best_transverse_sample(tuple(samples))
             observations.append({"best_measured_sample": asdict(best)})
@@ -284,13 +361,13 @@ class NativeTransverseScan:
     def apply(self, result, *, cancelled, progress):
         target = result.best.actual_deg
 
-        def run(observations):
-            current = self._stationary(observations)
+        def run(observations, _token):
+            lift_position, current = self._stationary(observations)
             self._check_travel(result.plan, current)
             if abs(current - result.samples[-1].actual_deg) > ANGLE_TOLERANCE_DEG:
                 raise HardwareError("The turning position changed after the scan. Scan again before applying an angle.")
             progress(f"Turning to the measured peak at {target:.3f}°")
-            actual = self._move(result.plan, target, observations, cancelled)
+            actual = self._move(result.plan, target, lift_position, observations, cancelled)
             observations.append({"requested_deg": target, "actual_deg": actual})
             return actual
 
@@ -309,15 +386,20 @@ class SimulatedTransverseScan:
     def pending_recovery(self):
         return False
 
-    def scan(self, plan, *, cancelled, progress):
+    def scan(self, plan, *, cancelled, progress, pause=None, sampled=None):
         low, high = plan.bounds
         peak_angle = low + (high - low) * .4
         samples = []
         for index, angle in enumerate(plan.angles_deg, 1):
+            if pause is not None:
+                pause.wait_between_points(cancelled, progress)
             progress(f"Simulating position {index} of {len(plan.angles_deg)} at {angle:g}°")
             _wait(.04, cancelled)
             peak = -plan.field_mT * math.exp(-16 * ((angle - peak_angle) / (high - low))**2)
-            samples.append(TransverseSample(angle, angle, peak))
+            sample = TransverseSample(angle, angle, peak)
+            samples.append(sample)
+            if sampled is not None:
+                sampled(sample, "")
         return TransverseScanResult(plan, tuple(samples), best_transverse_sample(tuple(samples)), "", "")
 
     def apply(self, result, *, cancelled, progress):
