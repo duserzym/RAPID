@@ -2540,6 +2540,7 @@ class MainWindow(QtWidgets.QMainWindow):
         irm_sub.addAction("IRM Voltage Calibration", self._launch_irm_voltage_calibration)
         dm.addAction("Thermal Routine Planning", self._launch_thermal_routine_planning)
         dm.addAction("908A &Gaussmeter", self._launch_gaussmeter)
+        dm.addAction("Transverse Probe Scan", self._launch_transverse_scan)
         dm.addAction("Susceptibility &Bridge", self._launch_susceptibility_bridge)
         dm.addSeparator()
         dm.addAction("&VRM Data Collection", self._launch_vrm)
@@ -2856,11 +2857,52 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def _launch_gaussmeter(self) -> None:
-        self._launch_external_tool(
-            target_path="gaussmeter_control/main.py",
-            module="gaussmeter_control",
-            app_name="908A Gaussmeter",
-        )
+        try:
+            lease = self.acquire_device("gaussmeter", "gaussmeter_process", allow_reentrant=False)
+        except DeviceOwnershipError as exc:
+            self.set_status(str(exc))
+            return
+        process = None
+        try:
+            process = self._launch_external_tool(
+                target_path="gaussmeter_control/main.py",
+                module="gaussmeter_control",
+                app_name="908A Gaussmeter",
+            )
+        finally:
+            if process is None:
+                lease.release()
+        if process is not None:
+            self._hold_external_process_leases(process, [lease], "908A Gaussmeter closed.")
+
+    def _launch_transverse_scan(self) -> None:
+        from .panels.transverse_scan import TransverseScanDialog
+        from .transverse_scan import HELPER, NativeTransverseScan, SimulatedTransverseScan
+
+        def create(parent):
+            simulated = self.config.general.nocomm is True
+            if simulated:
+                station = SimulatedTransverseScan()
+            else:
+                if self.config.general.nocomm is not False:
+                    raise ValueError("Select an explicit operating mode.")
+                station = NativeTransverseScan(self.config, self._dc_motor_backend, self._af_demag_backend)
+
+            def acquire(*, recovery):
+                if self._shutdown_cleanup_requested or self._has_active_automation():
+                    raise DeviceOwnershipError("Wait for the active workflow or shutdown to finish.")
+                if simulated:
+                    return None
+                if not str(self.config.general.operator or "").strip():
+                    raise ValueError("Sign in before using the live transverse probe station.")
+                resources = ("measurement", "changer", "af_demag", "gaussmeter")
+                if recovery and station.pending_recovery():
+                    return self._ownership.acquire_many(resources, HELPER, allow_reentrant=False)
+                return self.acquire_devices(resources, HELPER, allow_reentrant=False)
+
+            return TransverseScanDialog(parent, station, acquire, simulated=simulated)
+
+        self._run_owned_dialog("transverse_probe", HELPER, create, modal=False)
 
     def _launch_vrm(self) -> None:
         reason = vrm_launch_block_reason(
@@ -2956,7 +2998,10 @@ class MainWindow(QtWidgets.QMainWindow):
             if callable(connected_provider) and bool(connected_provider()):
                 raise RuntimeError(f"{label} remained connected after disconnect")
 
-    def _hold_external_process_leases(self, process: object, leases: list[object]) -> None:
+    def _hold_external_process_leases(
+        self, process: object, leases: list[object],
+        finished_message: str = "VRM Logger closed; measurement and SQUID ownership released.",
+    ) -> None:
         """Keep shared resources reserved until a launched helper exits."""
 
         key = id(process)
@@ -2971,7 +3016,7 @@ class MainWindow(QtWidgets.QMainWindow):
             for lease in reversed(leases):
                 lease.release()
             self._external_process_leases.pop(key, None)
-            self.set_status("VRM Logger closed; measurement and SQUID ownership released.")
+            self.set_status(finished_message)
 
         timer.timeout.connect(release_if_finished)
         self._external_process_leases[key] = (process, leases, timer)
@@ -3354,13 +3399,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.set_status('Shutdown remains open for diagnostic recovery: ' + reason)
 
     def _has_active_automation(self) -> bool:
-        """Return true when a measurement, queue, or rod scan owns automation."""
+        """Return true when a measurement, queue, or calibration scan owns automation."""
         measurement_active = bool(
             hasattr(self._measurement, "is_active") and self._measurement.is_active()
         )
         return (measurement_active or bool(self._queue_active) or self._queue_preparation is not None
                 or self._queue_starting
                 or getattr(getattr(self, '_calibration_panel', None), 'rod_scan_active', False)
+                or getattr(getattr(self, '_owned_dialogs', {}).get('transverse_probe'), 'active', False)
                 or self._queue_command_thread is not None
                 or self._queue_native_session is not None)
 
@@ -4171,6 +4217,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self._measurement.halt_run()
         if getattr(getattr(self, '_calibration_panel', None), 'rod_scan_active', False):
             self._calibration_panel.stop_rod_scan()
+        transverse = getattr(self, '_owned_dialogs', {}).get('transverse_probe')
+        if transverse is not None and transverse.active:
+            transverse.stop()
         self.cancel_queue_run("Queue halted by user.")
 
     def _on_header_pause(self) -> None:
@@ -4184,7 +4233,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.halt_measurement()
             self.set_flow_state("halted")
         elif (self._queue_active or self._queue_preparation is not None or self._queue_starting
-              or getattr(getattr(self, '_calibration_panel', None), 'rod_scan_active', False)):
+              or getattr(getattr(self, '_calibration_panel', None), 'rod_scan_active', False)
+              or getattr(getattr(self, '_owned_dialogs', {}).get('transverse_probe'), 'active', False)):
             self.halt_measurement()
         else:
             self.set_status("No active run to halt.")

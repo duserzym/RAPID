@@ -2865,3 +2865,11 @@ The full staged suite passed all 1,496 tests in 822.912 seconds. The Windows
 bundle and its updated operator guide are available in
 `.tmp/tray-rod-release/dist/RapidPyMain`. Offline startup and smoke checks
 passed for six panels and six helpers.
+
+**Transverse probe scan checkpoint (2026-11-22).** Diagnostics now coordinates
+the referenced turning motor, the calibrated transverse ADwin ramp, and a
+908A in DC Peak mode. The workflow records signed peaks with encoder
+readbacks and offers a separate move to the measured maximum magnitude.
+The station journal covers both motor axes and the AF outputs. No-Comm
+exercises both scan and move from the same dialog. H9 records the outstanding
+bench comparison, installation and cooling checks, and interruption recovery.

@@ -8,6 +8,39 @@ from pathlib import Path
 import tempfile
 
 
+def _check_transverse_probe(window, app):
+    from PySide6 import QtCore, QtGui
+
+    actions = [action for action in window.menuBar().findChildren(QtGui.QAction)
+               if action.text() == "Transverse Probe Scan"]
+    if len(actions) != 1:
+        return False
+    actions[0].trigger()
+    dialog = window._owned_dialogs.get("transverse_probe")
+    if dialog is None:
+        return False
+
+    def wait_for_worker():
+        timer = QtCore.QElapsedTimer()
+        timer.start()
+        while dialog.active and timer.elapsed() < 5000:
+            app.processEvents()
+            QtCore.QThread.msleep(10)
+        return not dialog.active
+
+    try:
+        dialog.start_button.click()
+        if not wait_for_worker() or not dialog.apply_button.isEnabled() or dialog.table.rowCount() < 3:
+            return False
+        dialog.apply_button.click()
+        return wait_for_worker() and dialog.message.text().startswith("Simulated angle")
+    finally:
+        dialog.stop()
+        wait_for_worker()
+        dialog.close()
+        app.processEvents()
+
+
 def run_smoke_test() -> int:
     from PySide6 import QtCore, QtWidgets
     from rapid_main.config import AppConfig
@@ -44,9 +77,11 @@ def run_smoke_test() -> int:
             helpers = {}
             for name in HELPER_MODULES:
                 helpers[name] = callable(import_module(f"{name}.app").main)
+            transverse_probe = _check_transverse_probe(window, app)
             report = {
                 "schema": "rapidpy.release_smoke.v1", "simulated": True,
-                "ok": window.config.general.nocomm and all(helpers.values()),
+                "ok": window.config.general.nocomm and all(helpers.values()) and transverse_probe,
+                "transverse_probe": transverse_probe,
                 "panels": window._stack.count(), "helpers": helpers,
                 "width": window.width(), "height": window.height(),
             }

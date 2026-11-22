@@ -172,6 +172,24 @@ The scan shows a count of saved readings. If the process exits before the scan
 finishes, its `.uchannel-pending-*` folder keeps the plan and `readings.jsonl`.
 Only a completed scan publishes a corrected profile to its final bundle.
 
+**Diagnostics → Transverse Probe Scan** uses a manually mounted probe at the
+configured AF lift height. Verify the turning encoder reference and select a
+clear start/end interval containing the current encoder angle. Verify degausser
+cooling and confirm the probe setup before starting. Set the angular
+pitch, a calibrated transverse field in mT, and the 908A COM port. Close the
+separate 908A Gaussmeter window before scanning. The scan checks stationary
+lift and turning readbacks, then measures a signed DC peak at each angle with
+a calibrated transverse ADwin ramp. The table shows requested angles, actual
+encoder angles and signed peaks in mT.
+
+The scan leaves the probe at the last measured angle. Use **Move to Best
+Angle** to turn separately to the measured angle with the largest absolute
+peak. The app verifies that the encoder and original scan evidence still
+match before moving. **Stop** checks both motor axes and the AF outputs.
+If either verification fails, use **Verify Safe State** in the same tool with
+the original station wiring. Recovery stops and verifies the equipment in
+place. No-Comm exercises both actions with simulated readings.
+
 ## Rebuild and test
 
 Use an environment with the declared RapidPy dependencies, setuptools, wheel,
@@ -193,8 +211,9 @@ MCC ARM bias, capacitor pulse IRM with a dedicated backfield polarity relay,
 and synchronized RRM have native execution and recovery paths. Each requires
 accepted station configuration, physical interlock tests, and reference results.
 
-- Transverse probe auto-positioning has angle/field analysis. The linked motor,
-  calibrated AF ramp, and gaussmeter peak scan still require integration.
+- Transverse probe auto-positioning has native turning motor, calibrated ADwin
+  AF and 908A DC peak integration. The station needs probe fixture clearance,
+  peak fidelity and interruption acceptance with the actual meter.
 - Thermal treatment remains manual/external. Automated furnace operation needs
   an identified controller, protocol, readback, and interlocks.
 - Bartington and SQUID rod scans need bench acceptance for manual mounts and
