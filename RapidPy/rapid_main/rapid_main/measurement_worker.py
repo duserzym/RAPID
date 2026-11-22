@@ -49,12 +49,14 @@ from typing import Any, Mapping, Optional, Callable, Sequence, TypeVar
 from PySide6 import QtCore
 
 from rapid_main.analysis import ReadingCycleStatistics, reading_cycle_statistics
-from rapid_main.block_statistics import BlockCollectionStatistics, block_collection_statistics
+from rapid_main.acquisition_evidence import canonical
+from rapid_main.block_statistics import BlockCollectionStatistics, block_collection_statistics, paired_block_statistics
 from rapid_main.communication_log import CommunicationEvent, CommunicationLogger
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.specimen_metadata import validate_specimen_provenance
 from rapid_main.specimen_paths import contained_path
 from rapid_main.measurement_progress import MeasurementProgress
+from rapid_main.queue_pair import QueueSide
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
 from rapid_main.geometry import Cartesian3D, cartesian3d_to_angular3d
 from rapid_main.magnetometer import (
@@ -163,6 +165,7 @@ class MeasurementWorker(QtCore.QThread):
         parent: Optional[QtCore.QObject] = None,
         *,
         specimen_provenance: Mapping[str, Any] | None = None,
+        queue_side: QueueSide | None = None,
     ) -> None:
         super().__init__(parent)
         self._specimen_provenance = deepcopy(dict(specimen_provenance)) if specimen_provenance is not None else None
@@ -180,7 +183,11 @@ class MeasurementWorker(QtCore.QThread):
         self._communication_sources = tuple(sources)
         self._operator = operator
         self._samples_per_position = max(1, int(samples_per_position))
-        self._run_id = str(run_id)
+        self._queue_side = queue_side
+        if queue_side is not None and (meta.name != queue_side.pair.specimen
+                or labels != [queue_side.pair.label] or self._samples_per_position != queue_side.pair.count):
+            raise ValueError('Measurement inputs differ from the original paired queue command.')
+        self._run_id = queue_side.run_id if queue_side is not None else str(run_id)
         self._resume = bool(resume)
         self._allow_simulated_production_output = bool(allow_simulated_production_output)
         self._calibration_records = [dict(record) for record in (calibration_records or ())]
@@ -213,6 +220,10 @@ class MeasurementWorker(QtCore.QThread):
             if not self._simulated or self._allow_simulated_production_output
             else contained_path(self._output_dir, SIMULATED_SUBDIR, output=True)
         )
+        self._pair_directory = self._publish_dir
+        self._up_reference = None
+        if queue_side is not None:
+            self._publish_dir = queue_side.evidence_directory(self._pair_directory)
 
         # Control flags (thread-safe via threading.Event)
         self._pause_event = threading.Event()
@@ -294,13 +305,25 @@ class MeasurementWorker(QtCore.QThread):
         # exists it must never authorize replay of scientific hardware actions.
         if self._resume:
             raise ValueError('Automatic measurement replay is unavailable; restore original step progress before recovery.')
+        source = dict(specimen_source=self._specimen_provenance, specimen_metadata=asdict(self._meta),
+                      samples_per_position=self._samples_per_position, operator=self._operator,
+                      calibration_records=self._calibration_records, routine=self._routine_context,
+                      thermal=self._thermal_context)
+        side = self._queue_side
+        up_blocks = ()
+        up_susceptibility = None
+        if side is not None:
+            original_up = side.check_admission(self._pair_directory, simulated=self._simulated)
+            if original_up is not None:
+                up_blocks, up_susceptibility, up_source, self._up_reference = original_up
+                for field in ('specimen_source', 'specimen_metadata', 'calibration_records'):
+                    if canonical(source[field]) != canonical(up_source[field]):
+                        raise ValueError('Specimen source or calibration changed after the Up pass.')
+            source['queue_side'] = side.context
+            source['up_acquisition'] = self._up_reference
+            side.begin(self._pair_directory)
         self._progress = MeasurementProgress(self._publish_dir, run_id=self._progress_run_id,
-            specimen=self._meta.name, labels=self._labels, source=dict(
-                specimen_source=self._specimen_provenance, specimen_metadata=asdict(self._meta),
-                samples_per_position=self._samples_per_position, operator=self._operator,
-                calibration_records=self._calibration_records, routine=self._routine_context,
-                thermal=self._thermal_context),
-            simulated=self._simulated)
+            specimen=self._meta.name, labels=self._labels, source=source, simulated=self._simulated)
         self._progress.begin()
 
         plan_validator = getattr(self._backend, "validate_treatment_plan", None)
@@ -388,16 +411,15 @@ class MeasurementWorker(QtCore.QThread):
         self._emit_phase(WorkflowPhase.LOADING)
 
         # Prepare bundle writer (VB6 specimen + RMG + MagIC measurement/specimen)
+        bundle = None
         try:
             self._emit_phase(WorkflowPhase.SAVING)
-            bundle = MeasurementBundleWriter(
-                self._output_dir,
-                self._meta,
-                simulated=self._simulated,
-                allow_simulated_production_output=self._allow_simulated_production_output,
-                resume=self._resume,
-                provenance=self._base_provenance(),
-            )
+            if side is None or not side.is_up:
+                bundle = MeasurementBundleWriter(
+                    self._output_dir, self._meta, simulated=self._simulated,
+                    allow_simulated_production_output=self._allow_simulated_production_output,
+                    provenance=self._base_provenance(),
+                )
             self._comm_logger = CommunicationLogger("measurement-worker", port=self._meta.name)
             self._comm_logger.info(
                 "bundle initialized (simulated)" if self._simulated else "bundle initialized"
@@ -435,7 +457,11 @@ class MeasurementWorker(QtCore.QThread):
             if label.strip().upper() == "SUSC":
                 try:
                     self._emit_phase(WorkflowPhase.MEASURING)
-                    susc, susceptibility_evidence = self._read_susceptibility(label)
+                    if up_susceptibility is not None:
+                        susc = up_susceptibility['value']
+                        susceptibility_evidence = dict(up_susceptibility['evidence'], original_up=self._up_reference)
+                    else:
+                        susc, susceptibility_evidence = self._read_susceptibility(label)
                 except MeasurementHaltRequested:
                     aborted = True
                     self._emit_phase(WorkflowPhase.HALTED)
@@ -496,23 +522,25 @@ class MeasurementWorker(QtCore.QThread):
                 aborted = True
                 break
 
-            step = _build_step(
-                label=label,
-                sdx=sdx,
-                sdy=sdy,
-                sdz=sdz,
-                operator=self._operator,
-                timestamp=datetime.now(),
-                error_angle=(self._last_collection_stats.fischer_sd_deg
-                             if self._last_collection_stats is not None else 0.0),
-            )
-
             try:
                 self._emit_phase(WorkflowPhase.VALIDATING)
+                if side is not None:
+                    side.validate_blocks(self._cycle_blocks, simulated=self._simulated)
+                self._progress.capture_step(idx, blocks=self._cycle_blocks, readings=self._cycle_readings,
+                    susceptibility=(dict(value=susc, evidence=susceptibility_evidence)
+                                    if label.strip().upper() == 'SUSC' else None))
+                if up_blocks:
+                    self._last_collection_stats = paired_block_statistics(up_blocks, self._cycle_blocks)
+                    sdx, sdy, sdz = self._last_collection_stats.moment_emu
+                    cycle_stats = reading_cycle_statistics([
+                        *(reduce_bracketed_measurement(block).moment_emu for block in up_blocks),
+                        *self._cycle_readings])
+                step = _build_step(label, sdx, sdy, sdz, self._operator, datetime.now(),
+                    error_angle=(self._last_collection_stats.fischer_sd_deg
+                                 if self._last_collection_stats is not None else 0.0))
                 self._validate_step(step)
-                self._progress.capture_step(idx, blocks=self._cycle_blocks, readings=self._cycle_readings)
                 self._emit_phase(WorkflowPhase.SAVING)
-                if not bundle.append_step(step, susceptibility=susc):
+                if bundle is not None and not bundle.append_step(step, susceptibility=susc):
                     self._skipped_labels.append(label)
                     self._emit_warning(
                         f"Step {label} is already present from an interrupted run; "
@@ -552,7 +580,7 @@ class MeasurementWorker(QtCore.QThread):
         # Return to safe state on both normal completion and interrupted execution
         self._emit_phase(WorkflowPhase.RETURNING)
         try:
-            return_to_safe_state = getattr(self._backend, "return_to_safe_state")
+            return_to_safe_state = getattr(self._backend, "return_to_safe_state", None)
             if callable(return_to_safe_state):
                 self._comm_info("return_to_safe_state")
                 self._call_with_timeout(
@@ -560,8 +588,8 @@ class MeasurementWorker(QtCore.QThread):
                     timeout=self._get_backend_timeout("return_timeout"),
                     phase="return_to_safe_state",
                 )
-        except AttributeError:
-            pass
+            elif side is not None:
+                raise ValueError('Paired acquisition requires a verified safe return.')
         except Exception as exc:
             self._emit_error(f"Failed to return to safe state: {exc}", phase=WorkflowPhase.RETURNING)
             self._emit_phase(WorkflowPhase.ERROR)
@@ -569,6 +597,10 @@ class MeasurementWorker(QtCore.QThread):
 
         if not aborted:
             try:
+                if self._up_reference is not None:
+                    _, _, _, current_up = side.load_up(self._pair_directory, simulated=self._simulated)
+                    if current_up != self._up_reference:
+                        raise ValueError('The original Up acquisition changed during the Down pass.')
                 write_susceptibility_summary_json(
                     self._artifact_path("susceptibility.json"),
                     susceptibility_records,
@@ -586,21 +618,28 @@ class MeasurementWorker(QtCore.QThread):
         # Retain raw evidence on failures, but publish the scientific bundle and
         # seal completed acquisition evidence only after successful safe return.
         if aborted:
-            bundle.abort()
+            if bundle is not None:
+                bundle.abort()
         else:
             try:
-                bundle.set_provenance(**self._run_provenance())
-                published = bundle.commit()
-                self._published_paths = {
-                    "specimen_file": str(published.specimen_file),
-                    "rmg_file": str(published.rmg_file),
-                    "magic_measurements": str(published.magic_measurements_file),
-                    "magic_specimens": str(published.magic_specimens_file),
-                }
-                self._publish_dir = bundle.publish_dir
+                if bundle is not None:
+                    bundle.set_provenance(**self._run_provenance())
+                    published = bundle.commit()
+                    self._publish_dir = bundle.publish_dir
+                    if self._up_reference is not None:
+                        write_susceptibility_summary_json(
+                            self._artifact_path('susceptibility.json'), susceptibility_records,
+                            sample=self._meta.name, operator=self._operator)
+                    self._published_paths = {
+                        "specimen_file": str(published.specimen_file),
+                        "rmg_file": str(published.rmg_file),
+                        "magic_measurements": str(published.magic_measurements_file),
+                        "magic_specimens": str(published.magic_specimens_file),
+                    }
                 self._progress.accept()
             except Exception as exc:
-                bundle.abort()
+                if bundle is not None:
+                    bundle.abort()
                 self._emit_error(f"Failed to publish measurement bundle: {exc}", phase=WorkflowPhase.SAVING)
                 self._emit_phase(WorkflowPhase.ERROR)
                 aborted = True
@@ -608,6 +647,8 @@ class MeasurementWorker(QtCore.QThread):
         if not aborted:
             self._emit_phase(WorkflowPhase.COMPLETE)
         self._finish_run(aborted=aborted)
+        if side is not None and side.is_up and self._pending_run_result is False:
+            side.seal_up(self._pair_directory, self._progress)
 
     @property
     def is_paused(self) -> bool:
@@ -780,8 +821,11 @@ class MeasurementWorker(QtCore.QThread):
             retry_limit = 2
         for attempt in range(retry_limit + 1):
             transport_recoveries_before = len(self._transport_recovery_evidence())
+            read_squid = self._backend.read_squid
+            if self._queue_side is not None and isinstance(self._backend, NoCommBackend):
+                read_squid = lambda: self._backend.read_paired_squid(is_up=self._queue_side.is_up)
             squid_reading = self._call_with_timeout(
-                self._backend.read_squid,
+                read_squid,
                 timeout=self._get_backend_timeout("read_timeout"),
                 phase="read_squid",
             )
@@ -1011,6 +1055,8 @@ class MeasurementWorker(QtCore.QThread):
             "transport_recovery_records": transport_recoveries,
             "block_collection_statistics": deepcopy(self._collection_statistics),
             "acquisition_progress": self._progress.reference if self._progress is not None else None,
+            "up_acquisition": self._up_reference,
+            "queue_side": self._queue_side.context if self._queue_side is not None else None,
             "skipped_duplicate_labels": list(self._skipped_labels),
             "simulated": self._simulated,
         }
@@ -1273,6 +1319,7 @@ class MeasurementWorker(QtCore.QThread):
 
     def _write_artifact_index(self, *, aborted: bool) -> None:
         artifact_path = self._artifact_path("artifact_index.json")
+        bundle_required = not aborted and (self._queue_side is None or not self._queue_side.is_up)
 
         def entry(
             name: str,
@@ -1314,6 +1361,8 @@ class MeasurementWorker(QtCore.QThread):
             ),
             "published_paths": dict(self._published_paths),
             "acquisition_progress": self._progress.reference if self._progress is not None else None,
+            "up_acquisition": self._up_reference,
+            "queue_side": self._queue_side.context if self._queue_side is not None else None,
             "specimen_source": deepcopy(self._specimen_provenance),
             "rockmag_routine": (
                 str(self._routine_context.get("routine_name", ""))
@@ -1335,35 +1384,35 @@ class MeasurementWorker(QtCore.QThread):
                 entry(
                     "measurement_provenance",
                     self._artifact_path('provenance.json'),
-                    required=not aborted,
+                    required=bundle_required,
                     producer='MeasurementBundleWriter',
                     description='Scientific metadata and original queue source provenance.',
                 ),
                 entry(
                     "vb6_specimen_file",
                     self._artifact_path(self._meta.name),
-                    required=not aborted,
+                    required=bundle_required,
                     producer="MeasurementBundleWriter",
                     description="Legacy specimen output compatible with VB6/CIT review paths.",
                 ),
                 entry(
                     "rmg_file",
                     self._artifact_path(f"{self._meta.name}.rmg"),
-                    required=not aborted,
+                    required=bundle_required,
                     producer="MeasurementBundleWriter",
                     description="RMG sidecar with per-step treatment and susceptibility values.",
                 ),
                 entry(
                     "magic_measurements",
                     self._artifact_path("measurements.txt"),
-                    required=not aborted,
+                    required=bundle_required,
                     producer="MeasurementBundleWriter",
                     description="MagIC measurements table emitted in lockstep with specimen output.",
                 ),
                 entry(
                     "magic_specimens",
                     self._artifact_path("specimens.txt"),
-                    required=not aborted,
+                    required=bundle_required,
                     producer="MeasurementBundleWriter",
                     description="MagIC specimen metadata table for the run bundle.",
                 ),

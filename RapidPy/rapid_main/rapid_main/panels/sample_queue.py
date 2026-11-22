@@ -580,7 +580,7 @@ class SampleQueuePanel(QtWidgets.QWidget):
             if self._table.item(row, 5) is None:
                 continue
             status = self._table.item(row, 5).text()
-            if status == "Running":
+            if status in {"Running", "Up Captured"}:
                 self._set_status(row, "Interrupted")
                 recovered += 1
         return recovered
@@ -723,7 +723,7 @@ class SampleQueuePanel(QtWidgets.QWidget):
             item.setForeground(
                 QtGui.QBrush(QtCore.Qt.GlobalColor.darkYellow)
             )
-        elif normalized == "Interrupted":
+        elif normalized in {"Interrupted", "Up Captured"}:
             item.setForeground(
                 QtGui.QBrush(QtGui.QColor("#b45309"))
             )
@@ -908,7 +908,7 @@ def _parse_step_count(treatment_text: str) -> int:
 
 def _normalize_status(status: str) -> str:
     status = (status or "Pending").strip().title()
-    if status in {"Pending", "Running", "Done", "Error", "Skipped", "Interrupted", "Resume", "Rerun", "Aborted"}:
+    if status in {"Pending", "Running", "Up Captured", "Done", "Error", "Skipped", "Interrupted", "Resume", "Rerun", "Aborted"}:
         return status
     if status in {"Queued", "Queued (Ready)"}:
         return "Pending"
@@ -947,7 +947,7 @@ def _read_queue_rows(table: QtWidgets.QTableWidget) -> tuple[list[QueueSample], 
         status = _cell(5)
         if status in {"Done", "Skipped", "Aborted"}:
             continue
-        if status == "Interrupted":
+        if status in {"Interrupted", "Up Captured"}:
             errors.append(
                 f"row {row_no}: interrupted sample requires Resume, Re-run, Skip, or Abort before queue start"
             )

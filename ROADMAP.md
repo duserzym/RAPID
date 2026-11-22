@@ -2470,3 +2470,33 @@ changes passed their focused checks and the complete run's remaining cases.
 Concurrent companion implementation/README/test work remains outside this
 acquisition checkpoint; its Qt fixture repairs stay with that work. The full
 system goal and all remaining integration/qualification gates remain active.
+
+Paired queue publication checkpoint (2026-11-22). A compiled two-pass row now
+uses a durable identity from the queue run, file, row, slot, treatment and both
+command positions. Up publishes a raw `.UP` export and the complete acquisition
+journal after safe return. The queue shows Up Captured until Down publishes.
+Native Down admission checks the exact sealed Up source before loading and
+checks the original operator-confirmed orientation under the hardware claim.
+The worker verifies source metadata and calibration before treatment, then
+combines both position collections using their original holder records and six
+observations per block. SUSC uses the original Up bridge evidence. The final
+bundle links both directions and records combined CSD, Up/Down ratio and
+horizontal error. A failed Down return retains its separate diagnostics and
+leaves the previous accepted scientific files and index intact.
+
+Seven paired tests passed with clean process exit, including a full simulated
+MainWindow queue, an injected coherent live acquisition for each direction,
+missing/changed Up artifacts, repeated intent, changed specimen metadata and
+preservation after failed Down return. A focused native window test also passed,
+checking a Down refusal before specimen transfer with the original queue root.
+The full regression run started before the final Down diagnostic isolation
+change, which is covered by the seven focused paired cases.
+
+The full run passed 1,393 tests in 616.695 seconds and exited with code 0 after
+Qt and watchdog shutdown. The final worker, panel and journal run passed 53
+tests, including the original acquisition checkpoint. The six-panel source
+smoke and compilation checks passed.
+
+Original-stage restart recovery, importing independent legacy Up collections,
+scientific output/orientation parity, remaining native and auxiliary workflows,
+portable distribution, performance, and station acceptance remain open.

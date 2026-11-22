@@ -531,6 +531,7 @@ class MeasurementPanel(QtWidgets.QWidget):
         queue_metadata = None
         queue_provenance = None
         queue_averages = 1
+        queue_side = None
         if queue_run and hasattr(mw, 'queue_measurement_labels'):
             try:
                 labels = mw.queue_measurement_labels(sample)
@@ -542,6 +543,8 @@ class MeasurementPanel(QtWidgets.QWidget):
                     queue_metadata = mw.queue_measurement_metadata(sample)
                 if hasattr(mw, 'queue_measurement_provenance'):
                     queue_provenance = mw.queue_measurement_provenance(sample)
+                if hasattr(mw, 'queue_measurement_side'):
+                    queue_side = mw.queue_measurement_side(sample)
                 if queue_provenance is not None:
                     if queue_metadata is None:
                         raise ValueError('Queue source provenance requires its original resolved metadata.')
@@ -570,6 +573,9 @@ class MeasurementPanel(QtWidgets.QWidget):
             meta = resolution.meta
             run_output_dir = specimen_run_directory(out, meta.name, queue_source[0] if queue_source else None)
             validate_measurement_output(run_output_dir, meta.name, simulated=self._current_run_simulated)
+            published = run_output_dir / SIMULATED_SUBDIR if self._current_run_simulated else run_output_dir
+            if queue_side is not None and queue_side.is_up:
+                published = queue_side.up_directory(published)
         except (OSError, ValueError) as exc:
             QtWidgets.QMessageBox.warning(self, "Invalid Specimen Path", str(exc))
             return False
@@ -594,12 +600,9 @@ class MeasurementPanel(QtWidgets.QWidget):
 
         self.set_specimen_context(sample)
 
-        self._current_output_dir = (
-            run_output_dir / SIMULATED_SUBDIR
-            if self._current_run_simulated
-            else run_output_dir
-        )
-        run_id = f"{meta.name}-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex}"
+        self._current_output_dir = published
+        run_id = (queue_side.run_id if queue_side is not None else
+                  f"{meta.name}-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex}")
         routine_context = None
         thermal_context = None
         rockmag_plan = getattr(mw, "_rockmag_routine_plan", None)
@@ -652,6 +655,7 @@ class MeasurementPanel(QtWidgets.QWidget):
             routine_context=routine_context,
             thermal_context=thermal_context,
             specimen_provenance=queue_provenance,
+            queue_side=queue_side,
             parent=self,
         )
         self._worker.step_started.connect(self._on_step_started)

@@ -244,3 +244,22 @@ combined scientific result. Up-only provisional publication and Down overwriting
 of the final scientific output remain to be replaced by that integration; the
 new journals preserve both raw acquisitions independently. Physical/scientific
 qualification and the other full-system gates remain open.
+
+The compiled two-pass queue now uses those journals to publish one paired result.
+An Up pass retains its `.UP` file, full precision raw evidence, and diagnostics
+under a directory keyed by the queue run and the two command positions. The row
+shows **Up Captured** after the safe return and acceptance seal. A Down pass must
+find that exact accepted collection before starting, and a native load also
+checks the confirmed tray direction. An existing pass intent requires review
+before recovery. The Down worker rechecks the seal, file bytes, specimen metadata,
+and calibration references before treatment and rechecks the Up evidence before
+publication. It combines both collections with each side's original holder
+correction and audit, and uses the original Up bridge reading for SUSC. Final
+provenance records the Up evidence reference, combined CSD, Up/Down ratio, and
+horizontal error. The source `.UP` format rounds vectors for interchange, so the
+combined result uses the verified full precision acquisition data.
+
+The paired workflow covers both passes compiled in a single queue run. Importing
+an independent historical Up file and recovering an interrupted original run
+remain separate workflows. Physical instrument and scientific format acceptance
+remain open.

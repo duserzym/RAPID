@@ -46,6 +46,19 @@ def _angle(vector: Vector3) -> float:
 
 
 def block_collection_statistics(blocks: Sequence[BracketedMeasurementBlock]) -> BlockCollectionStatistics:
+    return _statistics(blocks)
+
+
+def paired_block_statistics(up, down) -> BlockCollectionStatistics:
+    """Reduce two separately accepted sides with their own holder records."""
+    up, down = tuple(up), tuple(down)
+    if not up or not down or any(block.is_up is not True for block in up) or any(
+            block.is_up is not False for block in down):
+        raise ValueError('A pair requires both an Up and a Down collection.')
+    return _statistics(up + down, split=len(up))
+
+
+def _statistics(blocks, *, split=None) -> BlockCollectionStatistics:
     """Reduce every block before combining; one rejected block rejects the set.
 
     Raw statistics follow MeasurementBlocks.cls: positions have equal weight,
@@ -73,10 +86,14 @@ def block_collection_statistics(blocks: Sequence[BracketedMeasurementBlock]) -> 
     if any(audit is not None for audit in audits):
         if any(audit is None for audit in audits):
             raise ValueError("block collection mixed audited and unaudited acquisitions")
-        contexts = {(audit.sample_name, audit.treatment_label, audit.run_id, audit.config_hash,
-                     audit.simulated, audit.holder_record_id) for audit in audits}
-        if len(contexts) != 1:
+        common = {(audit.sample_name, audit.treatment_label, audit.config_hash, audit.simulated,
+                   audit.range_label, tuple(audit.axis_calibration_applied)) for audit in audits}
+        groups = (audits,) if split is None else (audits[:split], audits[split:])
+        if len(common) != 1 or any(len({(audit.run_id, audit.holder_record_id) for audit in group}) != 1
+                                   for group in groups):
             raise ValueError("block collection acquisition context changed")
+        if split is not None and len({audit.block_id for audit in audits}) != len(audits):
+            raise ValueError('Paired acquisitions repeat a block identity.')
     results = [reduce_bracketed_measurement(block) for block in blocks]
     positions = tuple(vector for result in results for vector in result.holder_frame_raw)
     count = len(positions)

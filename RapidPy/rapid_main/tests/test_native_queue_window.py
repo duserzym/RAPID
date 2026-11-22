@@ -198,6 +198,24 @@ class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestC
         self.assertIsNone(self.window._queue_vacuum_fault_reason())
         self.assertIsNotNone(self.window._queue_native_session._lease)
 
+    def test_native_down_without_original_up_stops_before_loading(self):
+        self.window.config.general.data_dir = str(self.store.path.parent / 'paired-output')
+        with self.arm_xy_edges(), patch.object(QtWidgets.QMessageBox, 'question',
+                lambda *args: QtWidgets.QMessageBox.StandardButton.Yes):
+            self.assertTrue(self.window.start_queue_run([QueueSample('S1', 'F1', 1, do_both=True)], QueueOptions()))
+            self.wait_for(lambda: bool(self.started), timeout=30)
+        up = self.window.queue_measurement_side('S1')
+        self.assertTrue(up.is_up)
+        self.assertEqual(up.pair.queue_run_id, self.store.read()['run_id'])
+
+        self.window._queue_current_command = self.window._queue_plan[up.pair.down_index]
+        refused = []
+        before = len(self.commands), len(self.vacuum_serial.writes), self.store.read()
+        with patch.object(self.window, '_finalize_queue_run', lambda *args, **kw: refused.append(kw['reason'])):
+            self.window._run_measure_command()
+        self.assertIn('accepted Up acquisition is required', refused[0])
+        self.assertEqual((len(self.commands), len(self.vacuum_serial.writes), self.store.read()), before)
+
     def test_declining_empty_rod_confirmation_never_begins_or_actuates(self):
         before = self.store.read(), len(self.commands), len(self.vacuum_serial.writes)
         self.assertFalse(self.start(answer=QtWidgets.QMessageBox.StandardButton.No))

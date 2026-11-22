@@ -28,8 +28,9 @@ from .config import AppConfig
 from .data_model import SampleIndexRegistration, SampleIndexRegistrations
 from .io.sample_index import read_sample_index_registrations
 from .specimen_metadata import capture_specimen_metadata, restore_specimen_metadata, validate_specimen_provenance
-from .specimen_paths import specimen_run_directory
-from .io.measurement_bundle import validate_measurement_output
+from .specimen_paths import contained_path, specimen_run_directory
+from .io.measurement_bundle import SIMULATED_SUBDIR, validate_measurement_output
+from .queue_pair import QueuePair
 from .hardware_contracts import (
     MeasurementAutomationBackend,
     QueueHardwareBackend,
@@ -1138,6 +1139,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._queue_current_sample = None
         self._queue_current_command = None
         self.set_flow_state("running")
+        self._queue_execution_id = 'queue-' + uuid.uuid4().hex
 
         if not samples:
             self.set_status("Queue is empty.")
@@ -1590,13 +1592,37 @@ class MainWindow(QtWidgets.QMainWindow):
         validate_specimen_provenance(provenance, metadata.meta)
         return provenance
 
+    def _queue_measurement_side(self, command):
+        if not any(item is command for item in self._queue_plan):
+            raise ValueError('The original measurement command is required.')
+        run_id = getattr(self, '_queue_execution_id', '')
+        side = QueuePair.from_command(run_id, self._queue_plan, command)
+        session = self._queue_native_session
+        if side is not None and session is not None:
+            state = session.store.read()
+            session.store.verify_history(state)
+            plan = state['plan']['commands']
+            if (state['family'] != 'queue' or state['token'] != session.token or state['status'] != 'pending'
+                    or plan['commands'] != json.loads(json.dumps([asdict(item) for item in self._queue_plan]))
+                    or plan['source_indexes'] != self._queue_source_indexes):
+                raise ValueError('Paired measurement requires the original queue plan and source indexes.')
+            side = QueuePair.from_command(state['run_id'], self._queue_plan, command)
+        return side
+
+    def queue_measurement_side(self, sample_name):
+        self.queue_measurement_labels(sample_name)
+        return self._queue_measurement_side(self._queue_current_command)
+
     def _set_queue_sample_status(self, sample_name: str, status: str) -> None:
         command = self._queue_current_command
         setter = getattr(self._sample_queue, 'set_queue_command_status', None)
         if callable(setter) and command is not None and command.command_type == 'Meas':
             setter(command, status)
             return
-        method = {'Running': 'start_queue_sample', 'Done': 'mark_queue_sample_done', 'Error': 'set_queue_sample_failed'}[status]
+        method = {'Running': 'start_queue_sample', 'Done': 'mark_queue_sample_done',
+                  'Error': 'set_queue_sample_failed'}.get(status)
+        if method is None:
+            return
         getattr(self._sample_queue, method)(sample_name)
 
     def _run_measure_command(self) -> None:
@@ -1608,12 +1634,35 @@ class MainWindow(QtWidgets.QMainWindow):
             self._run_next_queue_command()
             return
 
+        try:
+            side = self._queue_measurement_side(self._queue_current_command)
+            if side is not None:
+                source = self._queue_source_indexes.get(side.pair.file_id)
+                index = Path(source['source_file']) if source is not None else None
+                if index is not None:
+                    if hashlib.sha256(index.read_bytes()).hexdigest() != source['sha256']:
+                        raise ValueError('The original sample index changed before paired acquisition.')
+                    restore_specimen_metadata(source['specimens'][sample_name])
+                directory = specimen_run_directory(self.config.general.data_dir or Path.home() / 'RAPID_data',
+                                                   sample_name, index)
+                simulated = bool(getattr(self._measurement_backend, 'simulated', False))
+                if simulated:
+                    directory = contained_path(directory, SIMULATED_SUBDIR, output=True)
+                side.check_admission(directory, simulated=simulated)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            self._set_queue_sample_status(sample_name, 'Error')
+            self._finalize_queue_run('error', reason=f'Queue acquisition cannot start: {exc}', return_to_safe=True)
+            return
+
         if self._queue_native_session is not None and self._queue_loaded_command is not self._queue_current_command:
             self._queue_meas_pending_start = True
             command = self._queue_current_command
             def load():
                 backend = self._measurement_backend
-                backend.set_measurement_context(is_up=backend.queue_file_direction(command.file_id))
+                direction = backend.queue_file_direction(command.file_id)
+                if side is not None and direction is not side.is_up:
+                    raise ValueError('The confirmed tray direction differs from the original queue pass.')
+                backend.set_measurement_context(is_up=direction)
                 backend.load_queue_specimen(command.hole, command.sample_name, file_id=command.file_id)
             self._start_queue_command_worker(command, load, [], recover_on_error=False)
             return
@@ -1987,7 +2036,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self._set_queue_sample_status(sample, 'Error')
             self._finalize_queue_run("error", reason=f"Queue sample {sample} failed with an error.")
             return
-        self._set_queue_sample_status(sample, 'Done')
+        try:
+            side = self._queue_measurement_side(command) if command is not None else None
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            self._set_queue_sample_status(sample, 'Error')
+            self._finalize_queue_run('error', reason=f'Queue acquisition could not be confirmed: {exc}')
+            return
+        self._set_queue_sample_status(sample, 'Up Captured' if side is not None and side.is_up else 'Done')
         if self._queue_current_command is not None:
             self._set_queue_position_status("Meas", self._queue_current_command)
         self._save_queue_state()

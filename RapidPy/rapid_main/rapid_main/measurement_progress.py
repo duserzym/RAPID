@@ -101,13 +101,15 @@ class MeasurementProgress:
             self.read_step(index - 1)
         self._write(f'{index:05d}-started.json', self._step(index))
 
-    def capture_step(self, index, *, blocks, readings):
+    def capture_step(self, index, *, blocks, readings, susceptibility=None):
         self._require_owner()
         started, _ = self._read(f'{index:05d}-started.json')
         if started != self._step(index):
             raise ValueError('Acquisition step intent changed.')
         raw = json.loads(canonical([asdict(block) for block in blocks]))
         payload = dict(**self._step(index), blocks=raw, readings=readings)
+        if susceptibility is not None:
+            payload['susceptibility'] = susceptibility
         payload = json.loads(canonical(payload))  # Detach mutable caller inputs.
         payload.update(self._derive(payload))
         self._write(f'{index:05d}-captured.json', payload)
@@ -148,8 +150,8 @@ class MeasurementProgress:
         started, _ = self._read(f'{index:05d}-started.json')
         payload, digest = self._read(f'{index:05d}-captured.json')
         expected = self._step(index)
-        if not isinstance(payload, dict) or set(payload) != {
-                *expected, 'blocks', 'readings', 'kind', 'cycle_statistics', 'block_statistics', 'legacy_up'}:
+        required = {*expected, 'blocks', 'readings', 'kind', 'cycle_statistics', 'block_statistics', 'legacy_up'}
+        if not isinstance(payload, dict) or set(payload) - {'susceptibility'} != required:
             raise ValueError('Acquisition record has incomplete or unknown fields.')
         if started != expected or any(payload.get(key) != value for key, value in expected.items()):
             raise ValueError('Acquisition step identity changed.')
