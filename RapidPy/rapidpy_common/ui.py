@@ -3,6 +3,8 @@ from __future__ import annotations
 import inspect
 import sys
 from pathlib import Path
+from typing import Callable
+from weakref import WeakSet, ref
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -142,8 +144,8 @@ def _fit_window_to_screen(window: QtWidgets.QWidget) -> None:
     if available is None:
         return
 
-    if window.isMaximized():
-        window.showNormal()
+    if _uses_native_window_state(window):
+        return
 
     hint = window.minimumSizeHint()
     hint_size = (hint.width(), hint.height()) if hint.isValid() else (0, 0)
@@ -212,12 +214,20 @@ def _fit_window_with_widget_handler(window: QtWidgets.QWidget, screen: QtGui.QSc
     return False
 
 
-def _refit_top_level_windows(app: QtWidgets.QApplication) -> None:
+def _uses_native_window_state(window: QtWidgets.QWidget) -> bool:
+    return window.isMinimized() or window.isMaximized() or window.isFullScreen()
+
+
+def _refit_top_level_windows(app: QtWidgets.QApplication,
+                            include: Callable[[QtWidgets.QWidget], bool] | None = None) -> None:
     """Reapply bounds protection after a screen topology or DPI change."""
 
     for window in app.topLevelWidgets():
         try:
-            if not window.isWindow():
+            if (not window.isWindow() or _uses_native_window_state(window)
+                    or window.windowType() in (QtCore.Qt.WindowType.Popup, QtCore.Qt.WindowType.ToolTip,
+                                               QtCore.Qt.WindowType.SplashScreen)
+                    or (include is not None and not include(window))):
                 continue
             if not _fit_window_with_widget_handler(window):
                 _fit_window_to_screen(window)
@@ -226,85 +236,85 @@ def _refit_top_level_windows(app: QtWidgets.QApplication) -> None:
             continue
 
 
-def _apply_window_bounds_guard(app: QtWidgets.QApplication) -> None:
-    """Install a QApplication-level guard so main windows stay within visible screens."""
-    if getattr(app, "_rapidpy_window_guard", None) is not None:
-        return
+class _WindowBoundsGuard(QtCore.QObject):
+    """Fit visible windows after coalesced work-area and screen changes."""
 
-    class _WindowBoundsGuard(QtCore.QObject):
-        def __init__(self, parent_app: QtWidgets.QApplication) -> None:
-            super().__init__(parent_app)
-            self._app = parent_app
-            self._watched_ids: set[int] = set()
-            self._connected_ids: set[int] = set()
-            self._connected_screen_metrics: set[tuple[int, int]] = set()
-            parent_app.installEventFilter(self)
-            parent_app.screenAdded.connect(lambda _screen: self._schedule_refit_all())
-            parent_app.screenRemoved.connect(lambda _screen: self._schedule_refit_all())
+    def __init__(self, app: QtWidgets.QApplication) -> None:
+        super().__init__(app)
+        self._app = app
+        self._connections: dict[QtGui.QScreen, list[QtCore.QMetaObject.Connection]] = {}
+        self._pending_screens: set[QtGui.QScreen] = set()
+        self._pending_windows: WeakSet[QtWidgets.QWidget] = WeakSet()
+        self._topology_changed = False
+        self._timer = QtCore.QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._flush)
+        app.installEventFilter(self)
+        app.screenAdded.connect(self._screen_added)
+        app.screenRemoved.connect(self._screen_removed)
+        for screen in app.screens():
+            self._watch_screen(screen)
+        self._schedule_topology()
 
-        def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
-            if not isinstance(obj, QtWidgets.QWidget) or not obj.isWindow():
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+        if (event.type() in (QtCore.QEvent.Type.Show, QtCore.QEvent.Type.WinIdChange,
+                             QtCore.QEvent.Type.WindowStateChange)
+                and isinstance(obj, QtWidgets.QWidget) and obj.isWindow()):
+            self._queue_window(obj)
+        return False
+
+    def _schedule_topology(self) -> None:
+        self._topology_changed = True
+        self._timer.start(0)
+
+    def _screen_added(self, screen: QtGui.QScreen) -> None:
+        self._watch_screen(screen)
+        self._schedule_topology()
+
+    def _screen_removed(self, screen: QtGui.QScreen) -> None:
+        for connection in self._connections.pop(screen, ()):
+            self.disconnect(connection)
+        self._pending_screens.discard(screen)
+        self._schedule_topology()
+
+    def _watch_screen(self, screen: QtGui.QScreen) -> None:
+        if screen not in self._connections:
+            self._connections[screen] = [signal.connect(lambda *_args: self._queue_screen(screen)) for signal in (
+                screen.availableGeometryChanged, screen.geometryChanged, screen.logicalDotsPerInchChanged,
+            )]
+
+    def _queue_screen(self, screen: QtGui.QScreen) -> None:
+        self._pending_screens.add(screen)
+        self._timer.start(0)
+
+    def _queue_window(self, window: QtWidgets.QWidget | None) -> None:
+        if window is not None:
+            self._pending_windows.add(window)
+            self._timer.start(0)
+
+    def _flush(self) -> None:
+        topology, self._topology_changed = self._topology_changed, False
+        screens, self._pending_screens = self._pending_screens, set()
+        windows = set(self._pending_windows)
+        self._pending_windows.clear()
+
+        def include(window):
+            if not window.isVisible():
                 return False
-            if event.type() == QtCore.QEvent.Type.Show:
-                QtCore.QTimer.singleShot(0, lambda: self._bind_window(obj))
-            return False
-
-        def _schedule_refit_all(self) -> None:
-            QtCore.QTimer.singleShot(0, lambda: _refit_top_level_windows(self._app))
-
-        def _bind_window(self, window: QtWidgets.QWidget, screen: QtGui.QScreen | None = None) -> None:
-            try:
-                if id(window) not in self._watched_ids:
-                    self._watched_ids.add(id(window))
-                if not _fit_window_with_widget_handler(window, screen=screen):
-                    _fit_window_to_screen(window)
-                self._watch_screen_changes(window)
-            except RuntimeError:
-                return
-
-        def _watch_screen_changes(self, window: QtWidgets.QWidget) -> None:
             handle = window.windowHandle()
-            if handle is None:
-                QtCore.QTimer.singleShot(
-                    75,
-                    lambda _w=window: self._watch_screen_changes(_w),
-                )
-                return
-            if id(window) in self._connected_ids:
-                self._watch_screen_metrics(window, handle.screen())
-                return
-            self._connected_ids.add(id(window))
-            handle.screenChanged.connect(
-                lambda _s, _w=window: QtCore.QTimer.singleShot(
-                    0, lambda: self._bind_window(_w, screen=_s)
-                ),
-            )
-            self._watch_screen_metrics(window, handle.screen())
+            if handle is not None and not handle.property("_rapidpy_bounds_bound"):
+                handle.setProperty("_rapidpy_bounds_bound", True)
+                owner = ref(window)
+                handle.screenChanged.connect(lambda _screen: self._queue_window(owner()))
+            return topology or window in windows or window.screen() in screens
 
-        def _watch_screen_metrics(
-            self,
-            window: QtWidgets.QWidget,
-            screen: QtGui.QScreen | None,
-        ) -> None:
-            if screen is None:
-                return
-            key = (id(window), id(screen))
-            if key in self._connected_screen_metrics:
-                return
-            self._connected_screen_metrics.add(key)
-            for signal in (
-                screen.availableGeometryChanged,
-                screen.geometryChanged,
-                screen.logicalDotsPerInchChanged,
-            ):
-                signal.connect(
-                    lambda *_args, _w=window: QtCore.QTimer.singleShot(
-                        0, lambda: self._bind_window(_w)
-                    )
-                )
+        _refit_top_level_windows(self._app, include=include)
 
-    app._rapidpy_window_guard = _WindowBoundsGuard(app)  # type: ignore[attr-defined]
-    QtCore.QTimer.singleShot(0, lambda: _refit_top_level_windows(app))
+
+def _apply_window_bounds_guard(app: QtWidgets.QApplication) -> None:
+    """Install a QApplication-level guard so windows stay within visible screens."""
+    if getattr(app, "_rapidpy_window_guard", None) is None:
+        app._rapidpy_window_guard = _WindowBoundsGuard(app)  # type: ignore[attr-defined]
 
 
 def apply_window_bounds_guard(app: QtWidgets.QApplication) -> None:

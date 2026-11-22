@@ -934,9 +934,6 @@ class MainWindow(QtWidgets.QMainWindow):
         # it to the restored/current size.
         self.setMaximumWidth(maximum_w)
         self.setMaximumHeight(maximum_h)
-        if self.isMaximized():
-            self.showNormal()
-
         min_size = self.minimumSize()
         if min_size.isValid() and not min_size.isNull():
             self.setMinimumSize(min(min_size.width(), fitted_w), min(min_size.height(), fitted_h))
@@ -945,6 +942,8 @@ class MainWindow(QtWidgets.QMainWindow):
         return fitted_w, fitted_h
 
     def _fit_window_to_current_screen(self, *_args: object) -> None:
+        if self.isMinimized() or self.isMaximized() or self.isFullScreen():
+            return
         available = self._current_screen()
         if available is None:
             available = self._resolved_work_area()
@@ -959,8 +958,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 available,
                 (self.width(), self.height()),
             )
-            if self.isMaximized():
-                self.showNormal()
             minimum_size = self.minimumSize()
             if minimum_size.isValid() and not minimum_size.isNull():
                 self.setMinimumSize(
@@ -997,7 +994,8 @@ class MainWindow(QtWidgets.QMainWindow):
             )
 
     def _wire_screen_guard(self) -> None:
-        if getattr(self, "_screen_guarded", False):
+        if (getattr(self, "_screen_guarded", False)
+                or getattr(QtWidgets.QApplication.instance(), "_rapidpy_window_guard", None) is not None):
             return
         handle = self.windowHandle()
         if handle is None or handle.screen() is None:
@@ -4266,17 +4264,21 @@ def _vline() -> QtWidgets.QFrame:
     return f
 
 
+def _apply_desktop_theme(app: QtWidgets.QApplication) -> None:
+    apply_liquid_glass_theme(app)
+    app.setStyleSheet(app.styleSheet() + _EXTRA_CSS)
+    apply_main_glass_theme(app)
+    apply_tiling_theme(app)
+    apply_macos_glass_theme(app)  # last: the macOS glass layer wins
+
+
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     last_crash = previous_crash_summary()
     status_sink: dict = {}
     install_error_logging(lambda text: status_sink["window"].set_status(text) if "window" in status_sink else None)
     apply_window_bounds_guard(app)
-    apply_liquid_glass_theme(app)
-    app.setStyleSheet(app.styleSheet() + _EXTRA_CSS)
-    apply_main_glass_theme(app)
-    apply_tiling_theme(app)
-    apply_macos_glass_theme(app)  # last: the macOS glass layer wins
+    _apply_desktop_theme(app)
     assets_dir = main_assets_dir()
     icon_name, _icon_path = select_main_icon(assets_dir)
     if not icon_name:
@@ -4324,7 +4326,7 @@ def main() -> int:
         # compact guard immediately after first paint and when monitor metrics
         # have not yet fully settled.
         active = window.screen() or app.primaryScreen()
-        if active is None:
+        if active is None or window.isMinimized() or window.isMaximized() or window.isFullScreen():
             return
         compact_w, compact_h = _clamp_main_window_size(
             active.availableGeometry(),
@@ -4334,10 +4336,7 @@ def main() -> int:
             active.availableGeometry(),
             (_MAIN_MAX_WIDTH, _MAIN_MAX_HEIGHT),
         )
-        window.setWindowState(QtCore.Qt.WindowState.WindowNoState)
         window.setMaximumSize(maximum_w, maximum_h)
-        if window.isMaximized() or window.isFullScreen():
-            window.showNormal()
         window.resize(min(window.width(), compact_w), min(window.height(), compact_h))
         window._fit_window_to_current_screen()
 

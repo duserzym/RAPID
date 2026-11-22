@@ -4,7 +4,8 @@ from csv import Error as CsvError
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
-from rapidpy_common.ui import clamp_window_geometry
+from rapidpy_common.flow_layout import FlowLayout
+from rapidpy_common.glass import fit_workspace_window
 from rapid_main.data_model import SampleIndexRegistrations
 from rapid_main.glass_theme import set_semantic_status
 from rapid_main.io.sample_index import read_sample_index_registrations
@@ -16,7 +17,7 @@ from rapid_main.specimen_paths import contained_path
 _COLS = ("Sample Name", "Depth (cm)", "Formation", "Location")
 _DIRECTIONS = (
     ("Up only", True, False), ("Down only", False, False),
-    ("Up then Down", True, True), ("Down with previous Up", False, True),
+    ("Up then Down", True, True), ("Down with saved Up", False, True),
 )
 
 
@@ -39,6 +40,8 @@ class SampleSelectDialog(QtWidgets.QDialog):
 
     def showEvent(self, event: QtCore.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
+        if getattr(QtWidgets.QApplication.instance(), "_rapidpy_window_guard", None) is not None:
+            return
         QtCore.QTimer.singleShot(0, self._fit_to_screen)
         handle = self.windowHandle()
         if handle is not None and not getattr(self, "_screen_signal_connected", False):
@@ -48,39 +51,8 @@ class SampleSelectDialog(QtWidgets.QDialog):
             self._screen_signal_connected = True
 
     def _fit_to_screen(self, screen: QtCore.QObject | None = None) -> None:
-        active_screen = (
-            screen
-            if isinstance(screen, QtGui.QScreen)
-            else (self.screen() or QtWidgets.QApplication.primaryScreen())
-        )
-        if active_screen is None:
-            return
-        available = active_screen.availableGeometry()
-        max_w, max_h = clamp_window_geometry(available, (self.width(), self.height()))
-        min_size = self.minimumSize()
-        if min_size.isValid() and not min_size.isNull():
-            self.setMinimumSize(min(min_size.width(), max_w), min(min_size.height(), max_h))
-        self.resize(min(self.width(), max_w), min(self.height(), max_h))
-        frame = self.frameGeometry()
-        frame.setSize(
-            QtCore.QSize(
-                min(frame.width(), max_w),
-                min(frame.height(), max_h),
-            )
-        )
-        if frame.width() > available.width() or frame.height() > available.height():
-            frame.moveCenter(available.center())
-        else:
-            new_x = max(
-                available.left(),
-                min(frame.left(), available.right() - frame.width() + 1),
-            )
-            new_y = max(
-                available.top(),
-                min(frame.top(), available.bottom() - frame.height() + 1),
-            )
-            frame.moveTopLeft(QtCore.QPoint(new_x, new_y))
-        self.setGeometry(frame)
+        fit_workspace_window(self, (self.width(), self.height()),
+                             screen=screen if isinstance(screen, QtGui.QScreen) else None)
 
     # ── Public ─────────────────────────────────────────────────────────────
     @property
@@ -127,8 +99,8 @@ class SampleSelectDialog(QtWidgets.QDialog):
     # ── UI ─────────────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
         vl = QtWidgets.QVBoxLayout(self)
-        vl.setContentsMargins(16, 14, 16, 14)
-        vl.setSpacing(8)
+        vl.setContentsMargins(14, 9, 14, 9)
+        vl.setSpacing(6)
 
         hdr = QtWidgets.QLabel("Sample Index")
         hdr.setObjectName("dialogTitle")
@@ -136,7 +108,7 @@ class SampleSelectDialog(QtWidgets.QDialog):
         vl.addWidget(hdr)
 
         registry = QtWidgets.QWidget()
-        registry_row = QtWidgets.QHBoxLayout(registry)
+        registry_row = FlowLayout(registry, margin=0, h_spacing=6, v_spacing=4)
         registry_row.setContentsMargins(0, 0, 0, 0)
         self._indexes = QtWidgets.QComboBox()
         self._indexes.setAccessibleName("Registered sample indexes")
@@ -148,7 +120,7 @@ class SampleSelectDialog(QtWidgets.QDialog):
         self._remove_btn = QtWidgets.QPushButton("Remove")
         self._remove_btn.setAccessibleName("Remove selected registry entry")
         self._remove_btn.clicked.connect(self._remove_registration)
-        registry_row.addWidget(self._indexes, 1)
+        registry_row.addWidget(self._indexes)
         registry_row.addWidget(self._register_btn)
         registry_row.addWidget(self._remove_btn)
         vl.addWidget(registry)
@@ -185,6 +157,7 @@ class SampleSelectDialog(QtWidgets.QDialog):
 
         # Table
         self._table = QtWidgets.QTableWidget(0, len(_COLS))
+        self._table.setMinimumHeight(68)
         self._table.setHorizontalHeaderLabels(list(_COLS))
         self._table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self._table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
@@ -199,23 +172,21 @@ class SampleSelectDialog(QtWidgets.QDialog):
         self._defaults = QtWidgets.QWidget()
         defaults = QtWidgets.QFormLayout(self._defaults)
         defaults.setContentsMargins(0, 0, 0, 0)
+        defaults.setVerticalSpacing(4)
+        defaults.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        defaults.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
         self._treatment = QtWidgets.QLineEdit()
         self._treatment.setPlaceholderText("Use the current Sequence when blank")
         self._treatment.setAccessibleName("Treatment sequence for this index")
         defaults.addRow("Treatment", self._treatment)
-        directions = QtWidgets.QHBoxLayout()
         self._direction = QtWidgets.QComboBox()
         self._direction.setAccessibleName("Measurement direction for this index")
         self._direction.addItems([label for label, _, _ in _DIRECTIONS])
-        directions.addWidget(self._direction, 1)
-        blocks_label = QtWidgets.QLabel("Blocks per treatment")
+        defaults.addRow(self._direction)
         self._blocks = QtWidgets.QSpinBox()
         self._blocks.setAccessibleName("Acquisition blocks per treatment for this index")
         self._blocks.setRange(1, 32767)
-        blocks_label.setBuddy(self._blocks)
-        directions.addWidget(blocks_label)
-        directions.addWidget(self._blocks)
-        defaults.addRow("Direction", directions)
+        defaults.addRow("Blocks per treatment", self._blocks)
         self._defaults.setEnabled(False)
         vl.addWidget(self._defaults)
 

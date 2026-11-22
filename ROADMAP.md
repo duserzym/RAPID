@@ -2912,3 +2912,9 @@ publication after the destination becomes available.
 register, reopen, edit, and remove index entries. A selected specimen takes
 the reviewed treatment, direction, and acquisition block count into the queue.
 Preparation still validates the original specimen metadata and file identity.
+
+**Display scaling checkpoint (2026-11-22).** Display metrics now refit the
+visible normal windows on the affected screen. Maximized, minimized, and
+full-screen states are preserved. The portable verifier checks the Sample
+Index controls at 150% and 200% scaling on compact virtual work areas. The lab's
+mixed-monitor workstation remains part of display sign-off.

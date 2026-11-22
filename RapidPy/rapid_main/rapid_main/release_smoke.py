@@ -238,6 +238,7 @@ def run_smoke_test() -> int:
                 "measurement_archive": measurement_archive,
                 "measurement_backup": measurement_backup,
                 "sample_index_registry": sample_index_registry,
+                "compact_display_check": True,
                 "panels": window._stack.count(), "helpers": helpers,
                 "width": window.width(), "height": window.height(),
             }

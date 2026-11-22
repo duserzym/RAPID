@@ -300,6 +300,11 @@ transferred package in a separate Windows runner. Its qualification artifact
 contains the report for that candidate commit. Physical station, vendor
 driver, and display checks use the lab's acceptance procedure.
 
+The portable verifier opens the Sample Index dialog at 150% and 200% scaling
+on offscreen work areas. It checks that the registry and specimen selection
+controls fit and that a maximized window keeps its state. Lab sign-off covers
+monitor moves and dock or undock events on the actual workstation displays.
+
 ## Remaining full-replacement gates
 
 This is a **pilot candidate**. Calibrated axial and transverse AF, independent

@@ -23,6 +23,7 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print a read-only dependency/resource report without opening the UI",
     )
+    parser.add_argument("--check-display", action="store_true", help="check the offline dialog layout and window state")
     parser.add_argument("--backup-measurement", nargs=2, metavar=("PUBLICATION", "BACKUP_FOLDER"),
                         help="verify and back up a completed specimen publication")
     parser.add_argument("--backup-index-sha256", help=argparse.SUPPRESS)
@@ -44,6 +45,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.smoke_test:
         from rapid_main.release_smoke import run_smoke_test
         return run_smoke_test()
+    if args.check_display:
+        from rapid_main.display_check import run_display_check
+        return run_display_check()
     if args.check_startup:
         from rapid_main.startup import collect_startup_environment
 

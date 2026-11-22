@@ -25,6 +25,7 @@ from rapid_main.app import (
 from rapidpy_common.ui import (
     MIN_WINDOW_WIDTH,
     MIN_WINDOW_HEIGHT,
+    _WindowBoundsGuard,
     _fit_window_to_screen,
     workspace_window_size,
     _refit_top_level_windows,
@@ -63,6 +64,46 @@ class _TopologyApplication:
 
     def topLevelWidgets(self) -> list[QtWidgets.QWidget]:
         return self._windows
+
+
+class _MetricScreen(QtCore.QObject):
+    availableGeometryChanged = QtCore.Signal()
+    geometryChanged = QtCore.Signal()
+    logicalDotsPerInchChanged = QtCore.Signal()
+
+
+class _WindowHandle(QtCore.QObject):
+    screenChanged = QtCore.Signal(object)
+
+
+class _DisplayWindow(QtWidgets.QWidget):
+    def __init__(self, screen):
+        super().__init__()
+        self.active_screen = screen
+        self.handle = _WindowHandle(self)
+        self.fitted = []
+
+    def isVisible(self):
+        return True
+
+    def screen(self):
+        return self.active_screen
+
+    def windowHandle(self):
+        return self.handle
+
+    def _fit_to_screen(self):
+        self.fitted.append(self.active_screen)
+
+
+class _DisplayTopology(QtCore.QObject):
+    screenAdded = QtCore.Signal(object)
+    screenRemoved = QtCore.Signal(object)
+
+    def __init__(self, screens, windows):
+        super().__init__()
+        self.screens = lambda: screens
+        self.topLevelWidgets = lambda: windows
 
 
 class _HeadlessWindow:
@@ -420,6 +461,44 @@ class TestWindowLayoutHelpers(unittest.TestCase):
             self.assertLessEqual(window.y() + window.height(), available.bottom() + 1)
         finally:
             window.deleteLater()
+
+    def test_display_changes_refit_the_windows_on_that_display(self) -> None:
+        left, right = _MetricScreen(), _MetricScreen()
+        moved, stationary = _DisplayWindow(left), _DisplayWindow(left)
+        topology = _DisplayTopology([left, right], [moved, stationary])
+        guard = _WindowBoundsGuard(topology)
+        self.addCleanup(guard._timer.stop)
+        guard._flush()
+        self.assertEqual(moved.fitted, [left])
+        self.assertEqual(stationary.fitted, [left])
+
+        moved.active_screen = right
+        moved.handle.screenChanged.emit(right)
+        guard._flush()
+        left.logicalDotsPerInchChanged.emit()
+        left.availableGeometryChanged.emit()
+        guard._flush()
+        self.assertEqual(moved.fitted, [left, right])
+        self.assertEqual(stationary.fitted, [left, left])
+
+        stationary.active_screen = right
+        topology.screenRemoved.emit(left)
+        guard._flush()
+        left.geometryChanged.emit()
+        guard._flush()
+        self.assertEqual(moved.fitted, [left, right, right])
+        self.assertEqual(stationary.fitted, [left, left, right])
+
+    def test_window_refits_preserve_native_state(self) -> None:
+        window = QtWidgets.QMainWindow()
+        for state in (QtCore.Qt.WindowState.WindowMaximized, QtCore.Qt.WindowState.WindowMinimized,
+                      QtCore.Qt.WindowState.WindowFullScreen):
+            with self.subTest(state=state):
+                window.setWindowState(state)
+                with patch("rapidpy_common.ui._screen_area_for_widget", return_value=QtCore.QRect(0, 0, 400, 300)):
+                    _fit_window_to_screen(window)
+                MainWindow._fit_window_to_current_screen(window)
+                self.assertEqual(window.windowState(), state)
 
     def test_shared_window_guard_lets_windows_grow_to_the_work_area(self) -> None:
         available = QtCore.QRect(0, 0, 1920, 1040)

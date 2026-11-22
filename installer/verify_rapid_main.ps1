@@ -31,7 +31,7 @@ $windows = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
 $system = Join-Path $windows 'System32'
 
 function Invoke-BundledCheck {
-    param([string]$Name, [string]$Argument)
+    param([string]$Name, [string]$Argument, [string]$Scale = '')
 
     $profile = Join-Path $checkRoot $Name
     $roaming = Join-Path $profile 'AppData\Roaming'
@@ -64,6 +64,7 @@ function Invoke-BundledCheck {
         RAPID_SAFETY_STATE = (Join-Path $profile 'hardware-safety.json')
         QT_QPA_PLATFORM = 'offscreen'
     }
+    if ($Scale) { $environment.QT_SCALE_FACTOR = $Scale }
     foreach ($entry in $environment.GetEnumerator()) {
         $start.EnvironmentVariables[$entry.Key] = $entry.Value
     }
@@ -120,6 +121,19 @@ try {
     }
     if ($report.inventory.full_inventory -and $smoke.transverse_probe -ne $true) {
         throw 'UI checks did not exercise the transverse probe scan.'
+    }
+    if ($smoke.compact_display_check -eq $true) {
+        $report.compact_display = [ordered]@{}
+        foreach ($profile in @(@{ Percent = 150; Factor = '1.5' }, @{ Percent = 200; Factor = '2' })) {
+            $percent = $profile.Percent
+            $display = Invoke-BundledCheck -Name "display-$percent" -Argument '--check-display' -Scale $profile.Factor
+            $report.compact_display["scale_$percent"] = $display
+            if ($display.schema -cne 'rapidpy.display_check.v1' -or $display.ok -ne $true -or
+                $display.device_pixel_ratio -ne ($percent / 100.0) -or $display.registry_controls_visible -ne $true -or
+                $display.dialog_in_work_area -ne $true -or $display.maximized_preserved -ne $true) {
+                throw "The compact display check failed at ${percent}% scaling."
+            }
+        }
     }
     $after = Test-RapidPyBundle -Bundle $Bundle -RequireFullInventory:$RequireFullInventory
     if ($after.manifest_sha256 -cne $report.inventory.manifest_sha256) {
