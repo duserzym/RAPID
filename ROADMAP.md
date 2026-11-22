@@ -2924,3 +2924,8 @@ the documented bench cases for a candidate commit. It verifies attachment
 hashes and reports missing, invalid, failed, and blocked records. Section and
 subsystem names distinguish reused IDs. The package carries the operator's
 station procedure and stamps its built revision into runtime evidence.
+
+**Measurement backup recovery checkpoint (2026-11-22).** Live Measure keeps
+pending copies across restarts and retries them for their original destination.
+Retries verify the accepted artifact index and reuse the matching specimen history
+archive when a newer run has replaced that publication.

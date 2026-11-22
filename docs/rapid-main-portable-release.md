@@ -260,10 +260,14 @@ Practice runs use `RapidPy backups/SIMULATED`. The copy runs in the background.
 **Live Measure** reports its status and the archive path. Use **Open MagIC
 Directory** in Data Review to open a backup archive.
 
-The primary measurement remains available if the copy fails. Reconnect or
-correct the backup folder, then retry the retained publication with the portable
-console executable. Point the first argument to the specimen output folder
-that contains `artifact_index.json`.
+The primary measurement remains available if the copy fails. Pending copies
+survive an app restart. Reconnect the original backup folder, select that folder
+in Settings, and click **Retry Pending Backups** in Live Measure. If a newer run
+has replaced the publication, RAPID uses the verified specimen history to copy
+the original run.
+
+To back up the current publication manually, use the portable console and point
+the first argument to the specimen output folder containing `artifact_index.json`.
 
 ```powershell
 .\RapidPyMainConsole.exe --backup-measurement "D:\RAPID_data\Specimen-A" "E:\Lab backups"

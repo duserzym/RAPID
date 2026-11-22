@@ -1,9 +1,11 @@
 """Verify accepted backup contents and the desktop completion path."""
 import hashlib
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from PySide6 import QtCore, QtWidgets
 
@@ -12,7 +14,7 @@ from rapid_main.config import AppConfig
 from rapid_main.data_model import SpecimenMeta
 from rapid_main.hardware_contracts import NoCommBackend
 from rapid_main.io.bundle_backup import backup_measurement
-from rapid_main.io.bundle_history import open_bundle_archive
+from rapid_main.io.bundle_history import ARCHIVE_PAYLOAD, HISTORY_DIRECTORY, open_bundle_archive
 from rapid_main.measurement_worker import MeasurementWorker
 from rapid_main.panels.measurement import MeasurementPanel
 
@@ -22,11 +24,14 @@ class BundleBackupTests(unittest.TestCase):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
+        profile = patch.dict(os.environ, {'RAPID_CONFIG': str(self.root / 'config.json')})
+        profile.start()
+        self.addCleanup(profile.stop)
         self.destination = self.root / 'backup folder'
         self.destination.mkdir()
 
-    def measure(self):
-        worker = MeasurementWorker(SpecimenMeta('A'), ['NRM'], self.root / 'source', NoCommBackend())
+    def measure(self, label='NRM'):
+        worker = MeasurementWorker(SpecimenMeta('A'), [label], self.root / 'source', NoCommBackend())
         worker.run()
         self.assertIs(worker._pending_run_result, False)
         return worker._publish_dir
@@ -62,6 +67,27 @@ class BundleBackupTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'changed or is missing: measurements.txt'):
             backup_measurement(source, self.destination)
         self.assertEqual(list(self.destination.iterdir()), [])
+
+    def test_retry_copies_the_original_verified_publication_after_remeasurement(self):
+        source = self.measure()
+        original_index = (source / 'artifact_index.json').read_bytes()
+        original_digest = hashlib.sha256(original_index).hexdigest()
+        self.assertEqual(self.measure('AF20'), source)
+        self.assertEqual(load_magic_directory(source).specimens[0].steps[0].demag_label, 'AF20')
+
+        result = backup_measurement(source, self.destination, expected_index_sha256=original_digest)
+        self.assertEqual(result, backup_measurement(source, self.destination, expected_index_sha256=original_digest))
+        with open_bundle_archive(result['archive']) as payload:
+            self.assertEqual(payload.read('artifact_index.json'), original_index)
+        self.assertEqual(load_magic_directory(result['archive']).specimens[0].steps[0].demag_label, 'NRM')
+
+        historical, = (source / HISTORY_DIRECTORY).iterdir()
+        (historical / ARCHIVE_PAYLOAD).write_bytes(b'damaged')
+        another_destination = self.root / 'another destination'
+        another_destination.mkdir()
+        with self.assertRaisesRegex(ValueError, 'archive ZIP is damaged'):
+            backup_measurement(source, another_destination, expected_index_sha256=original_digest)
+        self.assertEqual(list(another_destination.iterdir()), [])
 
     def test_older_unhashed_quicklook_is_reported_and_excluded(self):
         source = self.measure()
@@ -115,3 +141,24 @@ class BundleBackupTests(unittest.TestCase):
         self.assertTrue(statuses[-1][1])
         self.assertIn('The primary measurement is saved', panel._backup_status.text())
         self.assertTrue((self.root / 'source' / 'B' / 'SIMULATED' / 'measurements.txt').is_file())
+
+        reopened_window = QtWidgets.QMainWindow()
+        self.addCleanup(reopened_window.deleteLater)
+        reopened_window.config = window.config
+        reopened_window.config.general.backup_dir = str(self.destination)
+        reopened_panel = MeasurementPanel(reopened_window)
+        wait_for(lambda: not reopened_panel._retry_backup_btn.isHidden())
+        self.assertEqual(reopened_panel._retry_backup_btn.text(), 'Retry Pending Backups (1)')
+        reopened_panel._retry_backup_btn.click()
+        self.assertIn('original backup folder', reopened_panel._backup_status.text())
+        self.assertEqual(list(archive.parent.iterdir()), [archive])
+
+        recovered = self.root / 'missing'
+        recovered.mkdir()
+        reopened_window.config.general.backup_dir = str(recovered)
+        reopened_panel._retry_backup_btn.click()
+        wait_for(lambda: reopened_panel._retry_backup_btn.isHidden())
+        self.assertIn('Backup saved for B', reopened_panel._backup_status.text())
+        restored, = (recovered / 'RapidPy backups' / 'SIMULATED').iterdir()
+        self.assertEqual(load_magic_directory(restored).specimens[0].steps[0].demag_label, 'NRM')
+        self.assertEqual(list((self.root / 'measurement-backup-queue').iterdir()), [])

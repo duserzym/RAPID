@@ -133,7 +133,10 @@ def _check_measurement_backup(app, root):
     from rapid_main.backup_tasks import MeasurementBackups
     from rapid_main.data_model import SpecimenMeta
     from rapid_main.hardware_contracts import NoCommBackend
+    from rapid_main.io.backup_jobs import BackupJob, BackupJobs
+    from rapid_main.io.bundle_backup import INDEX_FILE
     from rapid_main.io.bundle_history import _archive_io_path
+    from rapid_main.io.bundle_publication import _digest
     from rapid_main.measurement_worker import MeasurementWorker
 
     with tempfile.TemporaryDirectory(prefix="backup-", dir=_archive_io_path(root)) as directory:
@@ -145,16 +148,19 @@ def _check_measurement_backup(app, root):
         worker.run()
         if worker._pending_run_result is not False:
             return False
-        backups = MeasurementBackups()
+        digest = _digest(worker._publish_dir / INDEX_FILE)
+        queue = parent / "pending-backups"
+        BackupJobs(queue).save(BackupJob(specimen.name, str(worker._publish_dir), str(destination), digest))
+        backups = MeasurementBackups(spool=queue)
         statuses = []
         backups.status_changed.connect(lambda message, warning: statuses.append((message, warning)))
-        backups.submit(specimen.name, worker._publish_dir, str(destination))
+        backups.retry_pending(str(destination))
         timer = QtCore.QElapsedTimer()
         timer.start()
         while len(statuses) < 2 and timer.elapsed() < 15_000:
             app.processEvents()
             QtCore.QThread.msleep(10)
-        if len(statuses) < 2 or statuses[-1][1]:
+        if len(statuses) < 2 or statuses[-1][1] or BackupJobs(queue).pending() != ([], []):
             return False
         archives = list((destination / "RapidPy backups" / "SIMULATED").iterdir())
         return len(archives) == 1 and load_magic_directory(archives[0]).specimens[0].steps[0].demag_label == "NRM"

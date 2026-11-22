@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 from tempfile import TemporaryDirectory
 from typing import Iterator
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
@@ -83,12 +84,16 @@ def archive_previous_bundle(directory, specimen, scientific_paths, mutable_paths
             "archive_id": archive_id, "sha256": digest}, previous
 
 
-def _write_bundle_archive(directory, staged, payload, archive_id):
+def _write_bundle_archive(source, staged, payload, archive_id):
     zip_path = contained_path(staged, ARCHIVE_PAYLOAD, output=True)
     with zip_path.open("xb") as stream:
         with ZipFile(stream, "w", compression=ZIP_DEFLATED, compresslevel=3) as data:
-            for name in payload["files"]:
-                data.write(contained_path(directory, name, output=True), name)
+                for name in payload["files"]:
+                    if isinstance(source, ZipFile):
+                        with source.open(name) as member, data.open(name, "w", force_zip64=True) as target:
+                            shutil.copyfileobj(member, target)
+                    else:
+                        data.write(contained_path(source, name, output=True), name)
         stream.flush()
         os.fsync(stream.fileno())
     manifest = contained_path(staged, ARCHIVE_MANIFEST, output=True)
@@ -102,7 +107,7 @@ def _write_bundle_archive(directory, staged, payload, archive_id):
     _sync_directory(staged)
 
 
-def publish_bundle_archive(directory, specimen, files, root, *, staging=None):
+def publish_bundle_archive(source, specimen, files, root, *, staging=None):
     """Write a verified immutable archive. Stage on the destination filesystem."""
     payload = {"schema": _SCHEMA, "specimen": specimen, "files": files}
     archive_id = _archive_identity(payload)
@@ -118,7 +123,7 @@ def publish_bundle_archive(directory, specimen, files, root, *, staging=None):
     with TemporaryDirectory(prefix=".pending-", dir=staging_root) as temporary:
         staged = contained_path(temporary, "archive", output=True)
         staged.mkdir()
-        _write_bundle_archive(directory, staged, payload, archive_id)
+        _write_bundle_archive(source, staged, payload, archive_id)
         try:
             _replace_snapshot(staged, archive)
         except OSError:

@@ -196,6 +196,8 @@ class MeasurementPanel(QtWidgets.QWidget):
         root.addLayout(body, 1)
 
         root.addWidget(self._build_warning_strip())
+        self._backups.pending_changed.connect(self._set_pending_backups)
+        QtCore.QTimer.singleShot(0, self, self._backups.refresh_pending)
 
     # ── Sample info strip ─────────────────────────────────────────────────────
     def _build_sample_strip(self) -> QtWidgets.QFrame:
@@ -473,7 +475,23 @@ class MeasurementPanel(QtWidgets.QWidget):
         self._backup_status.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         self._backup_status.hide()
         hl.addWidget(self._backup_status)
+        self._retry_backup_btn = QtWidgets.QPushButton("Retry Pending Backups")
+        self._retry_backup_btn.setToolTip("Retry copies for the backup folder configured in Settings")
+        self._retry_backup_btn.clicked.connect(self._retry_pending_backups)
+        self._retry_backup_btn.hide()
+        hl.addWidget(self._retry_backup_btn, alignment=QtCore.Qt.AlignmentFlag.AlignLeft)
         return w
+
+    @QtCore.Slot(int)
+    def _set_pending_backups(self, count: int) -> None:
+        self._retry_backup_btn.setText(f"Retry Pending Backups ({count})")
+        self._retry_backup_btn.setVisible(count > 0)
+
+    @QtCore.Slot()
+    def _retry_pending_backups(self) -> None:
+        config = getattr(self.window(), "config", None)
+        destination = str(getattr(getattr(config, "general", None), "backup_dir", "")).strip()
+        self._backups.retry_pending(destination)
 
     @QtCore.Slot(str, bool)
     def _set_backup_status(self, message: str, warning: bool) -> None:
