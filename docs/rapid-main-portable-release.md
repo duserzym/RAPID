@@ -269,6 +269,19 @@ that contains `artifact_index.json`.
 .\RapidPyMainConsole.exe --backup-measurement "D:\RAPID_data\Specimen-A" "E:\Lab backups"
 ```
 
+## Register sample indexes
+
+In **Sample Queue → Load Index**, use **Load File** to open a SAM or CSV index.
+Choose its treatment, measurement direction, and acquisition blocks per
+treatment, then select **Save to Registry**. **Registered indexes** reopens the
+source file with those defaults. Save again to update them or select **Remove**
+to remove the registry entry. A blank treatment uses the current Sequence.
+
+Select a specimen and enter its changer position to add it to the queue. Paired
+acquisition requires one treatment. If the queue already contains specimens
+from the same index with different settings, align those rows before adding
+another specimen.
+
 ## Rebuild and test
 
 Use an environment with the declared RapidPy dependencies, setuptools, wheel,

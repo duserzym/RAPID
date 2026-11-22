@@ -2907,3 +2907,8 @@ receives an independently verified copy of an accepted publication. The
 desktop delivers it after releasing measurement resources, reports the outcome,
 and keeps practice output separate. The portable console can retry a retained
 publication after the destination becomes available.
+
+**Sample index registry checkpoint (2026-11-22).** The Sample Queue can
+register, reopen, edit, and remove index entries. A selected specimen takes
+the reviewed treatment, direction, and acquisition block count into the queue.
+Preparation still validates the original specimen metadata and file identity.

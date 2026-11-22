@@ -98,7 +98,7 @@ Phase-1 inventory closure.
 | `SampleCommands` | Class | Mapped | queue/sequencer pipeline uses newer equivalents |
 | `SampleIndexRegistration` | Class | Mapped | `rapid_main/data_model.py`; `rapid_main/io/sample_index.py` (`read_sample_index_registrations`) |
 | `SampleIndexRegistrations` | Class | Mapped | `rapid_main/data_model.py`; `rapid_main/io/sample_index.py` (`read_sample_index_registrations`, `SampleIndexRegistrations`) |
-| `frmSampleIndexRegistry` | Form | Mapped | Modern equivalent is `SampleSelectDialog` loading workflow in `rapid_main/dialogs/sample_select.py`, with registry metadata preserved via `SampleIndexRegistration`; full add/edit registry operations are deferred to a later milestone with parity evidence tracking. |
+| `frmSampleIndexRegistry` | Form | Integrated | `SampleSelectDialog` and `sample_index_registry.py` register and reopen SAM or CSV sources and store treatment, direction, and AvgSteps defaults per file. The queue binds the selected file's source metadata and applies the reviewed defaults. Completed measurements use the backup folder in General Settings. |
 | `frmProgram` | Form | Mapped | `panels.sequence` |
 | `Samples` | Class | Mapped | specimen model in `data_model.py` |
 | `Sample` | Class | Mapped | specimen model in `data_model.py` |
@@ -227,7 +227,7 @@ The list below tracks capabilities that were originally "Not assessed" and now c
 | `RockmagSteps` | Rock-Magnetic Owner | Completed | Rock-magnetic batch-step container structure is represented by `rapid_main.data_model.RockmagSteps`; tests verify ordered labels, family metadata, and conversion to the current `MeasurementBlock` runner contract. |
 | `SampleIndexRegistration` | Sample-Index Owner | Completed | `rapid_main/data_model.py` defines `SampleIndexRegistration`; `rapid_main/io/sample_index.py` maps `.sam` registry entries with preserved specimen order metadata. |
 | `SampleIndexRegistrations` | Sample-Index Owner | Completed | `rapid_main/data_model.py` defines `SampleIndexRegistrations`; `rapid_main/io/sample_index.py` and `rapid_main/tests/test_sample_index.py` verify order preservation and header handling. |
-| `frmSampleIndexRegistry` | Sample-Index Owner | Completed | `.sam` registry loading flow is represented in `SampleSelectDialog` (`rapid_main/dialogs/sample_select.py`), with registry metadata used where present and fixture-backed parsing tests. |
+| `frmSampleIndexRegistry` | Sample-Index Owner | Completed | `SampleSelectDialog` supports registration, reopening, editing defaults, and removal. Tests verify source files, saved defaults, and their transfer into the queue. |
 | `Cartesian3D` | Math Utilities Owner | Completed | Vector math primitives and conversion helpers are covered in `RapidPy/rapid_main/geometry.py` and `RapidPy/rapid_main/tests/test_geometry.py`. |
 | `frmRerunSamples` | Queue/Workflow Owner | Completed | queue rerun/skip controls are implemented in `SampleQueuePanel` (failure resets, queue-persistent status restore, and skip-aware run extraction) with regression coverage in `RapidPy/rapid_main/tests/test_sample_queue_helpers.py` (`_normalize_status`) and queue execution tests via `test_queue_and_bundle` coverage patterns. |
 | `Angular3D` | Math Utilities Owner | Completed | Angular direction conversion helpers are covered in `RapidPy/rapid_main/geometry.py` and validated by `RapidPy/rapid_main/tests/test_geometry.py`. |

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import re
 from typing import Iterable
 
 
@@ -45,6 +46,13 @@ def validate_average_count(value: int) -> int:
     if type(value) is not int or not 1 <= value <= 32767:
         raise ValueError('AvgSteps must be an integer from 1 to 32767.')
     return value
+
+
+def parse_queue_sequence(treatment: str) -> tuple[str, ...]:
+    labels = tuple(part.strip() for part in re.split(r"→|->", treatment))
+    if any(not label for label in labels):
+        raise ValueError("Treatment sequence contains an empty step.")
+    return labels
 
 
 def _first_hole(samples: list[QueueSample], ascending: bool) -> int:

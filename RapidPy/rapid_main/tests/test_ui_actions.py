@@ -89,6 +89,7 @@ class TestCompletedUiActions(unittest.TestCase):
 
     def test_sample_index_selection_adds_real_queue_row_and_metadata(self) -> None:
         from rapid_main.app import MainWindow
+        from rapid_main.sample_index_registry import IndexQueueDefaults
 
         registrations = object()
         dialog = SimpleNamespace(
@@ -101,6 +102,7 @@ class TestCompletedUiActions(unittest.TestCase):
             },
             registrations=registrations,
             source_path=Path("C:/samples/site-z.sam"),
+            queue_defaults=IndexQueueDefaults("SUSC", do_up=False, do_both=True, avg_steps=7),
         )
 
         class _Table:
@@ -108,12 +110,13 @@ class TestCompletedUiActions(unittest.TestCase):
             def rowCount() -> int:
                 return 0
 
-        queue = SimpleNamespace(_table=_Table(), add_sample=Mock())
+        queue = SimpleNamespace(_table=_Table(), add_sample=Mock(), check_index_queue_settings=Mock())
         measurement = SimpleNamespace(set_specimen_context=Mock())
         controller = SimpleNamespace(
             _sample_queue=queue,
             _measurement=measurement,
             _sequence_labels=["NRM", "AF20"],
+            _has_active_automation=lambda: False,
             sample_registrations=None,
             _nav_select=Mock(),
             _save_queue_state=Mock(),
@@ -134,17 +137,25 @@ class TestCompletedUiActions(unittest.TestCase):
             position="B12",
             name="SPEC-42",
             sample_set="Basalt Unit",
-            treatment="NRM → AF20",
+            treatment="SUSC",
             source_file=str(dialog.source_path.resolve()),
+            do_up=False,
+            do_both=True,
+            avg_steps=7,
         )
         measurement.set_specimen_context.assert_called_once_with(
             "SPEC-42",
             depth="18.2",
-            treatment="NRM → AF20",
+            treatment="SUSC",
         )
         self.assertIs(controller.sample_registrations, registrations)
         controller._nav_select.assert_called_once_with(1)
         controller._save_queue_state.assert_called_once_with()
+
+        controller._has_active_automation = lambda: True
+        with patch("rapid_main.app.SampleSelectDialog") as factory:
+            self.assertFalse(MainWindow._load_sample_from_index(controller))
+        factory.assert_not_called()
 
     def test_dashboard_load_sample_action_requests_index_workflow(self) -> None:
         dashboard = DashboardPanel()

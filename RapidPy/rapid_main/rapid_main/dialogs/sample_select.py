@@ -1,36 +1,41 @@
 from __future__ import annotations
 
+from csv import Error as CsvError
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 from rapidpy_common.ui import clamp_window_geometry
-from rapid_main.data_model import SampleIndexRegistration, SampleIndexRegistrations
+from rapid_main.data_model import SampleIndexRegistrations
 from rapid_main.glass_theme import set_semantic_status
-
-try:
-    from rapid_main.io.sam_reader import specimen_path
-    from rapid_main.io.sample_index import read_sample_index_registrations
-    from rapid_main.io.specimen_reader import read_specimen
-    _IO_AVAILABLE = True
-except ImportError:
-    _IO_AVAILABLE = False
+from rapid_main.io.sample_index import read_sample_index_registrations
+from rapid_main.io.specimen_reader import read_specimen
+from rapid_main.sample_index_registry import (IndexQueueDefaults, read_registered_indexes,
+                                              remove_registered_index, save_registered_index)
+from rapid_main.specimen_paths import contained_path
 
 _COLS = ("Sample Name", "Depth (cm)", "Formation", "Location")
+_DIRECTIONS = (
+    ("Up only", True, False), ("Down only", False, False),
+    ("Up then Down", True, True), ("Down with previous Up", False, True),
+)
 
 
 class SampleSelectDialog(QtWidgets.QDialog):
     """Filterable sample browser — replaces VB6 frmSampleSelect."""
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(self, parent: QtWidgets.QWidget | None = None, *, settings: QtCore.QSettings | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("glassDialog")
         self.setWindowTitle("Select Sample")
         self.setAccessibleName("Select specimen from a sample index")
-        self.resize(560, 380)
+        self.resize(640, 480)
         self.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowContextHelpButtonHint)
         self._source_path: Path | None = None
         self._registrations: SampleIndexRegistrations | None = None
+        self._registry_settings = settings if settings is not None else getattr(parent, "_settings", None)
+        self._registered: dict[Path, IndexQueueDefaults] = {}
         self._build_ui()
+        self._refresh_registry()
 
     def showEvent(self, event: QtCore.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
@@ -114,6 +119,11 @@ class SampleSelectDialog(QtWidgets.QDialog):
     def registrations(self) -> SampleIndexRegistrations | None:
         return self._registrations
 
+    @property
+    def queue_defaults(self) -> IndexQueueDefaults:
+        _, do_up, do_both = _DIRECTIONS[self._direction.currentIndex()]
+        return IndexQueueDefaults(self._treatment.text().strip(), do_up, do_both, self._blocks.value())
+
     # ── UI ─────────────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
         vl = QtWidgets.QVBoxLayout(self)
@@ -124,6 +134,30 @@ class SampleSelectDialog(QtWidgets.QDialog):
         hdr.setObjectName("dialogTitle")
         hdr.setAccessibleName("Sample index title")
         vl.addWidget(hdr)
+
+        registry = QtWidgets.QWidget()
+        registry_row = QtWidgets.QHBoxLayout(registry)
+        registry_row.setContentsMargins(0, 0, 0, 0)
+        self._indexes = QtWidgets.QComboBox()
+        self._indexes.setAccessibleName("Registered sample indexes")
+        self._indexes.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self._indexes.setMinimumContentsLength(18)
+        self._indexes.activated.connect(self._open_registration)
+        self._register_btn = QtWidgets.QPushButton("Save to Registry")
+        self._register_btn.clicked.connect(self._save_registration)
+        self._remove_btn = QtWidgets.QPushButton("Remove")
+        self._remove_btn.setAccessibleName("Remove selected registry entry")
+        self._remove_btn.clicked.connect(self._remove_registration)
+        registry_row.addWidget(self._indexes, 1)
+        registry_row.addWidget(self._register_btn)
+        registry_row.addWidget(self._remove_btn)
+        vl.addWidget(registry)
+        registry.setVisible(self._registry_settings is not None)
+        self._registry_status = QtWidgets.QLabel()
+        self._registry_status.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self._registry_status.setWordWrap(True)
+        self._registry_status.hide()
+        vl.addWidget(self._registry_status)
 
         # Search
         search_row = QtWidgets.QHBoxLayout()
@@ -139,6 +173,7 @@ class SampleSelectDialog(QtWidgets.QDialog):
         vl.addLayout(search_row)
 
         self._source_lbl = QtWidgets.QLabel()
+        self._source_lbl.setTextFormat(QtCore.Qt.TextFormat.PlainText)
         set_semantic_status(
             self._source_lbl,
             "No sample index loaded. Choose Load File to open a real .sam or .csv index.",
@@ -160,6 +195,29 @@ class SampleSelectDialog(QtWidgets.QDialog):
         self._table.doubleClicked.connect(self._on_double_click)
         self._table.itemSelectionChanged.connect(self._update_select_enabled)
         vl.addWidget(self._table, 1)
+
+        self._defaults = QtWidgets.QWidget()
+        defaults = QtWidgets.QFormLayout(self._defaults)
+        defaults.setContentsMargins(0, 0, 0, 0)
+        self._treatment = QtWidgets.QLineEdit()
+        self._treatment.setPlaceholderText("Use the current Sequence when blank")
+        self._treatment.setAccessibleName("Treatment sequence for this index")
+        defaults.addRow("Treatment", self._treatment)
+        directions = QtWidgets.QHBoxLayout()
+        self._direction = QtWidgets.QComboBox()
+        self._direction.setAccessibleName("Measurement direction for this index")
+        self._direction.addItems([label for label, _, _ in _DIRECTIONS])
+        directions.addWidget(self._direction, 1)
+        blocks_label = QtWidgets.QLabel("Blocks per treatment")
+        self._blocks = QtWidgets.QSpinBox()
+        self._blocks.setAccessibleName("Acquisition blocks per treatment for this index")
+        self._blocks.setRange(1, 32767)
+        blocks_label.setBuddy(self._blocks)
+        directions.addWidget(blocks_label)
+        directions.addWidget(self._blocks)
+        defaults.addRow("Direction", directions)
+        self._defaults.setEnabled(False)
+        vl.addWidget(self._defaults)
 
         # Buttons
         self._buttons = QtWidgets.QDialogButtonBox(
@@ -207,119 +265,146 @@ class SampleSelectDialog(QtWidgets.QDialog):
         )
         if not path:
             return
-        p = Path(path)
-        if p.suffix.lower() == ".sam":
-            loaded = self._load_sam(p)
-        elif p.suffix.lower() == ".csv":
-            loaded = self._load_csv(p)
-        else:
-            # Try to guess from content
-            loaded = self._load_sam(p)
-        if loaded:
-            self._source_path = p
-            set_semantic_status(
-                self._source_lbl,
-                f"Loaded {self._table.rowCount()} specimen"
-                f"{'s' if self._table.rowCount() != 1 else ''} from {p.name}",
-                "ready",
-                accessible_name="Sample index source status",
-            )
-            self._source_lbl.setToolTip(str(p))
+        self._open_source(Path(path))
 
-    def _load_sam(self, sam_path: Path) -> bool:
-        """Parse a .sam specimen index and populate the table."""
-        if not _IO_AVAILABLE:
-            QtWidgets.QMessageBox.warning(
-                self, "Load SAM", "rapid_main.io not available."
-            )
-            return False
+    def _open_source(self, path: Path) -> bool:
         try:
-            registrations = read_sample_index_registrations(sam_path)
-        except Exception as exc:
-            QtWidgets.QMessageBox.warning(self, "Load SAM", f"Could not read file:\n{exc}")
+            path = path.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError) as exc:
+            QtWidgets.QMessageBox.warning(self, "Load Sample Index", str(exc))
             return False
-        if not registrations.names:
-            QtWidgets.QMessageBox.information(
-                self, "Load SAM", "No specimen names found in file."
-            )
+        loader = self._load_csv if path.suffix.lower() == ".csv" else self._load_sam
+        if not loader(path):
             return False
-        self._registrations = registrations
-        self._table.setRowCount(0)
-        for reg in registrations.entries:
-            name = reg.specimen_name
-            sp = specimen_path(sam_path, name)
-            depth_or_volume = reg.depth_cm
-            comment_str = reg.formation
-            location = reg.location
-            if sp.exists():
-                try:
-                    meta, _ = read_specimen(sp, specimen_name=name)
-                    depth_or_volume = depth_or_volume or (f"{meta.volume:.2f}" if meta.volume else "")
-                    comment_str = meta.comment or reg.formation
-                except Exception:
-                    pass
-            row = self._table.rowCount()
-            self._table.insertRow(row)
-            self._table.setItem(row, 0, QtWidgets.QTableWidgetItem(name))
-            self._table.setItem(row, 1, QtWidgets.QTableWidgetItem(depth_or_volume))
-            self._table.setItem(row, 2, QtWidgets.QTableWidgetItem(comment_str))
-            self._table.setItem(row, 3, QtWidgets.QTableWidgetItem(location or str(sam_path.parent)))
+        self._source_path = path
+        self._apply_defaults(self._registered.get(path, IndexQueueDefaults()))
+        count = self._table.rowCount()
+        specimens = "specimen" if count == 1 else "specimens"
+        set_semantic_status(self._source_lbl, f"Loaded {count} {specimens} from {path.name}",
+                            "ready", accessible_name="Sample index source status")
+        self._source_lbl.setToolTip(str(path))
+        self._defaults.setEnabled(True)
+        self._filter(self._search.text())
+        index = self._indexes.findData(str(path))
+        self._indexes.setCurrentIndex(max(0, index))
+        self._update_registry_actions()
         return True
 
-    def _load_csv(self, csv_path: Path) -> bool:
-        """Parse a CSV file and populate the table."""
-        import csv
+    def _apply_defaults(self, defaults: IndexQueueDefaults) -> None:
+        self._treatment.setText(defaults.treatment)
+        self._blocks.setValue(defaults.avg_steps)
+        for index, (_, do_up, do_both) in enumerate(_DIRECTIONS):
+            if (do_up, do_both) == (defaults.do_up, defaults.do_both):
+                self._direction.setCurrentIndex(index)
+                break
+
+    def _registry_message(self, message: str, level: str) -> None:
+        set_semantic_status(self._registry_status, message, level, accessible_name="Sample index registry status")
+        self._registry_status.setVisible(bool(message))
+
+    def _refresh_registry(self) -> None:
+        if self._registry_settings is not None:
+            try:
+                self._registered, invalid = read_registered_indexes(self._registry_settings)
+                if invalid:
+                    self._registry_message(f"Skipped {invalid} unreadable registry entries.", "warning")
+            except OSError as exc:
+                self._registry_message(str(exc), "error")
+        self._indexes.clear()
+        self._indexes.addItem("Registered indexes…")
+        for path in sorted(self._registered, key=lambda item: (item.name.casefold(), str(item).casefold())):
+            self._indexes.addItem(f"{path.name}  ({path.parent})", str(path))
+        self._indexes.setCurrentIndex(max(0, self._indexes.findData(str(self._source_path))))
+        self._update_registry_actions()
+
+    def _update_registry_actions(self) -> None:
+        self._register_btn.setEnabled(self._registry_settings is not None and self._source_path is not None)
+        self._remove_btn.setEnabled(self._indexes.currentData() is not None)
+
+    def _open_registration(self, index: int) -> None:
+        path = self._indexes.itemData(index)
+        if path and not self._open_source(Path(path)):
+            self._source_path = None
+            self._registrations = None
+            self._table.setRowCount(0)
+            self._defaults.setEnabled(False)
+            self._source_lbl.setToolTip(path)
+            set_semantic_status(self._source_lbl, "The registered index could not be loaded.", "error",
+                                accessible_name="Sample index source status")
+        self._update_registry_actions()
+
+    def _save_registration(self) -> None:
+        if self._source_path is None or self._registry_settings is None:
+            return
         try:
-            with csv_path.open(newline="", encoding="utf-8-sig") as fh:
-                reader = csv.reader(fh)
-                rows = list(reader)
-        except Exception as exc:
-            QtWidgets.QMessageBox.warning(self, "Load CSV", f"Could not read file:\n{exc}")
+            save_registered_index(self._registry_settings, self._source_path, self.queue_defaults)
+        except (OSError, ValueError) as exc:
+            self._registry_message(str(exc), "error")
+            return
+        self._registry_message(f"Saved defaults for {self._source_path.name}.", "ready")
+        self._refresh_registry()
+
+    def _remove_registration(self) -> None:
+        path = self._indexes.currentData()
+        if not path or self._registry_settings is None:
+            return
+        try:
+            remove_registered_index(self._registry_settings, Path(path))
+        except OSError as exc:
+            self._registry_message(str(exc), "error")
+            return
+        self._apply_defaults(IndexQueueDefaults())
+        self._registry_message(f"Removed {Path(path).name} from the registry.", "ready")
+        self._refresh_registry()
+
+    def _load_sam(self, sam_path: Path) -> bool:
+        return self._load_index(sam_path, preview_headers=True)
+
+    def _load_csv(self, csv_path: Path) -> bool:
+        return self._load_index(csv_path, preview_headers=False)
+
+    def _load_index(self, path: Path, *, preview_headers: bool) -> bool:
+        try:
+            registrations = read_sample_index_registrations(path)
+            specimens = [contained_path(path.parent, entry.specimen_name) for entry in registrations.entries]
+            if len({str(item).casefold() for item in specimens}) != len(specimens):
+                raise ValueError("The sample index contains duplicate specimen names.")
+        except (OSError, RuntimeError, ValueError, CsvError) as exc:
+            QtWidgets.QMessageBox.warning(self, "Load Sample Index", str(exc))
             return False
-        if not rows:
-            QtWidgets.QMessageBox.information(self, "Load CSV", "The file contains no samples.")
+        if not registrations.entries:
+            QtWidgets.QMessageBox.information(self, "Load Sample Index", "The file contains no samples.")
             return False
-        # Skip header row if first cell matches a column name
-        start = 1 if rows and rows[0][0].strip().lower() in ("sample name", "name", "specimen") else 0
-        parsed_rows: list[list[str]] = []
-        registrations: list[SampleIndexRegistration] = []
-        for csv_row in rows[start:]:
-            if not csv_row or not csv_row[0].strip():
-                continue
-            values = [
-                csv_row[col].strip() if col < len(csv_row) else ""
-                for col in range(len(_COLS))
-            ]
-            parsed_rows.append(values)
-            registrations.append(
-                SampleIndexRegistration(
-                    specimen_name=values[0],
-                    sample_set=csv_path.stem,
-                    depth_cm=values[1],
-                    formation=values[2],
-                    location=values[3],
-                    order=len(registrations) + 1,
-                    source_file=str(csv_path.resolve()),
-                )
-            )
-        if not parsed_rows:
-            QtWidgets.QMessageBox.information(self, "Load CSV", "The file contains no samples.")
-            return False
+
         self._table.setRowCount(0)
-        for values in parsed_rows:
-            row = self._table.rowCount()
-            self._table.insertRow(row)
-            for col, value in enumerate(values):
-                self._table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
-        self._registrations = SampleIndexRegistrations(registrations)
+        self._table.setRowCount(len(specimens))
+        for row, (entry, specimen) in enumerate(zip(registrations.entries, specimens, strict=True)):
+            depth, formation, location = entry.depth_cm, entry.formation, entry.location
+            if preview_headers:
+                location = location or str(path.parent)
+                if specimen.is_file():
+                    try:
+                        meta, _ = read_specimen(specimen, specimen_name=entry.specimen_name)
+                        depth = depth or (f"{meta.volume:.2f}" if meta.volume else "")
+                        formation = meta.comment or formation
+                    except (OSError, ValueError):
+                        pass
+            for column, value in enumerate((entry.specimen_name, depth, formation, location)):
+                self._table.setItem(row, column, QtWidgets.QTableWidgetItem(value))
+        self._registrations = registrations
         return True
 
     def _on_accept(self) -> None:
         if not self.selected_sample:
             QtWidgets.QMessageBox.warning(self, "Select Sample", "Please select a sample row.")
             return
+        try:
+            self.queue_defaults
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(self, "Sample Index Defaults", str(exc))
+            return
         self.accept()
 
     def _on_double_click(self) -> None:
         if self.selected_sample:
-            self.accept()
+            self._on_accept()

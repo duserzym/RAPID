@@ -3932,6 +3932,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _load_sample_from_index(self) -> bool:
         """Load a real sample index and add one operator-selected row to the queue."""
 
+        if self._has_active_automation():
+            self.set_status("Wait for active automation to finish before adding indexed specimens.")
+            return False
         dialog = SampleSelectDialog(self)
         if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return False
@@ -3944,6 +3947,15 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return False
 
+        source_file = str(dialog.source_path.resolve()) if dialog.source_path is not None else ''
+        try:
+            defaults = dialog.queue_defaults
+            treatment = defaults.resolve_treatment(" → ".join(self._sequence_labels) or "NRM")
+            options = dict(do_up=defaults.do_up, do_both=defaults.do_both, avg_steps=defaults.avg_steps)
+            self._sample_queue.check_index_queue_settings(source_file, treatment, **options)
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(self, "Sample Index Defaults", str(exc))
+            return False
         default_position = f"A{self._sample_queue._table.rowCount() + 1}"
         position, accepted = QtWidgets.QInputDialog.getText(
             self,
@@ -3954,6 +3966,9 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if not accepted:
             return False
+        if self._has_active_automation():
+            self.set_status("An operation started while selecting the specimen. Add it when the station is idle.")
+            return False
         position = position.strip()
         if not position:
             QtWidgets.QMessageBox.warning(
@@ -3963,14 +3978,14 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return False
 
-        treatment = " → ".join(self._sequence_labels) or "NRM"
         sample_set = record["formation"].strip() or record["location"].strip()
         self._sample_queue.add_sample(
             position=position,
             name=record["sample_name"],
             sample_set=sample_set,
             treatment=treatment,
-            source_file=str(dialog.source_path.resolve()) if dialog.source_path is not None else '',
+            source_file=source_file,
+            **options,
         )
         if dialog.registrations is not None:
             self.sample_registrations = dialog.registrations

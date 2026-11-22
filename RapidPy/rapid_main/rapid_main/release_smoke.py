@@ -158,6 +158,36 @@ def _check_measurement_backup(app, root):
         return len(archives) == 1 and load_magic_directory(archives[0]).specimens[0].steps[0].demag_label == "NRM"
 
 
+def _check_sample_index_registry(window, root):
+    from rapid_main.dialogs.sample_select import SampleSelectDialog
+
+    index = root / "offline.sam"
+    index.write_text("offline-specimen\n", encoding="ascii")
+    first = SampleSelectDialog(window)
+    second = None
+    try:
+        if not first._open_source(index):
+            return False
+        first._treatment.setText("SUSC")
+        first._direction.setCurrentText("Up then Down")
+        first._blocks.setValue(3)
+        first._register_btn.click()
+        second = SampleSelectDialog(window)
+        entry = second._indexes.findData(str(index.resolve()))
+        if entry < 1:
+            return False
+        second._indexes.setCurrentIndex(entry)
+        second._open_registration(entry)
+        second._table.selectRow(0)
+        defaults = second.queue_defaults
+        return (second.selected_sample == "offline-specimen" and defaults.treatment == "SUSC"
+                and defaults.do_up and defaults.do_both and defaults.avg_steps == 3)
+    finally:
+        if second is not None:
+            second.deleteLater()
+        first.deleteLater()
+
+
 def run_smoke_test() -> int:
     from PySide6 import QtCore, QtWidgets
     from rapid_main.config import AppConfig
@@ -198,14 +228,16 @@ def run_smoke_test() -> int:
             webcam_decode = _check_webcam_decode(window, app, root)
             measurement_archive = _check_measurement_archive(root)
             measurement_backup = _check_measurement_backup(app, root)
+            sample_index_registry = _check_sample_index_registry(window, root)
             report = {
                 "schema": "rapidpy.release_smoke.v1", "simulated": True,
                 "ok": (window.config.general.nocomm and all(helpers.values()) and transverse_probe
-                       and webcam_decode and measurement_archive and measurement_backup),
+                       and webcam_decode and measurement_archive and measurement_backup and sample_index_registry),
                 "transverse_probe": transverse_probe,
                 "webcam_decode": webcam_decode,
                 "measurement_archive": measurement_archive,
                 "measurement_backup": measurement_backup,
+                "sample_index_registry": sample_index_registry,
                 "panels": window._stack.count(), "helpers": helpers,
                 "width": window.width(), "height": window.height(),
             }

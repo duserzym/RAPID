@@ -12,7 +12,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from rapidpy_common.flow_layout import FlowLayout
 
 from rapid_main.printing import print_widget_snapshot
-from rapid_main.queue_compiler import QueueOptions, QueueSample, validate_queue_samples, validate_average_count
+from rapid_main.queue_compiler import QueueOptions, QueueSample, parse_queue_sequence, validate_queue_samples, validate_average_count
 
 
 # Sample table column definitions
@@ -286,6 +286,24 @@ class SampleQueuePanel(QtWidgets.QWidget):
             source_file=source_file.strip(), do_up=do_up, do_both=do_both, avg_steps=avg_steps,
         )
         return max(0, min(row, self._table.rowCount() - 1))
+
+    def check_index_queue_settings(self, source_file: str, treatment: str, *, do_up: bool,
+                                   do_both: bool, avg_steps: int) -> None:
+        if not source_file:
+            return
+        source_key = os.path.normcase(os.path.normpath(source_file))
+        expected = (parse_queue_sequence(treatment), 'Up' if do_up else 'Down',
+                    'Yes' if do_both else 'No', avg_steps)
+        for row in self.row_snapshot():
+            current = row.get('source_file')
+            if (not current or os.path.normcase(os.path.normpath(current)) != source_key
+                    or row['status'] in {'Done', 'Skipped', 'Aborted'}):
+                continue
+            settings = (parse_queue_sequence(row['treatment'] or 'NRM'), row['orientation'] or 'Up',
+                        row['both_sides'] or 'No', _parse_avg_steps(row.get('avg_steps', '1')))
+            if settings != expected:
+                raise ValueError('Queued specimens from this index have different settings. '
+                                 'Update the existing queue rows or select matching defaults.')
 
     def _make_positions_sequential(self) -> bool:
         if self._table.rowCount() == 0:
@@ -992,8 +1010,9 @@ def _read_queue_rows(table: QtWidgets.QTableWidget) -> tuple[list[QueueSample], 
             # defer to queue validator for consistent formatting
             sample_name = ""
 
-        labels = tuple(part.strip() for part in re.split(r'→|->', treatment or 'NRM'))
-        if any(not label for label in labels):
+        try:
+            labels = parse_queue_sequence(treatment or 'NRM')
+        except ValueError:
             errors.append(f'row {row_no}: treatment sequence contains an empty step')
             continue
         number = table.item(row, 0)
