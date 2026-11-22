@@ -487,6 +487,20 @@ class QueueBackendHolderCommandTests(unittest.TestCase):
         self.assertEqual(halt_axes, ["ChangerX", "ChangerY", "Turning", "UpDown"])
         self.assertTrue(backend._sample_loaded)
 
+    def test_checkpoint_proof_requires_connected_return_and_checks_all_axes(self) -> None:
+        backend = self._backend()
+        observed = [{'position_raw': 17, 'velocity_register': 0}] * 2
+        with mock.patch('rapidpy_common.motor_diagnostic_safety.verify_stopped_in_place',
+                        return_value=(observed, '')) as verify:
+            proof = backend.verify_checkpoint_stop()
+            self.assertEqual(proof['axes'], {name: observed for name in backend._axes})
+            self.assertEqual(verify.call_count, len(backend._axes))
+            verify.reset_mock()
+            backend._connected = False
+            with self.assertRaisesRegex(RuntimeError, 'motor connection or specimen return'):
+                backend.verify_checkpoint_stop()
+            verify.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

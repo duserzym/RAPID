@@ -133,18 +133,27 @@ class MeasurementCheckpointTests(unittest.TestCase):
         class RoutedFixture(RecordingBackend):
             simulated = False
 
-            def __init__(self, holder='original-holder'):
+            def __init__(self, holder='original-holder', *, velocity=0):
                 super().__init__()
                 self.holder = holder
+                self.velocity = velocity
 
             def holder_status(self):
                 return HolderStatus(True, True, record_version=self.holder, is_up=True)
+
+            def verify_checkpoint_stop(self):
+                observed = [dict(position_raw=1, velocity_register=self.velocity) for _ in range(2)]
+                return dict(safe_state_confirmed=True, simulated=False, axes={'updown': observed, 'turning': observed})
 
             def read_squid(self):
                 return BracketedMeasurementBlock((0., 0., 0.), ((2., 0., 1.),)*4, (0., 0., 0.),
                     audit=BlockAudit(block_id=uuid4().hex, sample_name='A', run_id='original',
                                     treatment_label=self.treatments[-1], holder_record_id=self.holder))
 
+        failed = self.run_worker(RoutedFixture(velocity=1), checkpoint=True, labels=['NRM', 'AF10'], profile='moving')
+        self.assertFalse(failed.checkpoint_saved)
+        self.assertIn('moving at updown', failed._error_messages[0])
+        self.assertIsNone(pending_checkpoint(self.root))
         first = self.run_worker(RoutedFixture(), checkpoint=True, labels=['NRM', 'AF10'])
         self.assertTrue(first.checkpoint_saved, first._error_messages)
         checkpoint = pending_checkpoint(self.root)

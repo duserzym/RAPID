@@ -56,7 +56,8 @@ from rapid_main.communication_log import CommunicationEvent, CommunicationLogger
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.specimen_metadata import validate_specimen_provenance
 from rapid_main.specimen_paths import contained_path
-from rapid_main.measurement_checkpoint import clear_checkpoint, pending_checkpoint, restore_checkpoint, save_checkpoint
+from rapid_main.measurement_checkpoint import (clear_checkpoint, pending_checkpoint, restore_checkpoint,
+                                               save_checkpoint, validate_stop_proof)
 from rapid_main.measurement_progress import MeasurementProgress
 from rapid_main.queue_pair import QueueSide
 from rapid_main.io.rmg_writer import RmgTreatment, describe_rmg_treatment
@@ -712,6 +713,7 @@ class MeasurementWorker(QtCore.QThread):
 
         # Return to safe state on both normal completion and interrupted execution
         self._emit_phase(WorkflowPhase.RETURNING)
+        checkpoint_stop = None
         try:
             return_to_safe_state = getattr(self._backend, "return_to_safe_state", None)
             if callable(return_to_safe_state):
@@ -725,6 +727,13 @@ class MeasurementWorker(QtCore.QThread):
                     raise ValueError('The backend did not confirm a safe return.')
             elif side is not None or saving_checkpoint:
                 raise ValueError('A saved or paired acquisition requires a verified safe return.')
+            if saving_checkpoint and not self._simulated:
+                verifier = getattr(self._backend, 'verify_checkpoint_stop', None)
+                if not callable(verifier):
+                    raise ValueError('The live backend cannot verify a saved-run stop.')
+                checkpoint_stop = self._call_with_timeout(verifier, timeout=self._get_backend_timeout('return_timeout'),
+                                                          phase='saved-run stop verification')
+                validate_stop_proof(checkpoint_stop)
         except Exception as exc:
             self._emit_error(f"Failed to return to safe state: {exc}", phase=WorkflowPhase.RETURNING)
             self._emit_phase(WorkflowPhase.ERROR)
@@ -740,13 +749,19 @@ class MeasurementWorker(QtCore.QThread):
                 evidence = dict(self._saved_evidence)
                 retained = [path for _, path in (*self._af_artifacts, *self._pulse_artifacts, *self._susceptibility_artifacts)]
                 retained.append(self._artifact_path('communication.tsv'))
+                stop_proof = None
+                if checkpoint_stop is not None:
+                    proof = self._artifact_path('checkpoint-return.json')
+                    _write_json_atomic(proof, checkpoint_stop)
+                    retained.append(proof)
+                    stop_proof = proof.relative_to(self._pair_directory).as_posix()
                 for path in retained:
                     digest = _digest(path)
                     if digest is None:
                         raise ValueError(f'Checkpoint evidence is missing: {path.name}')
                     evidence[path.relative_to(self._pair_directory).as_posix()] = digest
                 save_checkpoint(bundle, self._progress, len(self._completed_labels), previous=self._continue_from,
-                                susceptibility=susceptibility_records, evidence=evidence)
+                                susceptibility=susceptibility_records, evidence=evidence, stop_proof=stop_proof)
                 self.checkpoint_saved = True
             return
 

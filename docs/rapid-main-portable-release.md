@@ -115,6 +115,7 @@ In Live Measure, choose **Save and Stop After Step** to complete the current
 step and return the instrument to its safe state. When RAPID reports that the
 run is saved, it has retained the original measurements and evidence. Any
 previously accepted publication stays available in Data Review.
+In live mode RAPID records fresh stopped-axis readbacks before confirming the save.
 
 After relaunching, open the same specimen and sequence with the original
 station settings and holder correction. Choose **Continue Saved Run** and

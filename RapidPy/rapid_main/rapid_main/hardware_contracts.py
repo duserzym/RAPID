@@ -2027,6 +2027,23 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
             self._motor_communication_logger.error(detail)
             raise QueueAutomationError(detail)
 
+    def verify_checkpoint_stop(self) -> dict:
+        """Confirm the participating axes are stationary after safe return."""
+        from rapidpy_common.motor_diagnostic_safety import verify_stopped_in_place
+
+        if (not self._connected or not _to_bool_connected(self._client.is_connected)
+                or self._sample_loaded or not {'updown', 'turning'}.issubset(self._axes)):
+            raise HardwareError('The original motor connection or specimen return cannot be verified.')
+        observations = {}
+        errors = []
+        for name, axis in self._axes.items():
+            observations[name], error = verify_stopped_in_place(self._client, axis)
+            if error:
+                errors.append(f'{name}: {error}')
+        if errors:
+            raise HardwareError('Saved-run motor stop is unverified. ' + ' '.join(errors))
+        return dict(safe_state_confirmed=True, simulated=False, axes=observations)
+
     def _recover_durable_treatment(self, pending):
         """Recover only the persisted station; never replay its treatment."""
         if pending['family'] in {'queue', 'motion', 'acquisition', 'vacuum'}:

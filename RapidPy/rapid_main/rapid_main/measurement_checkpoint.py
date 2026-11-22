@@ -44,7 +44,20 @@ def _publication_digests(bundle):
     return {path.relative_to(bundle.publish_dir).as_posix(): _digest(absolute_io_path(path)) for path in paths}
 
 
-def save_checkpoint(bundle, progress, count, *, previous, susceptibility, evidence):
+def validate_stop_proof(proof):
+    if (not isinstance(proof, dict) or proof.get('safe_state_confirmed') is not True
+            or proof.get('simulated') is not False or not isinstance(proof.get('axes'), dict)
+            or not {'updown', 'turning'}.issubset(proof['axes'])):
+        raise ValueError('The live backend did not confirm a saved-run stop.')
+    for name, samples in proof['axes'].items():
+        if (not isinstance(samples, list) or len(samples) != 2 or any(
+                not isinstance(sample, dict) or type(sample.get('position_raw')) is not int
+                or type(sample.get('velocity_register')) is not int or sample['velocity_register'] != 0
+                for sample in samples) or samples[0]['position_raw'] != samples[1]['position_raw']):
+            raise ValueError(f'Saved-run stop readback is incomplete or moving at {name}.')
+
+
+def save_checkpoint(bundle, progress, count, *, previous, susceptibility, evidence, stop_proof):
     """Save verified staged bytes after the original worker has returned safely."""
     step_digests = [progress.read_step(index)[1] for index in range(count)]
     files = {path.relative_to(bundle.staging_dir).as_posix(): _digest(path) for path in astuple(bundle._staged)}
@@ -58,7 +71,7 @@ def save_checkpoint(bundle, progress, count, *, previous, susceptibility, eviden
     checkpoint = dict(schema=_SCHEMA, identity_sha256=progress.identity_sha256, count=count,
                       archive_id=archive_id, step_digests=step_digests,
                       publication_files=_publication_digests(bundle),
-                      susceptibility=susceptibility, evidence=evidence)
+                      susceptibility=susceptibility, evidence=evidence, stop_proof=stop_proof)
     digest = progress._write(f'checkpoint-{count:05d}.json', checkpoint)
     _write_json_atomic(path, dict(identity_sha256=progress.identity_sha256, count=count, sha256=digest))
     _sync_directory(path.parent)
@@ -95,6 +108,12 @@ def restore_checkpoint(bundle, expected, *, labels, source, simulated):
     for name, expected_digest in checkpoint['evidence'].items():
         if _digest(contained_path(bundle.publish_dir, name, output=True)) != expected_digest:
             raise ValueError(f'The original measurement evidence changed: {name}')
+    if not simulated:
+        stop_proof = checkpoint.get('stop_proof')
+        if not stop_proof or stop_proof not in checkpoint['evidence']:
+            raise ValueError('The saved run lacks its original stop readbacks.')
+        proof = contained_path(bundle.publish_dir, stop_proof, output=True)
+        validate_stop_proof(json.loads(proof.read_bytes()))
 
     archive_id = checkpoint['archive_id']
     if not isinstance(archive_id, str) or not re.fullmatch(r'[0-9a-f]{64}', archive_id):
