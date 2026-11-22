@@ -565,9 +565,10 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
     def _safety_profile(self):
         profile = {name: dataclasses.asdict(getattr(self._config, name))
                    for name in ("motor_station", "changer", "motion", "af_demag", "irm_arm", "pulse_irm")}
-        # The display/export scale changes no raw motion, field, or stop limit.
-        # Keep existing recovery profiles readable after the schema addition.
-        profile['motor_station'].pop('lift_counts_per_cm', None)
+        # Existing treatment recovery uses its original motion calibration.
+        # The specimen scale and long-scan limits are outside that operation.
+        for field in ('lift_counts_per_cm', 'lift_min_counts', 'lift_floor_counts'):
+            profile['motor_station'].pop(field, None)
         return profile
 
     def _acquisition_safety_profile(self):

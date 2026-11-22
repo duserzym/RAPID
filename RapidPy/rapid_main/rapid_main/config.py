@@ -290,6 +290,8 @@ class MotorStationConfig:
     xy_positions: dict[str, list[int]] = field(default_factory=dict)
     xy_home: list[int] = field(default_factory=list)
     lift_counts_per_cm: float | None = None  # legacy UpDownMotor1cm, used for exported specimen height
+    lift_min_counts: int | None = None    # MinUpDownPos, deepest reproducible carriage position
+    lift_floor_counts: int | None = None  # FloorPos, first obstruction under the lift
 
     def motor_axis_keys(self):
         keys = ('changer_x', 'turning', 'updown')

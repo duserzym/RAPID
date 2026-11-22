@@ -686,6 +686,17 @@ def import_vb6_ini(config: AppConfig, path: str | Path) -> LegacyIniImportReport
         if value is not None and math.isfinite(value) and value > 0:
             station.lift_counts_per_cm = value
             mark_mapped('SteppingMotor', 'UpDownMotor1cm', 'motor_station.lift_counts_per_cm')
+    for field, destination in (('MinUpDownPos', 'lift_min_counts'), ('FloorPos', 'lift_floor_counts')):
+        setattr(station, destination, None)
+        raw = _value(parser, 'SteppingMotor', field)
+        if raw is None:
+            continue
+        position = _parse_float(raw, default=None, section_key='SteppingMotor', field=field, warnings=warnings)
+        if position is not None and position.is_integer() and -(2**31) <= position < 0:
+            setattr(station, destination, int(position))
+            mark_mapped('SteppingMotor', field, f'motor_station.{destination}')
+        elif position is not None:
+            warnings.append(f'SteppingMotor.{field}: a negative integer controller count is required')
     for axis, port_key, address_key in (
         ("changer_x", "COMPortChanger", "MotorIDChanger"),
         ("changer_y", "COMPortChangerY", "MotorIDChangerY"),

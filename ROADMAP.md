@@ -2797,3 +2797,15 @@ and six helpers. The full suite passed all 1,477 tests in 767.332 seconds
 after synchronizing a motion-capture fixture with its fake turn endpoints.
 Physical repeatability, automatic rod loading, and U-channel scans remain
 open.
+
+Long-scan station settings checkpoint (2026-11-22). **Import VB6 INI** now
+retains the separate carriage limit (`MinUpDownPos`) and floor obstruction
+(`FloorPos`) as signed controller counts. Settings displays both when supplied.
+A later station import clears missing limits. Normal queue treatment recovery
+keeps its existing calibration profile. These settings establish the station
+geometry inputs for U-channel acquisition, which still requires implementation.
+
+All 46 focused calibration, import, routing, and queue-geometry tests passed
+against the combined source. The Windows bundle passed offline startup and
+smoke checks for six panels and six helpers. It is available under
+`.tmp/long-scan-settings-release/dist/RapidPyMain`.

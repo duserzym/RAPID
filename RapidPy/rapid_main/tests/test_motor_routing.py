@@ -50,6 +50,8 @@ class MotorRoutingTests(unittest.TestCase):
         panel = SettingsPanel()
         panel.load_from_config(cfg)
         self.assertIn("turning: COM6 @16", panel._motor_station_summary.text())
+        self.assertIn("Carriage limit -120,000 counts", panel._motor_station_summary.text())
+        self.assertIn("Floor obstruction -148,955 counts", panel._motor_station_summary.text())
         self.assertEqual(panel._ch_baud.currentText(), "57600")
         self.assertFalse(panel._ch_speed_z.isEnabled())
         panel.deleteLater()

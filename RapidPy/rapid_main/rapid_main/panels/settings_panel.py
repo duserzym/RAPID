@@ -793,7 +793,13 @@ class SettingsPanel(QtWidgets.QWidget):
         if imported:
             self._ch_baud.setCurrentText(str(station.baud))
             wiring = "; ".join(f"{axis}: {port} @{station.addresses.get(axis, '?')}" for axis, port in station.ports.items())
-            self._motor_station_summary.setText(f"{wiring}\nNative speeds and travel calibration from {station.calibration_source}")
+            summary = [wiring, f"Native speeds and travel calibration from {station.calibration_source}"]
+            limits = [f"{label} {value:,d} counts" for label, value in (
+                ("Carriage limit", station.lift_min_counts), ("Floor obstruction", station.lift_floor_counts),
+            ) if type(value) is int and value < 0]
+            if limits:
+                summary.append(" · ".join(limits))
+            self._motor_station_summary.setText("\n".join(summary))
         else:
             self._motor_station_summary.setText("No native station calibration imported.")
         self._ch_home_x.setValue(ch.home_x)

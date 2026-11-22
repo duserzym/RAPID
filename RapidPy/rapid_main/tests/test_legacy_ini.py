@@ -25,6 +25,8 @@ class TestLegacyIniImport(unittest.TestCase):
 
         self.assertEqual(cfg.squid.port, "COM1")
         self.assertEqual(cfg.motor_station.lift_counts_per_cm, 961.)
+        self.assertEqual(cfg.motor_station.lift_min_counts, -120000)
+        self.assertEqual(cfg.motor_station.lift_floor_counts, -148955)
         self.assertEqual(cfg.vacuum.port, "COM1")
         self.assertEqual(cfg.changer.port, "COM3")
         self.assertEqual(cfg.susceptibility.port, "COM7")
@@ -108,6 +110,8 @@ XY5Y=39
         self.assertEqual(restored.motor_station.xy_positions, config.motor_station.xy_positions)
         self.assertEqual(restored.motor_station.xy_home, [-3, -2])
         self.assertTrue(restored.motor_station.use_xy_table)
+        self.assertEqual(restored.motor_station.lift_min_counts, -120000)
+        self.assertEqual(restored.motor_station.lift_floor_counts, -148955)
 
     def test_new_partial_station_import_cannot_reuse_previous_geometry_or_wiring(self):
         config = AppConfig()
@@ -124,6 +128,19 @@ XY5Y=39
         self.assertIsNone(config.motor_station.use_xy_table)
         self.assertEqual(config.motor_station.xy_positions, {})
         self.assertEqual(config.motor_station.xy_home, [])
+        self.assertIsNone(config.motor_station.lift_min_counts)
+        self.assertIsNone(config.motor_station.lift_floor_counts)
+
+    def test_nonintegral_and_positive_lift_limits_are_rejected(self):
+        config = AppConfig()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'limits.ini'
+            path.write_text('[SteppingMotor]\nMinUpDownPos=-120000.75\nFloorPos=148955\n')
+            report = import_vb6_ini(config, path)
+        self.assertIsNone(config.motor_station.lift_min_counts)
+        self.assertIsNone(config.motor_station.lift_floor_counts)
+        for key in ('MinUpDownPos', 'FloorPos'):
+            self.assertIn(f'SteppingMotor.{key}: a negative integer controller count is required', report.warnings)
 
     def test_invalid_numbers_are_defaulted_with_warnings(self) -> None:
         ini_text = """[Program]

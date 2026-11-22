@@ -62,6 +62,8 @@ class QueueSpecimenGeometryTests(QueueLiftFixture, unittest.TestCase):
     def test_verified_live_height_does_not_modify_station_calibration(self):
         profile = self.backend._safety_profile()
         self.backend._config.motor_station.lift_counts_per_cm = 1000.
+        self.backend._config.motor_station.lift_min_counts = -120000
+        self.backend._config.motor_station.lift_floor_counts = -148955
         with self.session.claim():
             self.assertEqual(self.backend._sample_height(), 2800)
             self.assertEqual(self.backend._queue_specimen_geometry.positions('S1'), (-48600, -96100))
