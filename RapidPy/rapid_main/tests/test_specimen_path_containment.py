@@ -104,19 +104,16 @@ class SpecimenPathContainmentTests(unittest.TestCase):
                 allow_simulated_production_output=True)
         self.assertEqual(sentinel.read_bytes(), b'Original outside data')
 
-    def test_atomic_json_temporary_file_cannot_overwrite_a_shared_external_file(self):
+    def test_publication_manifest_cannot_read_a_shared_external_file(self):
         output = self.root / 'output'
-        bundle = MeasurementBundleWriter(output, SpecimenMeta('A'))
-        bundle.append_step(bundle_fixtures._step('NRM'))
+        journal = output / '.rapidpy-publication'
+        journal.mkdir(parents=True)
         sentinel = self.root / 'outside.txt'
         sentinel.write_bytes(b'Original outside data')
-        os.link(sentinel, output / f'.rapidpy-steps.json.tmp-{os.getpid()}')
-        try:
-            with self.assertRaisesRegex(ValueError, 'hard links'):
-                bundle.commit()
-            self.assertEqual(sentinel.read_bytes(), b'Original outside data')
-        finally:
-            bundle.abort()
+        os.link(sentinel, journal / 'manifest.json')
+        with self.assertRaisesRegex(ValueError, 'hard links'):
+            MeasurementBundleWriter(output, SpecimenMeta('A'))
+        self.assertEqual(sentinel.read_bytes(), b'Original outside data')
 
     def test_caller_metadata_edits_cannot_redirect_the_admitted_bundle(self):
         output = self.root / 'output'

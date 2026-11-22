@@ -49,6 +49,11 @@ ownership leases and handoff environment.
    RMG files include treatment levels in gauss or °C, susceptibility, moment
    components, available uncertainty, and core direction. Sample height is
    included when a queue measured it and the station has an imported `UpDownMotor1cm`.
+   If publication is interrupted, reopening the original specimen for a run
+   checks the journal before acquisition and restores the prior accepted files.
+   Unexpected changes leave the journal available for review. A completed
+   scientific publication can show diagnostics as pending if RAPID exits while
+   completing the workflow summary or transcript.
 7. After a native interruption, open **Diagnostics > Recover Interrupted Queue**.
    RAPID can retry an interrupted field cutoff, stop and check axes in place for
    pending motion, measurement, treatment or vacuum stages, or publish a shutdown

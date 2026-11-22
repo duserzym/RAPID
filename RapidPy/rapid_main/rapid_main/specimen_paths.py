@@ -8,6 +8,7 @@ _FIXED_OUTPUTS = {
     'workflow_summary.json', 'quicklook.json', 'communication.tsv', 'susceptibility.json',
     'rockmag_run.json', 'thermal_run.json', 'simulation.txt', '.rapidpy-steps.json',
     'af_treatments', 'pulse_treatments', 'susceptibility_acquisitions', '.rapidpy-acquisitions', '.rapidpy-pairs',
+    '.rapidpy-publication', '.rapidpy-publication.operation.lock', '.rapidpy-attempts',
 }
 _DEVICES = {'CON', 'PRN', 'AUX', 'NUL', 'CONIN$', 'CONOUT$'} | {
     prefix + number for prefix in ('COM', 'LPT') for number in '123456789¹²³'

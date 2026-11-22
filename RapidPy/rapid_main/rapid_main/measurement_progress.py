@@ -182,9 +182,15 @@ class MeasurementProgress:
 
     def accept(self):
         """Seal only after the caller has completed safe return and publication."""
+        path, payload = self.prepared_acceptance()
+        self._write_bytes(path.name, payload)
+
+    def prepared_acceptance(self):
+        """Prepare the same acceptance bytes for the bundle publication journal."""
         self._require_owner()
         refs = [self.read_step(index)[1] for index in range(len(self.identity['labels']))]
-        self._write('accepted.json', dict(identity_sha256=self.identity_sha256, steps=refs))
+        payload = dict(identity_sha256=self.identity_sha256, steps=refs)
+        return self._path('accepted.json'), canonical(dict(payload=payload, sha256=_digest(payload))).encode('utf-8')
 
     def accepted_steps(self):
         self._verify_identity()

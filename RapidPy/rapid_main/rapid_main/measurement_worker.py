@@ -79,6 +79,8 @@ from rapid_main.workflow import WorkflowPhase, WorkflowStateMachine
 from rapid_main import software_version
 from rapid_main.worker_ownership import worker_claim
 from rapid_main.io.measurement_bundle import (
+    _write_json_atomic,
+    recover_measurement_output,
     SIMULATION_STATEMENT,
     SIMULATED_SUBDIR,
     MeasurementBundleWriter,
@@ -300,6 +302,8 @@ class MeasurementWorker(QtCore.QThread):
             self._emit_phase(WorkflowPhase.HALTED)
             self._finish_run(aborted=True)
             return
+
+        recover_measurement_output(self._pair_directory, self._meta.name)
 
         # The old resume flag only suppressed duplicate file writes after
         # reapplying treatment. Until a trusted original-stage recovery route
@@ -627,7 +631,7 @@ class MeasurementWorker(QtCore.QThread):
                     if side.legacy_up is not None:
                         side.verify_legacy_archive(self._pair_directory)
                 write_susceptibility_summary_json(
-                    self._artifact_path("susceptibility.json"),
+                    bundle.staged_susceptibility if bundle is not None else self._artifact_path('susceptibility.json'),
                     susceptibility_records,
                     sample=self._meta.name,
                     operator=self._operator,
@@ -649,22 +653,23 @@ class MeasurementWorker(QtCore.QThread):
             try:
                 if bundle is not None:
                     bundle.set_provenance(**self._run_provenance())
-                    published = bundle.commit()
+                    published = bundle.paths
                     self._publish_dir = bundle.publish_dir
-                    if self._up_reference is not None:
-                        write_susceptibility_summary_json(
-                            self._artifact_path('susceptibility.json'), susceptibility_records,
-                            sample=self._meta.name, operator=self._operator)
                     self._published_paths = {
                         "specimen_file": str(published.specimen_file),
                         "rmg_file": str(published.rmg_file),
                         "magic_measurements": str(published.magic_measurements_file),
                         "magic_specimens": str(published.magic_specimens_file),
                     }
-                self._progress.accept()
+                    bundle.commit(progress=self._progress, prepare_index=self._stage_publication_index,
+                                  finalize_diagnostics=self._finish_accepted_bundle)
+                    return
+                else:
+                    self._progress.accept()
             except Exception as exc:
                 if bundle is not None:
                     bundle.abort()
+                self._published_paths.clear()
                 self._emit_error(f"Failed to publish measurement bundle: {exc}", phase=WorkflowPhase.SAVING)
                 self._emit_phase(WorkflowPhase.ERROR)
                 aborted = True
@@ -1298,6 +1303,13 @@ class MeasurementWorker(QtCore.QThread):
             return ()
 
     def _finish_run(self, *, aborted: bool) -> None:
+        if (aborted and self._publish_dir == self._pair_directory
+                and (self._artifact_path('provenance.json').exists()
+                     or self._artifact_path('.rapidpy-publication').exists())):
+            # A failed attempt cannot replace the index and diagnostics of the
+            # previously accepted bundle at the shared legacy filenames.
+            self._publish_dir = contained_path(self._pair_directory,
+                f'.rapidpy-attempts/{uuid.uuid4().hex}', output=True)
         self._write_susceptibility_acquisition_artifacts()
         self._write_af_treatment_artifacts()
         self._write_pulse_treatment_artifacts()
@@ -1308,6 +1320,10 @@ class MeasurementWorker(QtCore.QThread):
         self._write_thermal_run_artifact(aborted=aborted)
         self._write_artifact_index(aborted=aborted)
         self._pending_run_result = aborted
+
+    def _finish_accepted_bundle(self) -> None:
+        self._emit_phase(WorkflowPhase.COMPLETE)
+        self._finish_run(aborted=False)
 
     def _write_rockmag_run_artifact(self, *, aborted: bool) -> None:
         if self._routine_context is None:
@@ -1371,8 +1387,20 @@ class MeasurementWorker(QtCore.QThread):
             if self._comm_logger is not None:
                 self._comm_logger.error(self._error_messages[-1])
 
+    def _stage_publication_index(self, target: Path, staged_sources: dict[Path, Path]) -> None:
+        _write_json_atomic(target, self._artifact_index_payload(aborted=False, staged_sources=staged_sources))
+
     def _write_artifact_index(self, *, aborted: bool) -> None:
-        artifact_path = self._artifact_path("artifact_index.json")
+        try:
+            self._publish_dir.mkdir(parents=True, exist_ok=True)
+            _write_json_atomic(self._artifact_path('artifact_index.json'), self._artifact_index_payload(aborted=aborted))
+        except Exception as exc:
+            if self._comm_logger is not None:
+                self._comm_logger.error(f"artifact index write failed: {exc}")
+
+    def _artifact_index_payload(self, *, aborted: bool, staged_sources=None) -> dict:
+        diagnostics_pending = staged_sources is not None
+        sources = staged_sources or {}
         bundle_required = not aborted and (self._queue_side is None or not self._queue_side.is_up)
 
         def entry(
@@ -1383,12 +1411,17 @@ class MeasurementWorker(QtCore.QThread):
             producer: str,
             description: str,
         ) -> dict[str, object]:
-            exists = path.exists()
-            size = path.stat().st_size if exists else 0
+            source = sources.get(path, path)
+            if diagnostics_pending and path.name in {'workflow_summary.json', 'communication.tsv',
+                    'quicklook.json', 'rockmag_run.json', 'thermal_run.json'}:
+                return dict(name=name, relative_path=self._relative_artifact_path(path), required=False,
+                            exists=False, size_bytes=0, sha256='', producer=producer, description=description)
+            exists = source.exists()
+            size = source.stat().st_size if exists else 0
             digest = ""
             if exists:
                 sha256 = hashlib.sha256()
-                with path.open("rb") as handle:
+                with source.open("rb") as handle:
                     for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                         sha256.update(chunk)
                 digest = sha256.hexdigest()
@@ -1505,6 +1538,8 @@ class MeasurementWorker(QtCore.QThread):
                 "association and physical safe-state behavior require bench acceptance testing."
             ),
         }
+        if diagnostics_pending:
+            payload['diagnostics_pending'] = True
         if self._routine_context is not None:
             payload["artifacts"].append(
                 entry(
@@ -1522,9 +1557,10 @@ class MeasurementWorker(QtCore.QThread):
             payload["artifacts"].append(entry(f"pulse_treatment:{treatment_id}",path,required=True,
                 producer="PulseTreatmentService",description="Capacitor/field plan, relay readback, charge/fire/discharge evidence, specimen motion and safe return."))
         if self._progress is not None and self._progress.directory.is_dir():
-            for path in sorted(self._progress.directory.iterdir()):
-                path = self._progress._path(path.name)
-                if path.is_file():
+            paths = {self._progress._path(path.name) for path in self._progress.directory.iterdir()}
+            paths.update(path for path in sources if path.parent == self._progress.directory)
+            for path in sorted(paths):
+                if sources.get(path, path).is_file():
                     payload['artifacts'].append(entry('acquisition_progress:' + path.name, path,
                         required=True, producer='MeasurementProgress',
                         description='Original step intent, lossless raw acquisition or acceptance seal.'))
@@ -1564,15 +1600,7 @@ class MeasurementWorker(QtCore.QThread):
                     ),
                 )
             )
-        try:
-            self._publish_dir.mkdir(parents=True, exist_ok=True)
-            artifact_path.write_text(
-                json.dumps(payload, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-        except Exception as exc:
-            if self._comm_logger is not None:
-                self._comm_logger.error(f"artifact index write failed: {exc}")
+        return payload
 
     def _artifact_path(self, name: str) -> Path:
         return contained_path(self._publish_dir, name, output=True)

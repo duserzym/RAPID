@@ -1,9 +1,7 @@
 """Transactional measurement output bundle.
 
-Every accepted step is appended to a staging copy first. ``commit()`` fsyncs
-each staged file and publishes it with an atomic rename, so a rejected block,
-an abort, a crash, or an exception can never leave a half-written accepted
-measurement in the production output path.
+Every accepted step is appended to a staging copy first. A durable publication
+journal protects the last accepted files as the legacy filenames are replaced.
 
 Simulated runs publish into a clearly separated ``SIMULATED`` directory with a
 marker file. The legacy fixed-width specimen and ``.rmg`` formats are left
@@ -13,15 +11,18 @@ the JSON provenance record.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from copy import deepcopy
 import json
 import os
 import shutil
+import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
+from rapid_main.io.bundle_publication import BundlePublication, JOURNAL
+from rapidpy_common.hardware_safety import _replace_snapshot
 from rapid_main.io.magic_specimen_writer import append_specimen
 from rapid_main.io.magic_writer import append_measurement
 from rapid_main.io.rmg_writer import RmgTreatment, append_rmg_record
@@ -36,6 +37,8 @@ SIMULATION_STATEMENT = (
 )
 STEP_LEDGER_FILE = ".rapidpy-steps.json"
 STAGING_PREFIX = ".rapidpy-pending"
+_SIDECARS = (STEP_LEDGER_FILE, 'provenance.json', SIMULATION_MARKER_FILE, 'susceptibility.json',
+             'artifact_index.json')
 
 
 class BundleNotCommittedError(RuntimeError):
@@ -51,7 +54,7 @@ class MeasurementBundlePaths:
 
 
 class MeasurementBundleWriter:
-    """Write VB6/CIT + RMG + MagIC files in lockstep, then publish atomically."""
+    """Stage the legacy files and publish them using a recoverable journal."""
 
     def __init__(
         self,
@@ -77,6 +80,17 @@ class MeasurementBundleWriter:
         self.staging_dir = contained_path(self.publish_dir, f"{STAGING_PREFIX}-{os.getpid()}", output=True)
         self._staged = _paths_for(self.staging_dir, self.meta.name)
         self.publish_dir.mkdir(parents=True, exist_ok=True)
+        self._publication = _publication_for(self.publish_dir, self.meta.name)
+        self._lease = self._publication.lease()
+        self._lease.__enter__()
+        try:
+            self._publication.recover()
+            self._prepare_staging(resume, provenance)
+        except BaseException:
+            self._release()
+            raise
+
+    def _prepare_staging(self, resume, provenance):
         _reset_directory(self.staging_dir)
         self._closed = False
         self._committed = False
@@ -141,43 +155,60 @@ class MeasurementBundleWriter:
 
     # -- transaction -------------------------------------------------------
 
-    def commit(self) -> MeasurementBundlePaths:
-        """Publish every staged file atomically."""
+    @property
+    def staged_susceptibility(self) -> Path:
+        return contained_path(self.staging_dir, 'susceptibility.json', output=True)
+
+    def commit(self, *, progress=None, prepare_index=None, finalize_diagnostics=None) -> MeasurementBundlePaths:
+        """Publish the current bundle, including its optional acquisition seal."""
         self._require_open()
-        validate_measurement_output(self.publish_dir, self.meta.name)
-        _paths_for(self.staging_dir, self.meta.name)
-        for staged, published in (
-            (self._staged.specimen_file, self.paths.specimen_file),
-            (self._staged.rmg_file, self.paths.rmg_file),
-            (self._staged.magic_measurements_file, self.paths.magic_measurements_file),
-            (self._staged.magic_specimens_file, self.paths.magic_specimens_file),
-        ):
-            if staged.exists():
-                published.parent.mkdir(parents=True, exist_ok=True)
-                _fsync_file(staged)
-                os.replace(staged, published)
-        _write_json_atomic(
-            contained_path(self.publish_dir, STEP_LEDGER_FILE, output=True),
-            {
-                "schema": "rapidpy.measurement.step_ledger.v1",
-                "specimen": self.meta.name,
-                "labels": list(self._existing_labels) + list(self._appended_labels),
-            },
-        )
-        _write_json_atomic(contained_path(self.publish_dir, "provenance.json", output=True), self._provenance_payload())
-        if self.simulated:
-            contained_path(self.publish_dir, SIMULATION_MARKER_FILE, output=True).write_text(
-                SIMULATION_STATEMENT, encoding="utf-8"
-            )
-        self._discard_staging()
-        self._closed = True
-        self._committed = True
+        try:
+            destinations = validate_measurement_output(self.publish_dir, self.meta.name)
+            staged = _paths_for(self.staging_dir, self.meta.name)
+            _write_json_atomic(contained_path(self.staging_dir, STEP_LEDGER_FILE, output=True), dict(
+                schema='rapidpy.measurement.step_ledger.v1', specimen=self.meta.name,
+                labels=list(self._existing_labels) + list(self._appended_labels)))
+            _write_json_atomic(contained_path(self.staging_dir, 'provenance.json', output=True), self._provenance_payload())
+            if self.simulated:
+                contained_path(self.staging_dir, SIMULATION_MARKER_FILE, output=True).write_text(
+                    SIMULATION_STATEMENT, encoding='utf-8')
+            files = [(source, target) for source, target in zip(astuple(staged), astuple(destinations)) if source.exists()]
+            for name in _SIDECARS:
+                source = contained_path(self.staging_dir, name, output=True)
+                if source.exists():
+                    files.append((source, contained_path(self.publish_dir, name, output=True)))
+            if progress is not None:
+                target, payload = progress.prepared_acceptance()
+                source = contained_path(self.staging_dir, '.rapidpy-acquisition-seal', output=True)
+                with source.open('xb') as stream:
+                    stream.write(payload)
+                files.append((source, target))
+            if prepare_index is not None:
+                index = contained_path(self.staging_dir, 'artifact_index.json', output=True)
+                prepare_index(index, {target: source for source, target in files})
+                files.append((index, contained_path(self.publish_dir, index.name, output=True)))
+            self._publication.publish(files)
+            self._committed = True
+            if finalize_diagnostics is not None:
+                finalize_diagnostics()
+        finally:
+            self.abort()
         return self.paths
 
     def abort(self) -> None:
         """Discard everything staged; published files are left untouched."""
-        self._discard_staging()
-        self._closed = True
+        if self._closed:
+            return
+        try:
+            self._discard_staging()
+        finally:
+            self._closed = True
+            self._release()
+
+    def _release(self):
+        if self._lease is not None:
+            lease, self._lease = self._lease, None
+            lease.__exit__(None, None, None)
 
     def _discard_staging(self) -> None:
         contained_path(self.publish_dir, self.staging_dir.name, output=True)
@@ -257,11 +288,25 @@ def validate_measurement_output(directory: str | Path, name: str, *, simulated: 
     publish = root if not simulated or allow_simulated_production_output else contained_path(root, SIMULATED_SUBDIR, output=True)
     paths = _paths_for(publish, name)
     contained_path(publish, f'{STAGING_PREFIX}-{os.getpid()}', output=True)
+    contained_path(publish, JOURNAL, output=True)
     for filename in (STEP_LEDGER_FILE, 'provenance.json', SIMULATION_MARKER_FILE,
                      'artifact_index.json', 'workflow_summary.json', 'quicklook.json',
                      'communication.tsv', 'susceptibility.json', 'rockmag_run.json', 'thermal_run.json'):
         contained_path(publish, filename, output=True)
     return paths
+
+
+def _publication_for(directory, name):
+    targets = (*astuple(_paths_for(directory, name)),
+               *(contained_path(directory, filename, output=True) for filename in _SIDECARS))
+    return BundlePublication(directory, name, targets)
+
+
+def recover_measurement_output(directory: Path, name: str) -> None:
+    publication = _publication_for(directory, name)
+    if publication.journal.exists():
+        with publication.lease():
+            publication.recover()
 
 
 def _reset_directory(path: Path) -> None:
@@ -283,30 +328,15 @@ def _read_step_ledger(directory: Path) -> list[str]:
     return [str(label) for label in labels]
 
 
-def _fsync_file(path: Path) -> None:
-    """Best-effort durability before the atomic rename.
-
-    ``os.fsync`` needs a writable descriptor on Windows, and some filesystems
-    refuse it outright. The rename is the correctness guarantee; the flush is
-    an extra durability step, so a refusal must not fail the publish.
-    """
-    try:
-        with open(path, "r+b") as handle:
-            handle.flush()
-            os.fsync(handle.fileno())
-    except OSError:
-        return
-
-
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
-    temp_path = contained_path(path.parent, f"{path.name}.tmp-{os.getpid()}", output=True)
+    temp_path = contained_path(path.parent, f'{path.name}.tmp-{uuid.uuid4().hex}', output=True)
     text = json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n"
     try:
-        with open(temp_path, "w", encoding="utf-8", newline="\n") as handle:
+        with temp_path.open('x', encoding='utf-8', newline='\n') as handle:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_path, path)
+        _replace_snapshot(temp_path, path)
     except BaseException:
         try:
             temp_path.unlink()

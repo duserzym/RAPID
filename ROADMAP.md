@@ -2661,3 +2661,24 @@ input, and measured height conversion without changes to motion calibration.
 The Windows build from the same application source passed packaged startup and
 offline smoke for all six panels and six helpers. The candidate is available
 locally under `.tmp/rmg-release/dist/RapidPyMain`.
+
+Measurement publication recovery checkpoint (2026-11-22). A per-output
+lease and checksummed journal protect the last accepted bytes while RAPID
+replaces the legacy filenames. CIT, RMG, MagIC, the step ledger, provenance,
+the susceptibility summary, the scientific artifact index, and the acceptance
+seal publish under the same journal. A failure restores the previous files.
+After an interrupted process, the next writer restores the original files
+before acquisition. A conflicting edit or unexpected journal file leaves the
+recovery material intact for review. Failed-attempt diagnostics use a distinct
+directory when there is a prior accepted bundle.
+
+The committed scientific index identifies its generation and indicates if
+diagnostics are pending. Final diagnostic writes stay under the output lease,
+then the index is replaced atomically. External readers of the flat legacy
+filenames can observe a transition during replacement. Filesystem power-loss
+qualification, remaining VB6 workflow parity, and physical acceptance remain open.
+
+The staged source passed 1,437 tests in 690.864 seconds, including all seven
+publication recovery cases. The portable Windows build passed offline startup
+and smoke checks for all six panels and all six helpers. The candidate is
+available locally under `.tmp/bundle-recovery-release/dist/RapidPyMain`.
