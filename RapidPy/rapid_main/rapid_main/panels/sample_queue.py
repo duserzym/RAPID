@@ -461,17 +461,16 @@ class SampleQueuePanel(QtWidgets.QWidget):
             ):
                 return
 
-        options = _queue_options_from_ui(
-            self._order_radios,
-            self._reload_radios,
-            self._final_radios,
-            self._holder_radios,
-        )
         owner = self.window()
-        if hasattr(owner, "start_queue_run"):
-            station = getattr(getattr(owner, 'config', None), 'motor_station', None)
-            if station is not None and station.use_xy_table is False:
-                options.use_xy_table = False
+        options = self._run_options(owner)
+        request = getattr(owner, 'request_queue_run', None)
+        if callable(request):
+            def still_current():
+                current, current_errors = _read_queue_rows(self._table)
+                return not current_errors and current == rows and self._run_options(owner) == options
+
+            request(rows, options, still_current=still_current)
+        elif hasattr(owner, "start_queue_run"):
             owner.start_queue_run(rows, options)
         else:
             QtWidgets.QMessageBox.critical(
@@ -479,6 +478,18 @@ class SampleQueuePanel(QtWidgets.QWidget):
                 "Cannot run queue",
                 "Window controller missing.",
             )
+
+    def _run_options(self, owner):
+        options = _queue_options_from_ui(
+            self._order_radios,
+            self._reload_radios,
+            self._final_radios,
+            self._holder_radios,
+        )
+        station = getattr(getattr(owner, 'config', None), 'motor_station', None)
+        if station is not None and station.use_xy_table is False:
+            options.use_xy_table = False
+        return options
 
     def _on_pause_queue(self) -> None:
         owner = self.window()
@@ -967,7 +978,8 @@ def _read_queue_rows(table: QtWidgets.QTableWidget) -> tuple[list[QueueSample], 
             if not Path(source_file).is_absolute():
                 errors.append(f'row {row_no}: index file must be an absolute path')
                 continue
-            file_id = os.path.normcase(str(Path(source_file).resolve()))
+            source_file = os.path.normpath(source_file)
+            file_id = os.path.normcase(source_file)
         else:
             file_id = sample_set
 
@@ -998,7 +1010,7 @@ def _read_queue_rows(table: QtWidgets.QTableWidget) -> tuple[list[QueueSample], 
                 do_both=both_sides == 'Yes',
                 measurement_step_count=_parse_step_count(treatment),
                 measurement_labels=labels,
-                source_file=str(Path(source_file).resolve()) if source_file else '',
+                source_file=source_file,
                 row_id=row_id,
                 avg_steps=averages,
             )

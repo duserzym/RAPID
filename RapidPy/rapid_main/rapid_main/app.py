@@ -26,10 +26,9 @@ from rapidpy_common.ui import (
 from . import software_version
 from .config import AppConfig
 from .data_model import SampleIndexRegistration, SampleIndexRegistrations
-from .io.sample_index import read_sample_index_registrations
-from .specimen_metadata import capture_specimen_metadata, restore_specimen_metadata, validate_specimen_provenance
+from .specimen_metadata import restore_specimen_metadata, validate_specimen_provenance
 from .specimen_paths import contained_path, specimen_run_directory
-from .io.measurement_bundle import SIMULATED_SUBDIR, validate_measurement_output
+from .io.measurement_bundle import SIMULATED_SUBDIR
 from .queue_pair import LegacyUpSource, QueuePair
 from .hardware_contracts import (
     MeasurementAutomationBackend,
@@ -82,8 +81,9 @@ from .panels import (
     SequencePanel,
     SettingsPanel,
 )
-from .queue_compiler import QueueCommand, QueueOptions, QueueSample, compile_queue, resolve_queue_samples, validate_average_count
+from .queue_compiler import QueueCommand, QueueOptions, QueueSample, validate_average_count
 from .queue_command_worker import QueueCommandWorker
+from .queue_preparation import PreparedQueue, QueuePreparationWorker, prepare_queue
 from .package_launch import ToolUnavailableError, resolve_tool_launch
 from .runtime_estimator import RuntimeEstimator
 from .vrm import (
@@ -533,6 +533,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._queue_native_session = None
         self._queue_loaded_command = None
         self._queue_meas_pending_start = False
+        self._queue_preparation: QueuePreparationWorker | None = None
+        self._queue_preparation_request = None
+        self._queue_preparation_cancel_reason = None
+        self._queue_starting = False
         self._queue_command_thread = self._queue_command_worker = None
         self._queue_command_leases = []
         self._queue_worker_command = None
@@ -1115,11 +1119,13 @@ class MainWindow(QtWidgets.QMainWindow):
             "Loaded manual-external thermal labels. Live furnace automation remains blocked."
         )
 
-    def start_queue_run(self, samples: list[QueueSample], options: QueueOptions) -> bool:
-        """Start a queue-driven measurement run.
-
-        Validation is intentionally strict for safety and queue automation.
-        """
+    def _queue_start_allowed(self) -> bool:
+        if self._shutdown_cleanup_requested:
+            self.set_status('Shutdown is already in progress.')
+            return False
+        if self._queue_preparation is not None or self._queue_starting:
+            self.set_status('Wait for the current queue preparation to finish.')
+            return False
         if self._queue_active or self._queue_command_thread is not None:
             self.set_status("Queue run is already active.")
             return False
@@ -1131,16 +1137,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._queue_lease is not None and not self._release_queue_lease():
             self.set_status('Recover the original unfinished native queue before starting another run.')
             return False
-        self._queue_paused = False
-        self._queue_active = False
-        self._queue_plan = []
-        self._queue_pos = 0
-        self._queue_resume_pos = 0
-        self._queue_current_sample = None
-        self._queue_current_command = None
-        self.set_flow_state("running")
-        self._queue_execution_id = 'queue-' + uuid.uuid4().hex
+        return True
 
+    def _queue_has_input(self, samples) -> bool:
         if not samples:
             self.set_status("Queue is empty.")
             return False
@@ -1148,55 +1147,120 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self._sequence_labels and any(not sample.measurement_labels for sample in samples):
             self.set_status("Load a measurement sequence first.")
             return False
+        return True
 
-        try:
-            samples = resolve_queue_samples(samples, self._sequence_labels)
-            self._queue_plan = compile_queue(samples, options, strict=True)
-            self._queue_source_indexes = {}
-            self._queue_legacy_up_sources = {}
-            for sample in samples:
-                index = Path(sample.source_file).resolve() if sample.source_file else None
-                output = self.config.general.data_dir or (Path.home() / 'RAPID_data')
-                run_directory = specimen_run_directory(output, sample.sample_name, index)
-                validate_measurement_output(run_directory, sample.sample_name,
+    def _queue_preparation_inputs(self):
+        return dict(labels=tuple(self._sequence_labels),
+                    routine_labels=tuple(tuple(plan.to_queue_labels()) for plan in
+                        (self._rockmag_routine_plan, self._thermal_routine_plan) if plan is not None),
+                    output=self.config.general.data_dir or (Path.home() / 'RAPID_data'),
                     simulated=bool(getattr(self._measurement_backend, 'simulated', False)))
-                if not sample.source_file:
-                    continue
-                path = Path(sample.source_file)
-                if not path.is_absolute() or path.suffix.lower() not in {'.sam', '.csv'}:
-                    raise ValueError('Source indexes must be absolute SAM or CSV file paths.')
-                identity = os.path.normcase(str(path.resolve()))
-                if sample.file_id != identity:
-                    raise ValueError('Queue source-file identity must match its original index path.')
-                if identity not in self._queue_source_indexes:
-                    payload = path.read_bytes()
-                    registrations = read_sample_index_registrations(path)
-                    if payload != path.read_bytes():
-                        raise ValueError('Sample index changed while preparing the queue.')
-                    self._queue_source_indexes[identity] = dict(source_file=str(path.resolve()),
-                        sha256=hashlib.sha256(payload).hexdigest(), entries=[asdict(entry) for entry in registrations.entries])
-                matches = [entry for entry in self._queue_source_indexes[identity]['entries'] if entry['specimen_name'] == sample.sample_name]
-                if len(matches) != 1:
-                    raise ValueError('Each queued specimen must match exactly one entry in its original source index.')
-                source = self._queue_source_indexes[identity]
-                snapshots = source.setdefault('specimens', {})
-                if sample.sample_name not in snapshots:
-                    snapshots[sample.sample_name] = capture_specimen_metadata(sample.sample_name,
-                        sample_dir=path.parent, registrations=SampleIndexRegistrations([
-                            SampleIndexRegistration(**entry) for entry in source['entries']]))
-            for plan in (self._rockmag_routine_plan, self._thermal_routine_plan):
-                if plan is not None and any(command.command_type == 'Meas'
-                        and list(command.measurement_labels) != list(plan.to_queue_labels()) for command in self._queue_plan):
-                    raise ValueError('The reviewed routine identity must match every file measurement sequence.')
-        except Exception as exc:
-            self.set_status(f"Queue failed validation: {exc}")
-            QtWidgets.QMessageBox.critical(
-                self,
-                "Queue Error",
-                f"Queue failed validation:\n\n{exc}",
-            )
-            return False
 
+    def _queue_preparation_identity(self):
+        return (config_fingerprint(self.config), self._measurement_backend, self._vacuum_backend,
+                self._rockmag_routine_plan, self._thermal_routine_plan, self._queue_preparation_inputs())
+
+    def _queue_preparation_error(self, error):
+        self.set_flow_state('error')
+        self.set_status(f"Queue failed validation: {error}")
+        QtWidgets.QMessageBox.critical(self, "Queue Error", f"Queue failed validation:\n\n{error}")
+
+    def request_queue_run(self, samples: list[QueueSample], options: QueueOptions, *, still_current=None) -> bool:
+        """Validate a desktop queue request without blocking the GUI."""
+        if not self._queue_start_allowed() or not self._queue_has_input(samples):
+            return False
+        try:
+            origin = self._queue_preparation_identity()
+        except Exception as exc:
+            self._queue_preparation_error(exc)
+            return False
+        inputs = dict(origin[-1], from_queue_panel=still_current is not None)
+        worker = QueuePreparationWorker(deepcopy(samples), deepcopy(options), inputs=inputs, parent=self)
+        self._queue_preparation = worker
+        self._queue_preparation_request = (origin, still_current)
+        self._queue_preparation_cancel_reason = None
+        worker.finished.connect(self._queue_preparation_finished)
+        self.set_flow_state('preflight')
+        self.set_status('Checking specimen files and output paths…')
+        worker.start()
+        return True
+
+    @QtCore.Slot()
+    def _queue_preparation_finished(self):
+        worker = self._queue_preparation
+        if worker is None:
+            return
+        if not worker.wait(0):
+            self._defer_window_callback(10, self._queue_preparation_finished)
+            return
+        origin, still_current = self._queue_preparation_request
+        reason = self._queue_preparation_cancel_reason
+        self._queue_preparation = self._queue_preparation_request = self._queue_preparation_cancel_reason = None
+        worker.deleteLater()
+        if reason is not None or self._shutdown_cleanup_requested:
+            if not (hasattr(self._measurement, 'is_active') and self._measurement.is_active()):
+                self.set_flow_state('idle')
+                self.set_status(reason or 'Queue preparation canceled for shutdown.')
+            return
+        if not self._queue_start_allowed():
+            return
+        try:
+            unchanged = origin == self._queue_preparation_identity() and (still_current is None or still_current())
+        except Exception as exc:
+            self._queue_preparation_error(exc)
+            return
+        if not unchanged:
+            self.set_flow_state('idle')
+            self.set_status('Queue or settings changed during preparation. Run the queue again.')
+            return
+        if worker.result is None:
+            self._queue_preparation_error(worker.error)
+            return
+        self._start_prepared_queue(worker.result)
+
+    def start_queue_run(self, samples: list[QueueSample], options: QueueOptions) -> bool:
+        """Prepare and start synchronously for callers that need the startup outcome."""
+        if not self._queue_start_allowed() or not self._queue_has_input(samples):
+            return False
+        try:
+            prepared = prepare_queue(samples, options, **self._queue_preparation_inputs())
+        except Exception as exc:
+            self._queue_preparation_error(exc)
+            return False
+        return self._start_prepared_queue(prepared)
+
+    def _start_prepared_queue(self, prepared: PreparedQueue) -> bool:
+        self._queue_starting = True
+        try:
+            started = self._admit_prepared_queue(prepared)
+            if not started and self._workflow_state == 'running':
+                self.set_flow_state('idle')
+            return started
+        finally:
+            self._queue_starting = False
+            self._queue_preparation_cancel_reason = None
+
+    def _queue_start_canceled(self) -> bool:
+        if self._queue_preparation_cancel_reason is None and not self._shutdown_cleanup_requested:
+            return False
+        self._release_queue_lease()
+        self.set_flow_state('idle')
+        self.set_status(self._queue_preparation_cancel_reason or 'Queue preparation canceled for shutdown.')
+        return True
+
+    def _admit_prepared_queue(self, prepared: PreparedQueue) -> bool:
+        samples, options = prepared.samples, prepared.options
+        self._queue_paused = False
+        self._queue_active = False
+        self._queue_plan = prepared.commands
+        self._queue_source_indexes = prepared.source_indexes
+        self._queue_legacy_up_sources = {}
+        self._queue_pos = 0
+        self._queue_resume_pos = 0
+        self._queue_current_sample = None
+        self._queue_current_command = None
+        self.set_flow_state("running")
+        self._queue_execution_id = 'queue-' + uuid.uuid4().hex
         if not self._queue_plan:
             self.set_status("Queue has no executable commands.")
             QtWidgets.QMessageBox.information(self, "Queue", "Queue has no measurement steps.")
@@ -1211,6 +1275,8 @@ class MainWindow(QtWidgets.QMainWindow):
         except (OSError, ValueError) as exc:
             self.set_status(f'Legacy Up queue setup failed: {exc}')
             QtWidgets.QMessageBox.critical(self, 'Legacy Up Queue Setup', str(exc))
+            return False
+        if self._queue_start_canceled():
             return False
 
         vacuum_fault = self._queue_vacuum_fault_reason()
@@ -1345,6 +1411,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     station.xy_target(sample.hole)
             if not self._prepare_legacy_up_sources():
                 return False
+            if self._queue_start_canceled():
+                return False
             self._queue_lease = self.acquire_devices(
                 ('measurement', 'changer', 'af_demag', 'vacuum', 'squid', 'susceptibility'), 'queue_workflow',
                 allow_reentrant=False)
@@ -1367,6 +1435,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.set_status('Queue canceled before physical chain slot confirmation.')
                     return False
                 startup_options['chain_slot'] = slot
+            if self._queue_start_canceled():
+                return False
             directions = {}
             for sample in samples:
                 if sample.file_id in directions and directions[sample.file_id] is not sample.do_up:
@@ -1494,6 +1564,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def cancel_queue_run(self, reason: str = "Queue cancelled.") -> None:
         """Cancel active queue automation while leaving controls in a safe state."""
         self._queue_paused = False
+        if self._queue_preparation is not None:
+            self._queue_preparation_cancel_reason = reason
+            self._queue_preparation.requestInterruption()
+            self.set_status('Stopping queue preparation…')
+            return
+        if self._queue_starting and not self._queue_active:
+            self._queue_preparation_cancel_reason = reason
+            self.set_status('Stopping queue preparation…')
+            return
         if self._queue_command_thread is not None:
             self._finalize_queue_run('idle', reason=reason, return_to_safe=False)
             return
@@ -2699,7 +2778,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 samples_between_holder=8,
                 use_xy_table=not bool(getattr(self.config.general, "nocomm", False)),
             )
-            if self.start_queue_run(samples, options):
+            if self.request_queue_run(samples, options):
                 return True
             self.set_status("Unable to start simulated AF example queue. Check readiness.")
             return False
@@ -3110,7 +3189,9 @@ class MainWindow(QtWidgets.QMainWindow):
         measurement_active = bool(
             hasattr(self._measurement, "is_active") and self._measurement.is_active()
         )
-        return (measurement_active or bool(self._queue_active) or self._queue_command_thread is not None
+        return (measurement_active or bool(self._queue_active) or self._queue_preparation is not None
+                or self._queue_starting
+                or self._queue_command_thread is not None
                 or self._queue_native_session is not None)
 
     def _confirm_shutdown(self, *, prompt: bool = True, on_close: bool = False) -> bool:
@@ -3929,7 +4010,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self._measurement, "is_active") and self._measurement.is_active():
             self.halt_measurement()
             self.set_flow_state("halted")
-        elif self._queue_active:
+        elif self._queue_active or self._queue_preparation is not None or self._queue_starting:
             self.halt_measurement()
         else:
             self.set_status("No active run to halt.")

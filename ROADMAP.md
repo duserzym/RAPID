@@ -2731,3 +2731,28 @@ synchronous queue admission. Its longest later interval was 221 ms.
 This records an admission responsiveness gap on the development host.
 Tests ran concurrently on that host. Physical endurance and the supported
 workstation matrix remain open.
+
+Desktop queue preparation checkpoint (2026-11-22). Run Queue and the
+simulated AF queue now validate output paths, compile the plan and capture
+the original specimen indexes and metadata on a separate worker. The GUI
+checks the captured settings, sequence and queue rows before applying the
+result. The operator can halt a pending start, and shutdown waits for the
+preparation worker to exit. Native confirmation and device acquisition
+begin after successful validation.
+
+The staged application passed 1,463 tests in 715.645 seconds with process
+exit 0. Eight new cases cover worker responsiveness, immutable inputs,
+cancellation, shutdown, changed rows and settings, and native handoff before
+any station operation. The Windows build passed offline startup and smoke
+checks for six panels and six helpers. It is available locally under
+`.tmp/queue-preparation-release/dist/RapidPyMain`.
+
+On the development host, the real Run Queue button returned in 4 ms for
+the same 40-specimen No-Comm workload. The worker took 1.424 seconds and
+the first 33 ms timer tick arrived after 35.10 ms. All 80 steps finished in
+37.127 seconds with 40 published bundles and a released lease. The longest
+later timer interval was 288 ms. A separate 12-specimen indexed run completed
+all 24 steps and retained the original .sam digest and each header's
+specimen volume. The measurements are offscreen, with other tests running
+on the same host. Per-specimen UI time, supported workstation performance,
+and physical qualification remain open.

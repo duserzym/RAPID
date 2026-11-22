@@ -105,6 +105,12 @@ Pickup and drop-off use the current verified specimen slot, with drop-off
 height calculated for the imported station mode. This panel moves motors.
 The native queue manages vacuum grip and specimen release.
 
+**Run Queue** checks specimen files and output paths in the background.
+The Preflight status stays on while those checks run. **Halt** cancels the
+pending start. If you edit the queue, sequence, or settings during preflight,
+start the updated queue again. Native station confirmation follows a
+successful preflight.
+
 Calibration Center records proposals, approval, expiry/invalidation, and
 rollback. Review/approve calibration before using its coefficients. Help →
 “Where did this VB6 control go?” supplies the searchable transition map.

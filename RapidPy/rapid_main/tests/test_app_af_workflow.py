@@ -45,7 +45,7 @@ class TestAfWorkflowQueue(_AfWorkflowMixin, unittest.TestCase):
 
         started = {}
         mw = MainWindow()
-        mw.start_queue_run = Mock(side_effect=lambda samples, options: (
+        mw.request_queue_run = Mock(side_effect=lambda samples, options: (
             started.setdefault("samples", samples),
             started.setdefault("options", options),
             True
@@ -81,7 +81,7 @@ class TestAfWorkflowQueue(_AfWorkflowMixin, unittest.TestCase):
 
         mw = MainWindow()
         mw.config.general.nocomm = True
-        mw.start_queue_run = Mock(return_value=False)
+        mw.request_queue_run = Mock(return_value=False)
         class _PanelStub:
             def set_specimen_context(self, *args, **kwargs) -> None:
                 return None
@@ -97,7 +97,7 @@ class TestAfWorkflowQueue(_AfWorkflowMixin, unittest.TestCase):
 
         mw = MainWindow()
         mw.config.general.nocomm = False
-        mw.start_queue_run = Mock(return_value=True)
+        mw.request_queue_run = Mock(return_value=True)
         original_labels = list(mw._sequence_labels)
         original_sample = mw._current_sample
 
@@ -105,7 +105,7 @@ class TestAfWorkflowQueue(_AfWorkflowMixin, unittest.TestCase):
             started = mw._prepare_af_workflow(auto_start=True, queue_mode=True)
 
         self.assertFalse(started)
-        mw.start_queue_run.assert_not_called()
+        mw.request_queue_run.assert_not_called()
         self.assertEqual(mw._sequence_labels, original_labels)
         self.assertEqual(mw._current_sample, original_sample)
         warning.assert_called_once()

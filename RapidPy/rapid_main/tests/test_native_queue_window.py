@@ -365,6 +365,49 @@ class NativeQueueWindowTests(startup_fixture.QueueStartupFixture, unittest.TestC
         self.assertEqual(root['profile']['stage_profiles']['motion']['helper'], 'rapid_main_queue_chain')
         self.assertNotIn('COM4', self.motor._connections)
 
+    def test_background_validation_defers_native_confirmation_journal_and_device_leases(self):
+        from rapid_main.queue_preparation import validate_measurement_output
+        entered, release = threading.Event(), threading.Event()
+        initial = self.store.read(), len(self.commands), list(self.vacuum_serial.writes)
+
+        def check(*args, **kwargs):
+            entered.set()
+            if not release.wait(10):
+                raise TimeoutError('Test did not release the queue file check.')
+            return validate_measurement_output(*args, **kwargs)
+
+        try:
+            with (self.arm_xy_edges(),
+                  patch('rapid_main.queue_preparation.validate_measurement_output', side_effect=check),
+                  patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.StandardButton.Yes) as confirm):
+                self.assertTrue(self.window.request_queue_run([QueueSample('S1', 'F1', 1)], QueueOptions()))
+                self.wait_for(entered.is_set)
+                confirm.assert_not_called()
+                self.assertEqual((self.store.read(), len(self.commands), self.vacuum_serial.writes), initial)
+                self.assertTrue(all(not self.window._ownership.is_owned(item) for item in RESOURCES))
+                release.set()
+                self.wait_for(lambda: bool(self.started), timeout=30)
+        finally:
+            release.set()
+            self.wait_for(lambda: self.window._queue_preparation is None)
+        self.assertEqual(self.started[0][:4], ('S1', 1, 'F1', 2800))
+        self.assertTrue(all(self.window._ownership.owner_of(item) == 'queue_workflow' for item in RESOURCES))
+
+    def test_halt_during_empty_rod_confirmation_prevents_native_startup(self):
+        initial = self.store.read(), len(self.commands), list(self.vacuum_serial.writes)
+
+        def confirm(*args):
+            self.window.cancel_queue_run('Queue halted during confirmation.')
+            return QtWidgets.QMessageBox.StandardButton.Yes
+
+        with patch.object(QtWidgets.QMessageBox, 'question', side_effect=confirm) as question:
+            self.assertTrue(self.window.request_queue_run([QueueSample('S1', 'F1', 1)], QueueOptions()))
+            self.wait_for(lambda: self.window._queue_preparation is None)
+            question.assert_called_once()
+        self.assertEqual((self.store.read(), len(self.commands), self.vacuum_serial.writes), initial)
+        self.assertIsNone(self.window._queue_native_session)
+        self.assertTrue(all(not self.window._ownership.is_owned(item) for item in RESOURCES))
+
     def test_ui_shutdown_retry_settles_original_close_without_replaying_outputs(self):
         self.assertTrue(self.start(), self.window._sb_status.text())
         session = self.window._queue_native_session
