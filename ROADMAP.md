@@ -2389,3 +2389,84 @@ the DPAPI round trip, the settings file, VB6 import, MainWindow hooks and the
 dialog. Next: Yellow notices for re-measure and flux-jump recoveries, and
 hardware-fault notices from the diagnostic panels (VB6 also mailed AF,
 homing/slop and file-save errors).
+
+Measurement acquisition progress checkpoint (2026-11-21): MeasurementWorker now
+creates an append-only `.rapidpy-acquisitions/<identity-sha256>/` journal below its
+admitted publication directory (and below SIMULATED for simulated runs). The run
+identity binds specimen metadata, frozen queue source context when available,
+ordered treatment labels, averaging count, operator, calibration references and
+routine identity. Panel-generated run IDs include a UUID so consecutive passes
+cannot collide within one second. Each step intent is exclusively created and
+fsynced before susceptibility or treatment I/O. Existing intents, including torn
+writes, cannot be overwritten by a second attempt.
+
+After an accepted read cycle, a captured record retains every full bracketed
+block, coherent counter/DVM observation, command audit, holder correction and raw
+reading at original JSON precision. Component/cycle statistics are reproduced
+when reading it. A separate per-step `.UP` export is checked byte-for-byte against
+the packet; its seven-column rows preserve absent H-row acquisition times rather
+than inventing timestamps. Unstructured readings remain explicitly unstructured
+and acquire no synthetic raw block or hardware audit. Infinite signal/no-drift
+ratio is represented by the explicit JSON string `+infinity`.
+
+The scientific bundle now publishes after successful safe return. Failed return
+retains captured raw evidence without a completion seal and leaves the previous
+scientific bundle intact. An exclusive accepted marker links every captured step
+digest only after safe return and bundle publication; provenance and the artifact
+index link the journal, and the index hashes each existing journal/export file.
+These integrity checks do not provide signatures or physical authenticity, and
+per-file bundle publication still uses individual atomic renames. The old worker
+resume flag is rejected before backend I/O: it previously repeated treatment/read
+and only then suppressed duplicate output writes. Original-stage recovery still
+requires explicit reviewed implementation.
+
+This implements durable source retention and execution intent, not full queue
+Up/Down eligibility or assimilation. Queue Root/row/pass ownership must select the
+exact retained Up collection, guard admission before load/treatment, combine both
+calibrated directions without discarding their original audits, and publish the
+combined scientific result. Up-only provisional publication and Down overwriting
+of the final scientific output remain to be replaced by that integration; the
+new journals preserve both raw acquisitions independently. Physical/scientific
+qualification and the other full-system gates remain open.
+
+Focused progress verification exited normally: 12 progress/fault cases in 3.998
+seconds (including a six-observation coherent acquisition round trip), 22 worker
+cases in 26.555 seconds, 11 holder-collection cases in 0.120 seconds, and 19 panel
+cases in 27.859 seconds. Six-panel source smoke and compilation/diff checks pass.
+The complete regression suite is running; its result remains unproven until the
+owned process exits and Qt/watchdog shutdown completes.
+
+The first complete progress run exited with code 1 during native queue window
+cases, before the final unittest/Qt/watchdog shutdown report (log ends in FEE).
+Its stacks show ongoing original transfer/journal I/O. It is not a passing run.
+The isolated 18 native window cases then passed in 154.559 seconds with normal
+exit 0 and clean Qt/watchdog shutdown, without changing hardware deadlines or
+their assertions. The diagnostic runner now flushes assertion/error tracebacks
+immediately so a later native teardown abort cannot erase the original failure.
+A named full-suite run with this diagnostic improvement is underway.
+
+Regression diagnostics: the first complete run exited with code 1 during native
+window cases, without a final report; it is not a passing run. All 18 isolated
+native-window cases subsequently passed in 154.559 seconds with Qt/watchdog
+shutdown markers. A named repeat then exited inside the concurrently added
+companion desktop test. That fixture attached Mock objects to Qt/MainWindow
+methods. Plain recording functions preserve its assertions and avoid the native
+exit; the isolated three companion cases pass in 3.634 seconds with normal code 0.
+The companion implementation and its new test remain concurrent workspace work,
+separate from this acquisition checkpoint. Diagnostic test results now flush
+assertion/error details immediately instead of waiting for final suite reporting.
+A fresh full run is underway; the earlier non-clean runs remain non-clean.
+
+Final recorded regression result: 1,387 tests ran in 699.496 seconds. There was
+one error, in the pre-existing queue-sequence SimpleNamespace fixture after the
+concurrent companion code added a run-epoch attribute; the remaining 1,386 cases
+passed. The owned process exited with code 1 after complete Qt/deferred-deletion
+and explicit watchdog shutdown. That fixture now initializes the new attribute;
+all eight queue-sequence cases pass in 0.003 seconds with normal exit code 0.
+The three repaired companion fixture cases pass in 3.634 seconds with normal exit
+code 0. The full suite has not been rerun after that fixture-only correction, so
+this is not reported as a clean full-suite run. The production acquisition
+changes passed their focused checks and the complete run's remaining cases.
+Concurrent companion implementation/README/test work remains outside this
+acquisition checkpoint; its Qt fixture repairs stay with that work. The full
+system goal and all remaining integration/qualification gates remain active.

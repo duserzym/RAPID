@@ -205,3 +205,42 @@ remeasurement. Susceptibility remains separately linked to its acquisition.
 
 Durable per-step .UP/eligibility/Up-Down publication, complete scientific
 orientation/format acceptance and physical qualification remain required.
+
+Measurement acquisition progress checkpoint (2026-11-21): MeasurementWorker now
+creates an append-only `.rapidpy-acquisitions/<identity-sha256>/` journal below its
+admitted publication directory (and below SIMULATED for simulated runs). The run
+identity binds specimen metadata, frozen queue source context when available,
+ordered treatment labels, averaging count, operator, calibration references and
+routine identity. Panel-generated run IDs include a UUID so consecutive passes
+cannot collide within one second. Each step intent is exclusively created and
+fsynced before susceptibility or treatment I/O. Existing intents, including torn
+writes, cannot be overwritten by a second attempt.
+
+After an accepted read cycle, a captured record retains every full bracketed
+block, coherent counter/DVM observation, command audit, holder correction and raw
+reading at original JSON precision. Component/cycle statistics are reproduced
+when reading it. A separate per-step `.UP` export is checked byte-for-byte against
+the packet; its seven-column rows preserve absent H-row acquisition times rather
+than inventing timestamps. Unstructured readings remain explicitly unstructured
+and acquire no synthetic raw block or hardware audit. Infinite signal/no-drift
+ratio is represented by the explicit JSON string `+infinity`.
+
+The scientific bundle now publishes after successful safe return. Failed return
+retains captured raw evidence without a completion seal and leaves the previous
+scientific bundle intact. An exclusive accepted marker links every captured step
+digest only after safe return and bundle publication; provenance and the artifact
+index link the journal, and the index hashes each existing journal/export file.
+These integrity checks do not provide signatures or physical authenticity, and
+per-file bundle publication still uses individual atomic renames. The old worker
+resume flag is rejected before backend I/O: it previously repeated treatment/read
+and only then suppressed duplicate output writes. Original-stage recovery still
+requires explicit reviewed implementation.
+
+This implements durable source retention and execution intent, not full queue
+Up/Down eligibility or assimilation. Queue Root/row/pass ownership must select the
+exact retained Up collection, guard admission before load/treatment, combine both
+calibrated directions without discarding their original audits, and publish the
+combined scientific result. Up-only provisional publication and Down overwriting
+of the final scientific output remain to be replaced by that integration; the
+new journals preserve both raw acquisitions independently. Physical/scientific
+qualification and the other full-system gates remain open.

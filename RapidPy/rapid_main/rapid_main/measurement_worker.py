@@ -34,6 +34,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import hashlib
 from copy import deepcopy
+from dataclasses import asdict
 import json
 import re
 import threading
@@ -42,6 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import time
 import math
+import uuid
 from typing import Any, Mapping, Optional, Callable, Sequence, TypeVar
 
 from PySide6 import QtCore
@@ -52,6 +54,7 @@ from rapid_main.communication_log import CommunicationEvent, CommunicationLogger
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.specimen_metadata import validate_specimen_provenance
 from rapid_main.specimen_paths import contained_path
+from rapid_main.measurement_progress import MeasurementProgress
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
 from rapid_main.geometry import Cartesian3D, cartesian3d_to_angular3d
 from rapid_main.magnetometer import (
@@ -193,6 +196,9 @@ class MeasurementWorker(QtCore.QThread):
         self._last_block_audit: BlockAudit | None = None
         self._last_block_result: BracketedMeasurementResult | None = None
         self._cycle_blocks: list[BracketedMeasurementBlock] = []
+        self._cycle_readings: list[tuple[float, float, float]] = []
+        self._progress: MeasurementProgress | None = None
+        self._progress_run_id = self._run_id or uuid.uuid4().hex
         self._last_collection_stats: BlockCollectionStatistics | None = None
         self._collection_statistics: list[dict[str, object]] = []
         self._holder_record_id = ""
@@ -282,6 +288,20 @@ class MeasurementWorker(QtCore.QThread):
             self._emit_phase(WorkflowPhase.HALTED)
             self._finish_run(aborted=True)
             return
+
+        # The old resume flag only suppressed duplicate file writes after
+        # reapplying treatment. Until a trusted original-stage recovery route
+        # exists it must never authorize replay of scientific hardware actions.
+        if self._resume:
+            raise ValueError('Automatic measurement replay is unavailable; restore original step progress before recovery.')
+        self._progress = MeasurementProgress(self._publish_dir, run_id=self._progress_run_id,
+            specimen=self._meta.name, labels=self._labels, source=dict(
+                specimen_source=self._specimen_provenance, specimen_metadata=asdict(self._meta),
+                samples_per_position=self._samples_per_position, operator=self._operator,
+                calibration_records=self._calibration_records, routine=self._routine_context,
+                thermal=self._thermal_context),
+            simulated=self._simulated)
+        self._progress.begin()
 
         plan_validator = getattr(self._backend, "validate_treatment_plan", None)
         if callable(plan_validator):
@@ -400,6 +420,13 @@ class MeasurementWorker(QtCore.QThread):
                 break
 
             self.step_started.emit(idx, label)
+            try:
+                self._progress.start_step(idx)
+            except Exception as exc:
+                self._emit_error(f'Cannot persist original step intent: {exc}', phase=WorkflowPhase.SAVING)
+                self._emit_phase(WorkflowPhase.ERROR)
+                aborted = True
+                break
 
             # VB6 modMeasure.Measure runs the requested bridge acquisition
             # before PerformStep (treatment) and Measure_Read (SQUID).
@@ -483,6 +510,7 @@ class MeasurementWorker(QtCore.QThread):
             try:
                 self._emit_phase(WorkflowPhase.VALIDATING)
                 self._validate_step(step)
+                self._progress.capture_step(idx, blocks=self._cycle_blocks, readings=self._cycle_readings)
                 self._emit_phase(WorkflowPhase.SAVING)
                 if not bundle.append_step(step, susceptibility=susc):
                     self._skipped_labels.append(label)
@@ -521,30 +549,6 @@ class MeasurementWorker(QtCore.QThread):
             self.step_complete.emit(result)
             self._completed_labels.append(label)
 
-        # Publish only a complete, accepted run. An abort discards the staged
-        # copy so the production output path is never partially updated.
-        if aborted:
-            bundle.abort()
-        else:
-            try:
-                self._emit_phase(WorkflowPhase.SAVING)
-                bundle.set_provenance(**self._run_provenance())
-                published = bundle.commit()
-                self._published_paths = {
-                    "specimen_file": str(published.specimen_file),
-                    "rmg_file": str(published.rmg_file),
-                    "magic_measurements": str(published.magic_measurements_file),
-                    "magic_specimens": str(published.magic_specimens_file),
-                }
-                self._publish_dir = bundle.publish_dir
-            except Exception as exc:
-                bundle.abort()
-                self._emit_error(
-                    f"Failed to publish measurement bundle: {exc}", phase=WorkflowPhase.SAVING
-                )
-                self._emit_phase(WorkflowPhase.ERROR)
-                aborted = True
-
         # Return to safe state on both normal completion and interrupted execution
         self._emit_phase(WorkflowPhase.RETURNING)
         try:
@@ -576,6 +580,28 @@ class MeasurementWorker(QtCore.QThread):
                     f"Failed to write susceptibility summary: {exc}",
                     phase=WorkflowPhase.SAVING,
                 )
+                self._emit_phase(WorkflowPhase.ERROR)
+                aborted = True
+
+        # Retain raw evidence on failures, but publish the scientific bundle and
+        # seal completed acquisition evidence only after successful safe return.
+        if aborted:
+            bundle.abort()
+        else:
+            try:
+                bundle.set_provenance(**self._run_provenance())
+                published = bundle.commit()
+                self._published_paths = {
+                    "specimen_file": str(published.specimen_file),
+                    "rmg_file": str(published.rmg_file),
+                    "magic_measurements": str(published.magic_measurements_file),
+                    "magic_specimens": str(published.magic_specimens_file),
+                }
+                self._publish_dir = bundle.publish_dir
+                self._progress.accept()
+            except Exception as exc:
+                bundle.abort()
+                self._emit_error(f"Failed to publish measurement bundle: {exc}", phase=WorkflowPhase.SAVING)
                 self._emit_phase(WorkflowPhase.ERROR)
                 aborted = True
 
@@ -730,6 +756,7 @@ class MeasurementWorker(QtCore.QThread):
         """Read and summarize the configured number of SQUID samples."""
 
         readings: list[tuple[float, float, float]] = []
+        self._cycle_readings = readings
         self._cycle_blocks = []
         self._last_collection_stats = None
         self._last_block_result = None
@@ -983,6 +1010,7 @@ class MeasurementWorker(QtCore.QThread):
             "transport_recoveries": len(transport_recoveries),
             "transport_recovery_records": transport_recoveries,
             "block_collection_statistics": deepcopy(self._collection_statistics),
+            "acquisition_progress": self._progress.reference if self._progress is not None else None,
             "skipped_duplicate_labels": list(self._skipped_labels),
             "simulated": self._simulated,
         }
@@ -1285,6 +1313,7 @@ class MeasurementWorker(QtCore.QThread):
                 SIMULATION_STATEMENT.strip() if self._simulated else ""
             ),
             "published_paths": dict(self._published_paths),
+            "acquisition_progress": self._progress.reference if self._progress is not None else None,
             "specimen_source": deepcopy(self._specimen_provenance),
             "rockmag_routine": (
                 str(self._routine_context.get("routine_name", ""))
@@ -1389,6 +1418,13 @@ class MeasurementWorker(QtCore.QThread):
         for treatment_id,path in self._pulse_artifacts:
             payload["artifacts"].append(entry(f"pulse_treatment:{treatment_id}",path,required=True,
                 producer="PulseTreatmentService",description="Capacitor/field plan, relay readback, charge/fire/discharge evidence, specimen motion and safe return."))
+        if self._progress is not None and self._progress.directory.is_dir():
+            for path in sorted(self._progress.directory.iterdir()):
+                path = self._progress._path(path.name)
+                if path.is_file():
+                    payload['artifacts'].append(entry('acquisition_progress:' + path.name, path,
+                        required=True, producer='MeasurementProgress',
+                        description='Original step intent, lossless raw acquisition or acceptance seal.'))
         for treatment_id, path in self._af_artifacts:
             payload["artifacts"].append(entry(
                 f"af_treatment:{treatment_id}", path, required=True,

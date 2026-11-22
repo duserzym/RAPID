@@ -1,59 +1,15 @@
 """Reproducible, immutable evidence for an accepted holder collection."""
-from dataclasses import asdict, fields
+from dataclasses import asdict
 from functools import lru_cache
 import hashlib
 import json
 import math
 
 from rapid_main.block_statistics import block_collection_statistics
-from rapid_main.magnetometer import (AxisObservation, BlockAudit, BracketedMeasurementBlock,
-    CommandEvent, SquidObservation, reduce_bracketed_measurement)
+from rapid_main.magnetometer import reduce_bracketed_measurement
+from rapid_main.acquisition_evidence import canonical, restore_block
 
 SCHEMA = 'rapidpy.holder_collection.v1'
-
-
-def canonical(payload):
-    return json.dumps(payload, sort_keys=True, separators=(',', ':'), allow_nan=False)
-
-
-def _construct(kind, payload):
-    if not isinstance(payload, dict) or set(payload) != {field.name for field in fields(kind)}:
-        raise ValueError('holder collection has incomplete or unknown acquisition fields')
-    return kind(**payload)
-
-
-def _vector(value):
-    if not isinstance(value, (list, tuple)) or len(value) != 3 or any(
-            type(number) not in (float, int) or not math.isfinite(number) for number in value):
-        raise ValueError('holder collection vectors must contain three finite numbers')
-    return tuple(float(number) for number in value)
-
-
-def _positions(value):
-    if not isinstance(value, (list, tuple)) or len(value) != 4:
-        raise ValueError('holder collection requires four position vectors')
-    return tuple(_vector(vector) for vector in value)
-
-
-def restore_block(payload):
-    """Restore the entire original acquisition, including counter/DVM evidence."""
-    payload = dict(payload)
-    for name in ('zero_before', 'zero_after', 'axis_calibration'):
-        payload[name] = _vector(payload[name])
-    for name in ('positions', 'holder_positions'):
-        payload[name] = _positions(payload[name])
-    observations = []
-    for raw in payload['observations']:
-        raw = dict(raw)
-        raw['axes'] = tuple(_construct(AxisObservation, axis) for axis in raw['axes'])
-        observations.append(_construct(SquidObservation, raw))
-    payload['observations'] = tuple(observations)
-    if payload['audit'] is not None:
-        audit = dict(payload['audit'])
-        audit['axis_calibration_applied'] = _vector(audit['axis_calibration_applied'])
-        audit['commands'] = tuple(_construct(CommandEvent, command) for command in audit['commands'])
-        payload['audit'] = _construct(BlockAudit, audit)
-    return _construct(BracketedMeasurementBlock, payload)
 
 
 def derive(blocks):

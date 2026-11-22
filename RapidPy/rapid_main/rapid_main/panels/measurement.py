@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 from datetime import datetime
 import json
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -598,7 +599,7 @@ class MeasurementPanel(QtWidgets.QWidget):
             if self._current_run_simulated
             else run_output_dir
         )
-        run_id = f"{meta.name}-{datetime.now().strftime('%Y%m%dT%H%M%S')}"
+        run_id = f"{meta.name}-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex}"
         routine_context = None
         thermal_context = None
         rockmag_plan = getattr(mw, "_rockmag_routine_plan", None)

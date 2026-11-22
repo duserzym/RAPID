@@ -13,6 +13,23 @@ for module in ("rapid_main", "updown_control", "vrm_logger", "af_tuner", "af_cli
 sys.path.insert(0, str(ROOT / "RapidPy"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+
+class DiagnosticResult(unittest.TextTestResult):
+    """Retain failure details even if a later native teardown aborts Python."""
+
+    def addError(self, test, err):
+        super().addError(test, err)
+        self._report_immediately('ERROR', test, self.errors[-1][1])
+
+    def addFailure(self, test, err):
+        super().addFailure(test, err)
+        self._report_immediately('FAIL', test, self.failures[-1][1])
+
+    def _report_immediately(self, kind, test, detail):
+        self.stream.write(f'\nImmediate {kind}: {test.id()}\n{detail}\n')
+        self.stream.flush()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--pattern', default='test*.py', help='Unittest discovery filename pattern')
@@ -47,7 +64,8 @@ def run_suite(args) -> int:
                     super().__init__(*args, **kwargs)
         QtCore.QSettings = IsolatedSettings
         suite = unittest.defaultTestLoader.discover(str(ROOT / "RapidPy" / "rapid_main" / "tests"), pattern=args.pattern)
-        result = unittest.TextTestRunner(verbosity=2 if args.verbose else 1).run(suite)
+        result = unittest.TextTestRunner(verbosity=2 if args.verbose else 1,
+            resultclass=DiagnosticResult if args.stall_trace else unittest.TextTestResult).run(suite)
         # Dispose the offscreen Qt application while Python and diagnostics are
         # still alive, rather than leaving C++ teardown to interpreter shutdown.
         application = QtCore.QCoreApplication.instance()

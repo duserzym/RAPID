@@ -8,7 +8,7 @@ from rapid_main.queue_compiler import QueueSample, QueueOptions, compile_queue, 
 
 class QueueFileSequenceTests(unittest.TestCase):
     def test_runtime_sequence_does_not_replace_loaded_sequence(self):
-        window = SimpleNamespace(_sequence_labels=['AF20', 'SUSC'],
+        window = SimpleNamespace(_sequence_labels=['AF20', 'SUSC'], _companion_run_epoch=0,
             _run_timer=SimpleNamespace(start=lambda: None, stop=lambda: None),
             _update_runtime_display=lambda **kwargs: None, set_flow_state=lambda state: None)
         MainWindow.start_run(window, ['NRM'])
