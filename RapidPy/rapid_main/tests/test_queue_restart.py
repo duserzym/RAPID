@@ -4,7 +4,9 @@ import unittest
 from unittest.mock import patch
 
 from rapid_main.queue_restart import QueueRestartRecovery, restart_stage
+from rapidpy_common.hardware import serial
 from rapidpy_common.hardware_safety import HardwareSafetyError
+from tests.test_queue_lift_transfer import LiftSerial
 from tests.test_queue_startup import QueueStartupFixture
 
 
@@ -18,6 +20,7 @@ class QueueRestartTests(QueueStartupFixture, unittest.TestCase):
         self.backend._queue_terminal_cleanup = None
         self.backend._queue_operator_stages = None
         self.backend._queue_instruments = None
+        self.backend._queue_specimen_geometry = None
         self.vacuum._queue_binding = None
 
     def ready_to_publish(self, *, close_failed_first=False):
@@ -128,3 +131,135 @@ class QueueRestartTests(QueueStartupFixture, unittest.TestCase):
         with self.assertRaisesRegex(HardwareSafetyError, 'evidence cannot be verified'):
             recovery.run()
         self.assertEqual(self.store.pending(), state)
+
+    def interrupted_stage(self, family, *, loaded=False):
+        startup = self.prepare()
+        with self.arm_xy_edges():
+            worker = self.command(self.backend.start_queue_lifetime)
+        self.assertTrue(worker.ok, worker.error)
+        if loaded:
+            self.load_backend()
+            self.assertTrue(self.vacuum.is_valve_connected())
+        store = startup.session.store
+        with startup.session.claim() as child:
+            root = store.pending()
+            plan = {'action': 'squid' if family == 'acquisition' else 'xy_slot_move', 'sample_id': 'S1'}
+            child.begin(family, plan, root['profile']['stage_profiles'][family], sample_id='S1')
+        state = store.pending()
+        # Simulate process exit closing serial handles. This does not change
+        # controller outputs or the original recorded specimen support.
+        self.motor.disconnect()
+        self.vacuum._pump_only_controller.disconnect()
+        self.forget_session(startup)
+        return state
+
+    def test_interrupted_acquisition_preserves_grip_identity_and_issues_only_stop_and_read(self):
+        original = self.interrupted_stage('acquisition', loaded=True)
+        vacuum_before = list(self.vacuum_serial.writes)
+        opened = []
+
+        def transport(**settings):
+            pending = self.store.pending()
+            self.assertEqual(pending['stage']['record']['status'], 'started')
+            self.assertEqual(pending['stage']['token'], original['stage']['token'])
+            port = LiftSerial(**settings)
+            port.position = 2880
+            opened.append(port)
+            return port
+
+        recovery = self.recover(original)
+        with patch.object(serial, 'Serial', side_effect=transport):
+            recovery.run()
+        state = self.store.pending()
+        record = state['stage']['record']
+        self.assertEqual(state['stage']['plan'], original['stage']['plan'])
+        self.assertEqual(state['stage_count'], original['stage_count'])
+        self.assertEqual(state['stage']['status'], 'pending')
+        self.assertIs(record['safe_state_confirmed'], False)
+        self.assertEqual(record['status'], 'contained')
+        self.assertTrue(record['fields_off_verified'])
+        self.assertTrue(record['motors_stopped_verified'])
+        self.assertTrue(record['motor_handles_closed'])
+        self.assertEqual(self.vacuum_serial.writes, vacuum_before)
+        context = self.store.latest_transfer_context(state['token'])
+        self.assertEqual(context['sample_id'], 'S1')
+        self.assertEqual(context['phase'], 'unverified')
+        self.assertEqual(len(opened), 4)
+        for stream in opened:
+            self.assertFalse(stream.is_open)
+            self.assertEqual(stream.writes, [b'@16 3 0\r\n', b'@16 12 1 7\r\n', b'@16 12 1 7\r\n'])
+
+    def test_partial_port_failure_still_stops_reachable_axes_and_keeps_pending(self):
+        original = self.interrupted_stage('motion')
+        self.cap_voltage = .5
+        opened = {}
+
+        def transport(**settings):
+            if settings['port'] == 'COM4':
+                raise OSError('controller absent')
+            port = LiftSerial(**settings)
+            opened[port.port] = port
+            return port
+
+        recovery = self.recover(original)
+        with patch.object(serial, 'Serial', side_effect=transport):
+            with self.assertRaisesRegex(HardwareSafetyError, 'COM4.*controller absent'):
+                recovery.run()
+        pending = self.store.pending()
+        self.assertEqual(pending['stage']['token'], original['stage']['token'])
+        record = pending['stage']['record']
+        self.assertEqual(record['status'], 'failed')
+        self.assertFalse(record['fields_off_verified'])
+        self.assertFalse(record['motors_stopped_verified'])
+        self.assertTrue(record['motor_handles_closed'])
+        self.assertEqual(record['motor_observations']['changer_y'], [])
+        self.assertEqual(set(opened), {'COM3', 'COM5', 'COM6'})
+        self.assertTrue(all(port.writes[0] == b'@16 3 0\r\n' and not port.is_open for port in opened.values()))
+
+    def test_failed_original_intent_write_blocks_field_and_serial_io(self):
+        original = self.interrupted_stage('motion')
+        recovery = self.recover(original)
+        before = list(self.commands), list(self.vacuum_serial.writes)
+        with patch.object(recovery.session.store, 'finish_stage', side_effect=OSError('disk full')), patch.object(
+                serial, 'Serial') as transport, self.assertRaisesRegex(OSError, 'disk full'):
+            recovery.run()
+        transport.assert_not_called()
+        self.assertEqual(self.store.pending(), original)
+        self.assertEqual((self.commands, self.vacuum_serial.writes), before)
+
+    def test_failed_close_retains_the_original_port_for_the_same_recovery(self):
+        original = self.interrupted_stage('motion')
+        first_streams = {}
+
+        def transport(**settings):
+            port = LiftSerial(**settings)
+            first_streams[port.port] = port
+            if port.port == 'COM3':
+                def fail_close():
+                    raise OSError('close failed')
+                port.close = fail_close
+            return port
+
+        initial = self.recover(original)
+        with patch.object(serial, 'Serial', side_effect=transport), self.assertRaisesRegex(HardwareSafetyError, 'close failed'):
+            initial.run()
+        pending = self.store.pending()
+        self.assertTrue(pending['stage']['record']['motors_stopped_verified'])
+        self.assertFalse(pending['stage']['record']['motor_handles_closed'])
+        retained = self.motor._connections['COM3']._serial
+        self.assertIs(retained, first_streams['COM3'])
+        retained.close = LiftSerial.close.__get__(retained)
+        initial.release()
+        opened = []
+
+        def retry_open(**settings):
+            opened.append(settings['port'])
+            return LiftSerial(**settings)
+
+        retry = self.recover(pending)
+        with patch.object(serial, 'Serial', side_effect=retry_open):
+            retry.run()
+        self.assertNotIn('COM3', opened)
+        self.assertEqual(retained.writes.count(b'@16 3 0\r\n'), 2)
+        self.assertFalse(retained.is_open)
+        self.assertTrue(self.store.pending()['stage']['record']['motor_handles_closed'])

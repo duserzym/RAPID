@@ -75,10 +75,13 @@ class QueueXYTableMotion:
         if self.should_cancel():
             raise InterruptedError('Queue table transfer cancelled.')
 
-    def _stopped(self):
+    def _stopped(self, *, available_ports=None):
         observations, errors = {}, []
         for key, axis in self.axes.items():
-            samples, error = verify_stopped_in_place(self.motor, axis, sleep=self.sleep)
+            if available_ports is not None and axis.port.upper() not in available_ports:
+                samples, error = [], 'Original controller port is unavailable.'
+            else:
+                samples, error = verify_stopped_in_place(self.motor, axis, sleep=self.sleep)
             observations[key] = samples
             if error:
                 errors.append(f'{key}: {error}')

@@ -1497,16 +1497,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if kind == 'field_outputs':
             reason = 'Field cutoff verified. The interrupted queue still requires station recovery for motion and vacuum.'
+            starting = 'Recovering the original field cutoff.'
+            state = 'error'
+        elif kind == 'containment':
+            reason = 'Field cutoff and stopped axes verified. The original queue remains pending for specimen and vacuum recovery.'
+            starting = 'Cutting off field outputs and verifying the original axes stopped in place.'
             state = 'error'
         else:
             reason = 'Recorded queue shutdown published. Review interrupted measurement rows before starting another run.'
+            starting = 'Publishing the verified shutdown from the original queue journal.'
             state = 'idle'
         self._queue_pending_finalize = dict(state=state, reason=reason, return_to_safe=False,
             clear_plan=True, clear_current=True, clear_command=True, failure_reason='Interrupted queue recovery failed')
         self._start_queue_command_worker(None, recovery.run, [lease, recovery], recover_on_error=False)
         self.set_flow_state('returning')
-        self.set_status('Recovering the original field cutoff.' if kind == 'field_outputs'
-                        else 'Publishing the verified shutdown from the original queue journal.')
+        self.set_status(starting)
         return True
 
     def _run_next_queue_command(self) -> None:
@@ -2299,7 +2304,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._retry_queue_close_action.setEnabled(False)
         self._retry_queue_close_action.setToolTip('Finish closing the original connections after a queue shutdown failure.')
         restart_queue_action = dm.addAction('Recover &Interrupted Queue', self.recover_interrupted_queue)
-        restart_queue_action.setToolTip('Retry an interrupted field cutoff or publish an already verified shutdown after restart.')
+        restart_queue_action.setToolTip('Verify field cutoff and motor stop, or publish an already verified shutdown after restart.')
         dm.addSeparator()
         af_sub = dm.addMenu("AF &Demagnetizer")
         af_sub.addAction("Set Up AF Sequence", self._launch_af)

@@ -1,6 +1,8 @@
 """Recover explicitly supported native stages after the original worker is gone."""
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 import json
+import uuid
 
 from rapidpy_common.hardware_safety import HardwareSafetyError, _canonical
 from rapidpy_common.queue_safety import QueueSafetyStore, QueueWorkflowSession
@@ -21,6 +23,9 @@ def restart_stage(state):
             return 'field_outputs'
         if stage['family'] == 'motion' and stage['status'] == 'verified' and action == 'queue_terminal_close':
             return 'terminal_close'
+        if (stage['status'] == 'pending' and action != 'queue_terminal_close'
+                and stage['family'] in {'motion', 'acquisition', 'af', 'arm', 'pulse', 'rrm', 'vacuum'}):
+            return 'containment'
     description = (f"{stage['family']} / {stage['plan'].get('action', 'unknown')} ({stage['status']})"
                    if stage is not None else 'startup before the first stage')
     raise HardwareSafetyError(f'Original stage: {description}. Station recovery is required. '
@@ -134,7 +139,9 @@ class QueueRestartRecovery:
     def run(self):
         with self.session.claim():
             state = self._state()
-            _, fields, _, profile = QueueNativeStartup.station_bindings(self._backend, self._vacuum)
+            stop_owner = ((state['token'], state['stage']['token']) if self.kind == 'containment' else None)
+            table, fields, _, profile = QueueNativeStartup.station_bindings(self._backend, self._vacuum,
+                                                                             stop_owner=stop_owner)
             # Transport ownership IDs belong to their original process. Every
             # actual setting and participating circuit must still match.
             expected = json.loads(_canonical(state['profile']))
@@ -144,5 +151,84 @@ class QueueRestartRecovery:
             if self.kind == 'field_outputs':
                 fields.verify_off(self.session, recovery=True, recovery_operator=self._operator)
                 return
+            if self.kind == 'containment':
+                self._contain(state, table, fields, stop_owner)
+                return
             record = _terminal_record(self.session.store, state, self._operator)
             self.session.store.finish_queue(self.session.token, state['profile'], record)
+
+    def _contain(self, state, table, fields, stop_owner):
+        stage = state['stage']
+        intent = QueueContainmentRecord(stage['token'], stage['family'], self._operator,
+                                        state['history_head'])
+        child = self.session.child_store
+        # This records intent ahead of even a serial open or an output cutoff.
+        # The original plan stays latched and earlier evidence stays linked.
+        child.finish(stage['token'], stage['profile'], intent)
+        errors = []
+        field_record = None
+        try:
+            field_record = fields.cutoff_for_containment(self.session, intent)
+            if not field_record.safe_state_confirmed:
+                errors.extend(field_record.errors)
+        except Exception as exc:
+            errors.append(f'Field cutoff: {exc}')
+
+        samples = {}
+        motor_errors = []
+        stopped = False
+        closed = False
+        motor = table.motor
+        try:
+            available, open_errors = motor.connect_for_stop(stop_owner, baudrate=self._backend._config.motor_station.baud)
+            motor_errors.extend(open_errors)
+            samples, failure = table._stopped(available_ports=available)
+            if failure:
+                motor_errors.append(failure)
+            stopped = not motor_errors and set(samples) == set(table.axes)
+        except Exception as exc:
+            motor_errors.append(f'Motor stop: {exc}')
+        finally:
+            try:
+                motor.disconnect()
+                closed = not motor._connections
+                if not closed:
+                    motor_errors.append('Retained recovery motor connections are still open.')
+            except Exception as exc:
+                motor_errors.append(f'Motor close: {exc}')
+
+        errors.extend(motor_errors)
+        result = replace(intent, status='failed' if errors else 'contained',
+                         completed_iso=datetime.now(timezone.utc).isoformat(),
+                         field_record=field_record.to_dict() if field_record is not None else None,
+                         fields_off_verified=field_record is not None and field_record.safe_state_confirmed,
+                         motor_observations=samples, motors_stopped_verified=stopped,
+                         motor_handles_closed=closed, errors=tuple(errors))
+        child.finish(stage['token'], stage['profile'], result)
+        if errors:
+            raise HardwareSafetyError('Restart containment is incomplete: ' + '; '.join(errors))
+
+
+@dataclass(frozen=True)
+class QueueContainmentRecord:
+    stage_token: str
+    stage_family: str
+    operator: str
+    interrupted_history_head: dict | None
+    record_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    started_iso: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    completed_iso: str = ''
+    status: str = 'started'
+    field_record: dict | None = None
+    fields_off_verified: bool = False
+    motor_observations: dict = field(default_factory=dict)
+    motors_stopped_verified: bool = False
+    motor_handles_closed: bool = False
+    errors: tuple[str, ...] = ()
+    safe_state_confirmed: bool = field(default=False, init=False)
+    simulated: bool = field(default=False, init=False)
+
+    def to_dict(self):
+        # Component checks do not establish specimen support, vacuum state or
+        # any accepted treatment / scientific acquisition.
+        return dict(schema='rapidpy.queue_restart_containment.v1', **asdict(self))

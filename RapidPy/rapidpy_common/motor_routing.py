@@ -20,6 +20,7 @@ class RoutedMotorSerialClient(MotorSerialClient):
         self._bindings = {axis.motor_id: (axis.name, axis.address, axis.port) for axis in axes}
         self._connections = {}
         self._connection_id = None
+        self._stop_owner = None
         self._routing_depth = 0
         seen = set()
         for axis in axes:
@@ -56,6 +57,30 @@ class RoutedMotorSerialClient(MotorSerialClient):
                 self.disconnect()
                 raise
 
+    def connect_for_stop(self, owner, *, baudrate=57600, timeout=.35):
+        """Attempt each port independently. Retain a failed close for the same recovery."""
+        with self._io_lock:
+            if not owner or (self._connections and self._stop_owner != owner):
+                raise HardwareError('The original stop recovery must own any retained motor handles.')
+            self._stop_owner = owner
+            self._connection_id = None  # These handles cannot establish a motion reference.
+            ready, errors = set(), []
+            for port in dict.fromkeys(axis.port.upper() for axis in self._axes_by_id.values()):
+                client = self._connections.get(port)
+                if client is None:
+                    client = MotorSerialClient(self.config, trace=self._trace)
+                    self._connections[port] = client
+                try:
+                    if not client.is_connected:
+                        client.open_for_stop(port, baudrate, timeout)
+                    if not client.is_connected or str(client._serial.port).upper() != port:
+                        raise HardwareError('Actual motor connection did not match the original port.')
+                    client._serial.reset_input_buffer()
+                    ready.add(port)
+                except Exception as exc:
+                    errors.append(f'{port}: {exc}')
+            return ready, errors
+
     def disconnect(self):
         with self._io_lock:
             self._connection_id = None
@@ -68,6 +93,8 @@ class RoutedMotorSerialClient(MotorSerialClient):
                 else:
                     del self._connections[port]
             self._serial = None
+            if not self._connections:
+                self._stop_owner = None
             if failures:
                 raise HardwareError("Motor disconnect failed: " + "; ".join(failures))
 

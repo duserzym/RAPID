@@ -53,12 +53,13 @@ class QueueNativeStartup:
         return instance
 
     @staticmethod
-    def station_bindings(backend, vacuum):
+    def station_bindings(backend, vacuum, *, stop_owner=None):
         """Build and verify idle station bindings without opening transports."""
         from rapidpy_common.motor_routing import RoutedMotorSerialClient
         from .diagnostic_services import VacuumBackendAdapter
         if (not isinstance(backend._client, RoutedMotorSerialClient)
-                or backend._client._connections or getattr(backend, '_queue_coordinator', None) is not None
+                or (backend._client._connections and (stop_owner is None or backend._client._stop_owner != stop_owner))
+                or getattr(backend, '_queue_coordinator', None) is not None
                 or getattr(backend, '_queue_startup', None) is not None
                 or getattr(backend, '_queue_specimen_geometry', None) is not None
                 or getattr(backend._safety_store, 'session', None) is not None):

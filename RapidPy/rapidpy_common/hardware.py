@@ -103,7 +103,8 @@ class MotorSerialClient:
     def is_connected(self) -> bool:
         return self._serial is not None and self._serial.is_open
 
-    def connect(self, port: str, baudrate: int = 57600, timeout: float = 0.35) -> None:
+    def open_for_stop(self, port: str, baudrate: int = 57600, timeout: float = 0.35) -> None:
+        """Open the serial line without changing controller settings."""
         with self._io_lock:
             self.disconnect()
             self._port = port
@@ -122,6 +123,10 @@ class MotorSerialClient:
                     "ERROR", port, f"motor connect {port}:{baudrate} failed: {exc}"
                 )
                 raise
+
+    def connect(self, port: str, baudrate: int = 57600, timeout: float = 0.35) -> None:
+        with self._io_lock:
+            self.open_for_stop(port, baudrate, timeout)
             try:
                 self._serial.dtr = True
                 self._serial.rts = True

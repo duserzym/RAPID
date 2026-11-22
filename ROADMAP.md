@@ -2525,3 +2525,22 @@ and both Windows executables. The offline bundled startup and six-panel smoke
 checks passed. The local candidate lives under `.tmp/restart-release/dist/RapidPyMain`
 and includes its build manifest and updated operator guide. Fresh Windows
 deployment and physical/scientific qualification remain open.
+
+Restart containment checkpoint (2026-11-22). For a pending native motion,
+acquisition, treatment or vacuum stage, the recovery menu persists an attempt
+before I/O, verifies field cutoff, and stops each reachable axis in place. The
+recovery transport skips the normal motor startup broadcast. The report records
+two zero-velocity and stable-position observations per verified axis. Unreachable
+ports do not prevent attempts on the others. A failed close retains its exact
+transport for a retry of that queue and stage. No vacuum, SQUID, susceptibility,
+motion transfer, or treatment replay occurs. The component report leaves the
+original stage pending and keeps earlier failure and specimen evidence linked.
+
+Nine focused restart tests passed with exit 0, including injected acquisition
+recovery with prior grip, a missing motor port and failed capacitor discharge,
+a retained motor close, and a failed recovery-intent write. Full regression
+passed 1,405 tests in 598.992 seconds with exit 0 and clean Qt/watchdog shutdown.
+The updated portable bundle passed packaged startup and six-panel, six-helper
+offline smoke, and lives locally in `.tmp/containment-release/dist/RapidPyMain`.
+Verified specimen support, safe vacuum settlement, earlier verified stages,
+and physical station qualification remain open.

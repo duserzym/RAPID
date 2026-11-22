@@ -115,6 +115,23 @@ class QueueFieldOutputs:
             token = stage['token']
         else:
             token = child.begin('field_outputs', operation, self.profile, run_id=root['run_id'])
+        record = self._perform_cutoff(session, operation, root['run_id'])
+        child.finish(token, self.profile, record)
+        if not record.safe_state_confirmed:
+            raise HardwareSafetyError('Queue field cutoff remains pending: ' + '; '.join(record.errors))
+        return self.require(session)
+
+    def cutoff_for_containment(self, session, intent):
+        root = self._validate(session)
+        stage = root['stage']
+        if (session.is_recovery is not True or not stage or stage['status'] != 'pending'
+                or stage['record'] != _snapshot(intent.to_dict()) or intent.status != 'started'):
+            raise HardwareSafetyError('The original persisted restart containment intent is required.')
+        operation = dict(action='restart_containment_cutoff', queue_stage_token=stage['token'],
+                         attempt_id=intent.record_id, operator=intent.operator)
+        return self._perform_cutoff(session, operation, root['run_id'])
+
+    def _perform_cutoff(self, session, operation, run_id):
         errors, arm_record, pulse_record, af_record = [], None, None, None
         # ARM cutoff is independent and attempted even if capacitor discharge fails.
         try:
@@ -137,7 +154,7 @@ class QueueFieldOutputs:
         discharged = False
         try:
             pulse_record = self.pulse.recover_safe_state(sample_id='queue-field-cutoff',
-                run_id=root['run_id'], clear_relays=af_zero).to_dict()
+                run_id=run_id, clear_relays=af_zero).to_dict()
             discharged = pulse_record['safe_state_confirmed'] is True and pulse_record['simulated'] is False
         except PulseCircuitError as exc:
             pulse_record = exc.record.to_dict()
@@ -165,7 +182,4 @@ class QueueFieldOutputs:
         record = QueueFieldOutputsRecord(operation, copy.deepcopy(self.profile), arm_record, pulse_record,
                                           af_record, tuple(errors), safe, context)
         self.last_record = record
-        child.finish(token, self.profile, record)
-        if not safe:
-            raise HardwareSafetyError('Queue field cutoff remains pending: ' + '; '.join(errors))
-        return self.require(session)
+        return record
