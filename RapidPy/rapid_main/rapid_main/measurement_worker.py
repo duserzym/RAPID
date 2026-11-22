@@ -57,6 +57,7 @@ from rapid_main.specimen_metadata import validate_specimen_provenance
 from rapid_main.specimen_paths import contained_path
 from rapid_main.measurement_progress import MeasurementProgress
 from rapid_main.queue_pair import QueueSide
+from rapid_main.io.rmg_writer import RmgTreatment, describe_rmg_treatment
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend
 from rapid_main.specimen_orientation import specimen_directions
 from rapid_main.magnetometer import (
@@ -310,6 +311,7 @@ class MeasurementWorker(QtCore.QThread):
                       calibration_records=self._calibration_records, routine=self._routine_context,
                       thermal=self._thermal_context)
         side = self._queue_side
+        apply_treatment = side is None or side.is_up
         up_blocks = ()
         up_susceptibility = None
         if side is not None:
@@ -330,7 +332,7 @@ class MeasurementWorker(QtCore.QThread):
         self._progress.begin()
 
         plan_validator = getattr(self._backend, "validate_treatment_plan", None)
-        if callable(plan_validator):
+        if apply_treatment and callable(plan_validator):
             try:
                 self._emit_phase(WorkflowPhase.PREFLIGHT)
                 plan_preflight = self._call_with_timeout(
@@ -410,7 +412,7 @@ class MeasurementWorker(QtCore.QThread):
                 "written to the SIMULATED directory and is not hardware evidence."
             )
 
-        self._apply_measurement_context()
+        self._apply_measurement_context(carried_label=None if apply_treatment else self._labels[0])
         self._emit_phase(WorkflowPhase.LOADING)
 
         # Prepare bundle writer (VB6 specimen + RMG + MagIC measurement/specimen)
@@ -485,12 +487,19 @@ class MeasurementWorker(QtCore.QThread):
             # Apply treatment step
             try:
                 self._emit_phase(WorkflowPhase.TREATING)
-                self._comm_sent(label, detail="set_demag_step")
-                self._call_with_timeout(
-                    lambda: self._backend.set_demag_step(label),
-                    timeout=self._get_backend_timeout("step_timeout"),
-                    phase="set_demag_step",
-                )
+                if apply_treatment:
+                    af_start, pulse_start = len(self._backend_af_records()), len(self._backend_pulse_records())
+                    self._comm_sent(label, detail="set_demag_step")
+                    self._call_with_timeout(
+                        lambda: self._backend.set_demag_step(label),
+                        timeout=self._get_backend_timeout("step_timeout"),
+                        phase="set_demag_step",
+                    )
+                    rmg_treatment = self._rmg_treatment(label, af_start=af_start, pulse_start=pulse_start)
+                else:
+                    self._comm_info(f'Paired Down retains the original Up treatment {label}')
+                    carried = self._up_reference.get('rmg_treatment')
+                    rmg_treatment = RmgTreatment(**carried) if carried is not None else describe_rmg_treatment(label)
                 self._emit_phase(WorkflowPhase.POSITIONING)
                 self._validate_position()
             except MeasurementHaltRequested:
@@ -529,7 +538,11 @@ class MeasurementWorker(QtCore.QThread):
                 self._emit_phase(WorkflowPhase.VALIDATING)
                 if side is not None:
                     side.validate_blocks(self._cycle_blocks, simulated=self._simulated)
+                height_reader = getattr(self._backend, 'measured_specimen_height_cm', None)
+                sample_height_cm = height_reader() if callable(height_reader) else None
                 self._progress.capture_step(idx, blocks=self._cycle_blocks, readings=self._cycle_readings,
+                    rmg_treatment=rmg_treatment,
+                    sample_height_cm=sample_height_cm,
                     susceptibility=(dict(value=susc, evidence=susceptibility_evidence)
                                     if label.strip().upper() == 'SUSC' else None))
                 if up_blocks:
@@ -546,7 +559,11 @@ class MeasurementWorker(QtCore.QThread):
                     range_factor=self._cycle_blocks[0].range_factor if self._cycle_blocks else None)
                 self._validate_step(step)
                 self._emit_phase(WorkflowPhase.SAVING)
-                if bundle is not None and not bundle.append_step(step, susceptibility=susc):
+                if bundle is not None and not bundle.append_step(step, susceptibility=susc,
+                        rmg_treatment=rmg_treatment,
+                        axis_sd_emu=(self._last_collection_stats.axis_sd_emu
+                                     if self._last_collection_stats is not None else None),
+                        sample_height_cm=sample_height_cm):
                     self._skipped_labels.append(label)
                     self._emit_warning(
                         f"Step {label} is already present from an interrupted run; "
@@ -924,6 +941,19 @@ class MeasurementWorker(QtCore.QThread):
         provider = getattr(self._backend,"pulse_treatment_records",())
         return tuple(provider() if callable(provider) else provider or ())
 
+    def _rmg_treatment(self, label, *, af_start, pulse_start):
+        def accepted(record):
+            return (record.run_id == self._run_id and record.sample_id == self._meta.name
+                    and record.simulated is self._simulated and record.safe_state_confirmed is True
+                    and not record.error)
+
+        af = next((record for record in reversed(self._backend_af_records()[af_start:])
+                   if accepted(record) and record.plan.label == label), None)
+        pulse = next((record for record in reversed(self._backend_pulse_records()[pulse_start:])
+                      if accepted(record) and record.circuit is not None
+                      and record.circuit.safe_state_confirmed is True), None)
+        return describe_rmg_treatment(label, af=af, pulse=pulse)
+
     def _write_pulse_treatment_artifacts(self):
         written = {identity for identity,_path in self._pulse_artifacts}
         for record in self._backend_pulse_records()[self._pulse_record_start_count:]:
@@ -987,7 +1017,7 @@ class MeasurementWorker(QtCore.QThread):
             self._susceptibility_artifacts.append((acquisition_id, target))
             written.add(acquisition_id)
 
-    def _apply_measurement_context(self) -> None:
+    def _apply_measurement_context(self, *, carried_label: str | None = None) -> None:
         """Give the backend the identity that belongs in each block audit."""
         halt_setter = getattr(self._backend, "set_halt_check", None)
         if callable(halt_setter):
@@ -997,14 +1027,17 @@ class MeasurementWorker(QtCore.QThread):
                 self._comm_warning(f"set_halt_check failed: {exc}")
         setter = getattr(self._backend, "set_measurement_context", None)
         if setter is None or not callable(setter):
+            if carried_label is not None and not self._simulated:
+                raise ValueError('A native Down pass requires a read-only original treatment context.')
             return
+        context = dict(sample_name=self._meta.name, run_id=self._run_id, operator=self._operator)
+        if carried_label is not None:
+            context['treatment_label'] = carried_label
         try:
-            setter(
-                sample_name=self._meta.name,
-                run_id=self._run_id,
-                operator=self._operator,
-            )
+            setter(**context)
         except Exception as exc:
+            if carried_label is not None and not self._simulated:
+                raise ValueError('Cannot bind the original treatment label for the Down acquisition.') from exc
             self._comm_warning(f"set_measurement_context failed: {exc}")
 
     def _record_block_evidence(

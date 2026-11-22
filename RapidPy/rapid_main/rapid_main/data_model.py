@@ -390,8 +390,25 @@ class ProbeAngleOptimizer:
 
 @dataclass
 class RmgRecord:
-    """One line from a `.rmg` sidecar file (comma-delimited, 9+ columns)."""
+    """One data line in either the early sparse or the complete RMG format."""
     step_type: str          # column 0: AF, TT, IRM, ARM, AFz, AFmax
-    step_value: float       # column 1: field (Oe) or temperature (°C)
+    step_value: float | None  # column 1: field (G) or temperature (°C)
     susceptibility: float   # column 8: susceptibility (emu/Oe)
-    raw_fields: list = field(default_factory=list)  # all raw columns for round-trip fidelity
+    raw_fields: list[str] = field(default_factory=list)
+    bias_field_g: float | None = None
+    spin_speed_rps: float | None = None
+    hold_time_s: float | None = None
+    moment_z_emu: float | None = None
+    sd_z_emu: float | None = None
+    intensity_z_emu_per_cm3: float | None = None
+    moment_x_emu: float | None = None
+    sd_x_emu: float | None = None
+    moment_y_emu: float | None = None
+    sd_y_emu: float | None = None
+    remarks: str = ''
+    core_dec: float | None = None
+    core_inc: float | None = None
+    intensity_emu_per_cm3: float | None = None
+    csd: float | None = None
+    sample_height_cm: float | None = None
+    timestamp: str = ''

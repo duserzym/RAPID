@@ -2637,3 +2637,27 @@ Reference fixtures cover the VB6 equations, folded bedding, optional registry
 fields, published units, and live coordinate controls. The packaged Windows
 startup and offline smoke checks passed for six panels and six helpers. The
 bundle is available locally under `.tmp/coordinate-release/dist/RapidPyMain`.
+
+RMG fields and paired treatment checkpoint (2026-11-22). New measurement
+bundles write the full VB6 RMG layout, with treatment levels in gauss or
+degrees Celsius, moment components and available uncertainty, susceptibility,
+core direction, and intensity. Verified treatment records supply bias, spin,
+hold time, and applied fields when present. Queue specimen height uses the
+measured raw height and imported `UpDownMotor1cm` scale. Earlier sparse RMG
+files remain readable and preserve their original columns when rewritten.
+
+As in VB6, Down uses the original Up treatment context without actuating
+the treatment a second time. Native Up records retain the RMG treatment
+parameters in the acquisition seal for later Down publication. The independent
+VB6 Up input uses the explicit original step and available historical evidence.
+Bundle publication recovery, broader VB6 parity, and physical acceptance remain required.
+An injected MagIC replacement failure in a disposable directory preserved the old
+MagIC files and provenance but left new CIT and RMG files. This records the failure
+case for the publication recovery checkpoint.
+
+The corrected staged regression passed 1,430 tests in 687.557 seconds with
+process exit 0. It covers actual Up field reuse, complete RMG rows, older sparse
+input, and measured height conversion without changes to motion calibration.
+The Windows build from the same application source passed packaged startup and
+offline smoke for all six panels and six helpers. The candidate is available
+locally under `.tmp/rmg-release/dist/RapidPyMain`.

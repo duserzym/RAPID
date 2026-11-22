@@ -28,12 +28,17 @@ class RrmTreatmentPlan:
     bias_mT: float | None = None
 
 
-def plan_rrm_treatment(label, config, *, sample_height=None):
+def parse_rrm_request(label):
     match = re.fullmatch(r"(RRMZ|RRM)\s*(\d+(?:\.\d+)?)\s*/\s*(-?\d+(?:\.\d+)?)(?:\s*RPS)?(?:\s*@\s*(\d+(?:\.\d+)?))?", label.strip().upper())
     if not match:
         raise ValueError("RRM requires field and signed spin speed: RRM100/5 or RRMZ100/-5 (mT/rps).")
     field, speed = float(match[2]), float(match[3])
     bias = float(match[4]) if match[4] is not None else None
+    return match[1], field, speed, bias
+
+
+def plan_rrm_treatment(label, config, *, sample_height=None):
+    family, field, speed, bias = parse_rrm_request(label)
     if bias is not None:
         from .arm_bias import plan_arm_bias
         plan_arm_bias(bias, config.irm_arm)
@@ -58,7 +63,7 @@ def plan_rrm_treatment(label, config, *, sample_height=None):
     target = math.floor(cfg.coil_position + height / 2)
     if target == 0 or (target > 0) != (cfg.coil_position > 0):
         raise ValueError("RRM specimen centre crosses the configured coil side.")
-    ramp = plan_calibrated_af_ramp(label, field, "axial" if match[1] == "RRMZ" else "transverse", cfg)
+    ramp = plan_calibrated_af_ramp(label, field, "axial" if family == "RRMZ" else "transverse", cfg)
     ramp_seconds = ramp.ramp_peak_v / ramp.slope_up_vps + ramp.hold_ms / 1000 + ramp.ramp_peak_v / ramp.slope_down_vps
     duration = max(300., ramp_seconds + 30.)
     velocity = abs(motor.turning_motor_1rps * speed)

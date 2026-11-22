@@ -559,8 +559,12 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         return bool(records and not records[-1].safe_state_confirmed)
 
     def _safety_profile(self):
-        return {name: dataclasses.asdict(getattr(self._config, name))
-                for name in ("motor_station", "changer", "motion", "af_demag", "irm_arm", "pulse_irm")}
+        profile = {name: dataclasses.asdict(getattr(self._config, name))
+                   for name in ("motor_station", "changer", "motion", "af_demag", "irm_arm", "pulse_irm")}
+        # The display/export scale changes no raw motion, field, or stop limit.
+        # Keep existing recovery profiles readable after the schema addition.
+        profile['motor_station'].pop('lift_counts_per_cm', None)
+        return profile
 
     def _acquisition_safety_profile(self):
         return dict(helper='rapid_main_queue_acquisition',
@@ -986,6 +990,14 @@ class QueueHardwareBackend(MeasurementAutomationBackend):
         if geometry is None:
             return int(self._config.motion.sample_height)
         return geometry.height(self._sample_name, own_stage_token=getattr(self, '_geometry_stage_token', None))
+
+    def measured_specimen_height_cm(self) -> float | None:
+        geometry = getattr(self, '_queue_specimen_geometry', None)
+        scale = self._config.motor_station.lift_counts_per_cm
+        if (geometry is None or getattr(geometry, 'is_holder', False) or type(scale) not in (int, float)
+                or not math.isfinite(scale) or scale <= 0):
+            return None
+        return self._sample_height() / scale
 
     def clear_specimen_geometry(self):
         """Discard sample geometry only after its verified original-slot return."""

@@ -101,7 +101,7 @@ class MeasurementProgress:
             self.read_step(index - 1)
         self._write(f'{index:05d}-started.json', self._step(index))
 
-    def capture_step(self, index, *, blocks, readings, susceptibility=None):
+    def capture_step(self, index, *, blocks, readings, susceptibility=None, rmg_treatment=None, sample_height_cm=None):
         self._require_owner()
         started, _ = self._read(f'{index:05d}-started.json')
         if started != self._step(index):
@@ -110,6 +110,10 @@ class MeasurementProgress:
         payload = dict(**self._step(index), blocks=raw, readings=readings)
         if susceptibility is not None:
             payload['susceptibility'] = susceptibility
+        if rmg_treatment is not None:
+            payload['rmg_treatment'] = asdict(rmg_treatment)
+        if sample_height_cm is not None:
+            payload['sample_height_cm'] = sample_height_cm
         payload = json.loads(canonical(payload))  # Detach mutable caller inputs.
         payload.update(self._derive(payload))
         self._write(f'{index:05d}-captured.json', payload)
@@ -151,10 +155,19 @@ class MeasurementProgress:
         payload, digest = self._read(f'{index:05d}-captured.json')
         expected = self._step(index)
         required = {*expected, 'blocks', 'readings', 'kind', 'cycle_statistics', 'block_statistics', 'legacy_up'}
-        if not isinstance(payload, dict) or set(payload) - {'susceptibility'} != required:
+        optional = {'susceptibility', 'rmg_treatment', 'sample_height_cm'}
+        if not isinstance(payload, dict) or set(payload) - optional != required:
             raise ValueError('Acquisition record has incomplete or unknown fields.')
         if started != expected or any(payload.get(key) != value for key, value in expected.items()):
             raise ValueError('Acquisition step identity changed.')
+        if 'rmg_treatment' in payload:
+            from rapid_main.io.rmg_writer import RmgTreatment
+            if RmgTreatment(**payload['rmg_treatment']).label != expected['label']:
+                raise ValueError('RMG treatment evidence belongs to another acquisition step.')
+        if 'sample_height_cm' in payload:
+            height = payload['sample_height_cm']
+            if type(height) not in (int, float) or not math.isfinite(height) or height <= 0:
+                raise ValueError('Acquisition specimen height must be finite and positive.')
         derived = self._derive(payload)
         if canonical({key: payload.get(key) for key in derived}) != canonical(derived):
             raise ValueError('Acquisition aggregates disagree with retained readings.')

@@ -679,6 +679,13 @@ def import_vb6_ini(config: AppConfig, path: str | Path) -> LegacyIniImportReport
     station.xy_positions = {}
     station.xy_home = []
     station.use_xy_table = None
+    station.lift_counts_per_cm = None
+    raw = _value(parser, 'SteppingMotor', 'UpDownMotor1cm')
+    if raw is not None:
+        value = _parse_float(raw, default=None, section_key='SteppingMotor', field='UpDownMotor1cm', warnings=warnings)
+        if value is not None and math.isfinite(value) and value > 0:
+            station.lift_counts_per_cm = value
+            mark_mapped('SteppingMotor', 'UpDownMotor1cm', 'motor_station.lift_counts_per_cm')
     for axis, port_key, address_key in (
         ("changer_x", "COMPortChanger", "MotorIDChanger"),
         ("changer_y", "COMPortChangerY", "MotorIDChangerY"),

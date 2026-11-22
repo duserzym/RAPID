@@ -289,6 +289,7 @@ class MotorStationConfig:
     use_xy_table: bool | None = None
     xy_positions: dict[str, list[int]] = field(default_factory=dict)
     xy_home: list[int] = field(default_factory=list)
+    lift_counts_per_cm: float | None = None  # legacy UpDownMotor1cm, used for exported specimen height
 
 
 @dataclass

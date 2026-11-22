@@ -687,6 +687,8 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
         self.assertIn("returning", phases)
 
     def test_successful_run_generates_bundle_and_steps(self) -> None:
+        from rapid_main.io.rmg_reader import read_rmg
+
         backend = DeterministicBackend([
             ("NRM", 1.0, 2.0, 3.0),
             ("AF20", 2.0, 2.2, 2.6),
@@ -765,9 +767,10 @@ class TestMeasurementWorkerPreflightTimeout(unittest.TestCase):
             self.assertIn("\tTX\tGOOD1\tNRM\tset_demag_step", transcript_text)
             self.assertIn("\tRX\tGOOD1\t(1.0, 2.0, 3.0)\tread_squid", transcript_text)
             self.assertIn("\tRX\tGOOD1\t0.05\tread_susceptibility", transcript_text)
-            self.assertEqual(
-                (out / "GOOD1" / "GOOD1.rmg").read_text(encoding="latin-1").count("\n"), 3
-            )
+            records = read_rmg(out / 'GOOD1' / 'GOOD1.rmg')
+            self.assertEqual([(record.step_type, record.step_value) for record in records],
+                             [('NRM', 0.), ('AF', 200.), ('SUSC', 0.)])
+            self.assertEqual(records[-1].susceptibility, .05)
         self.assertIn("measuring", phases)
         allowed = {phase.value for phase in WorkflowPhase}
         self.assertTrue(set(phases).issubset(allowed))

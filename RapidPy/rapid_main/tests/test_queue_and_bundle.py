@@ -291,8 +291,9 @@ class TestMeasurementBundleWriter(unittest.TestCase):
             self.assertTrue(specs.exists())
 
             rmg_lines = rmg.read_text(encoding="latin-1").splitlines()
-            self.assertEqual(len(rmg_lines), 2)
-            self.assertIn("0.01", rmg_lines[0])
+            self.assertEqual(len(rmg_lines), 4)
+            self.assertIn("Moment Susceptibility (emu/Oe)", rmg_lines[1])
+            self.assertIn("0.01", rmg_lines[2])
 
             meas_lines = meas.read_text(encoding="utf-8").splitlines()
             self.assertEqual(meas_lines[0], "tab delimited\tmeasurements")

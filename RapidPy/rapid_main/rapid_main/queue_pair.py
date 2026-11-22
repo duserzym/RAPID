@@ -215,8 +215,10 @@ class QueueSide:
                     not isinstance(susceptibility, dict) or type(susceptibility.get('value')) not in (int, float)
                     or not math.isfinite(susceptibility['value']) or not isinstance(susceptibility.get('evidence'), dict)):
                 raise ValueError('Original Up susceptibility record is missing or invalid.')
-            return blocks, susceptibility, identity['source'], dict(progress.reference,
-                seal_sha256=receipt['seal_sha256'])
+            reference = dict(progress.reference, seal_sha256=receipt['seal_sha256'])
+            if 'rmg_treatment' in payload:
+                reference['rmg_treatment'] = payload['rmg_treatment']
+            return blocks, susceptibility, identity['source'], reference
         except (OSError, TypeError, KeyError, AttributeError) as exc:
             raise ValueError('The original accepted Up acquisition is required before the Down pass.') from exc
 

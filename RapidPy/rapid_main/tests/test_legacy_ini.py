@@ -24,6 +24,7 @@ class TestLegacyIniImport(unittest.TestCase):
         self.assertEqual(cfg.general.sample_dir, "C:\\Users\\RockMagnetometer\\Desktop\\PaleoMag 2013\\Settings")
 
         self.assertEqual(cfg.squid.port, "COM1")
+        self.assertEqual(cfg.motor_station.lift_counts_per_cm, 961.)
         self.assertEqual(cfg.vacuum.port, "COM1")
         self.assertEqual(cfg.changer.port, "COM3")
         self.assertEqual(cfg.susceptibility.port, "COM7")

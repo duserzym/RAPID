@@ -31,6 +31,10 @@ class PairBackend(NoCommBackend):
         self.calls.append('SQUID')
         return self.vector
 
+    def set_demag_step(self, label):
+        self.calls.append('treat ' + label)
+        super().set_demag_step(label)
+
     def read_susceptibility(self):
         self.calls.append('SUSC')
         return .25
@@ -91,6 +95,7 @@ class QueuePairTests(unittest.TestCase):
         self.assertEqual(result.collection_stats.position_count, 8)
         self.assertEqual(result.susceptibility, .125)
         self.assertNotIn('SUSC', backend.calls)
+        self.assertNotIn('treat SUSC', backend.calls)
         provenance = json.loads((self.simulated / 'provenance.json').read_text())
         reference = provenance['up_acquisition']
         self.assertEqual(reference['schema'], 'rapidpy.legacy_up_import.v1')
@@ -150,6 +155,8 @@ class QueuePairTests(unittest.TestCase):
         self.assertEqual(result.collection_stats.position_count, 16)
         self.assertEqual(result.susceptibility, .25)
         self.assertNotIn('SUSC', down_backend.calls)
+        self.assertNotIn('treat SUSC', down_backend.calls)
+        self.assertEqual(second._up_reference['rmg_treatment']['label'], 'SUSC')
         self.assertEqual((first._progress.directory / '00000.UP').read_bytes(), raw)
         self.assertTrue((self.simulated / 'A').is_file())
         provenance = json.loads((self.simulated / 'provenance.json').read_text())
@@ -188,6 +195,32 @@ class QueuePairTests(unittest.TestCase):
         _, finished, _ = self.measure(down, backend, meta=SpecimenMeta(name='A', volume=2))
         self.assertEqual(finished, [True])
         self.assertEqual(backend.calls, [])
+
+    def test_down_uses_the_applied_up_field_when_label_has_no_level(self):
+        from rapid_main.af_treatment import AfPass, AfTreatmentPlan, AfTreatmentRecord, CalibratedAfRamp
+        from rapid_main.io.rmg_reader import read_rmg
+
+        up, down = queue_sides('AFmax')
+
+        class UpStation(PairBackend):
+            af_treatment_records = ()
+
+            def set_demag_step(self, label):
+                super().set_demag_step(label)
+                ramp = CalibratedAfRamp(label, 'axial', 125., 1., 1., 50., 1., 1., 400, 100., 'fixture')
+                plan = AfTreatmentPlan(label, -100, (AfPass(0., ramp),))
+                self.af_treatment_records = (AfTreatmentRecord('af-' + 'b' * 32, 'A', up.run_id,
+                    plan, 1, (), '', (), True, True),)
+
+        first, finished, _ = self.measure(up, UpStation((1e-5, 2e-5, 3e-5)))
+        self.assertEqual(finished, [False], first._error_messages)
+        backend = PairBackend((1e-5, 2e-5, 3e-5))
+        second, finished, _ = self.measure(down, backend)
+        self.assertEqual(finished, [False], second._error_messages)
+        self.assertNotIn('treat AFmax', backend.calls)
+        record, = read_rmg(self.simulated / 'A.rmg')
+        self.assertEqual((record.step_type, record.step_value, record.hold_time_s), ('AFmax', 1250., .4))
+        self.assertEqual(second._up_reference['rmg_treatment']['evidence_id'], 'af-' + 'b' * 32)
 
     def test_failed_down_return_preserves_previous_result_and_index(self):
         up, down = queue_sides()
@@ -231,7 +264,9 @@ class QueuePairTests(unittest.TestCase):
                 self.context = context
 
             def set_demag_step(self, label):
-                self.label = label
+                if not self.side.is_up:
+                    raise AssertionError('Down must preserve the Up treatment')
+                self.context['treatment_label'] = label
 
             def return_to_safe_state(self):
                 pass
@@ -241,7 +276,7 @@ class QueuePairTests(unittest.TestCase):
                 observations = [counts_for((0., 0., value), ARCHIVED_CALIBRATION)
                                 for value in (0., z, z, z, z, 0.)]
                 service, *_ = _build_service(observations)
-                context = BlockContext(**self.context, treatment_label=self.label,
+                context = BlockContext(**self.context,
                     config_hash='station', holder_record_id=f'holder-{self.side.is_up}')
                 block = service.acquire(is_up=self.side.is_up, context=context).block
                 block = replace(block, audit=replace(block.audit,

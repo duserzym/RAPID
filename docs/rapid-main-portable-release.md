@@ -46,6 +46,9 @@ ownership leases and handoff environment.
    **Bedding** to review the corresponding direction. RAPID uses the `.sam`
    magnetic declination when supplied. New CIT rows use moment per volume
    (emu/cm³), while the live moment and MagIC use the measured moment.
+   RMG files include treatment levels in gauss or °C, susceptibility, moment
+   components, available uncertainty, and core direction. Sample height is
+   included when a queue measured it and the station has an imported `UpDownMotor1cm`.
 7. After a native interruption, open **Diagnostics > Recover Interrupted Queue**.
    RAPID can retry an interrupted field cutoff, stop and check axes in place for
    pending motion, measurement, treatment or vacuum stages, or publish a shutdown
@@ -70,8 +73,8 @@ ownership leases and handoff environment.
    covers the selected specimens and uses the same SQUID axis convention and gains.
    Enter the historical range factor, which must match the accepted native setting.
    For `SUSC`, transcribe each specimen's original standardized susceptibility from
-   the Up pass record. RAPID measures Down and links the original bytes and operator
-   confirmation to the combined result.
+   the Up pass record. RAPID measures Down without reapplying the treatment and
+   links the original bytes and operator confirmation to the combined result.
 
 Calibration Center records proposals, approval, expiry/invalidation, and
 rollback. Review/approve calibration before using its coefficients. Help →

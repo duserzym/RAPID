@@ -24,7 +24,7 @@ from typing import Any, Mapping
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.io.magic_specimen_writer import append_specimen
 from rapid_main.io.magic_writer import append_measurement
-from rapid_main.io.rmg_writer import append_rmg_record
+from rapid_main.io.rmg_writer import RmgTreatment, append_rmg_record
 from rapid_main.io.specimen_writer import append_step, write_header
 from rapid_main.specimen_paths import contained_path, specimen_output_path
 
@@ -114,7 +114,10 @@ class MeasurementBundleWriter:
             append_specimen(self._staged.magic_specimens_file, self.meta)
             self._header_written = True
 
-    def append_step(self, step: MeasurementStep, susceptibility: float = 0.0) -> bool:
+    def append_step(self, step: MeasurementStep, susceptibility: float = 0.0, *,
+                    rmg_treatment: RmgTreatment | None = None,
+                    axis_sd_emu: tuple[float, float, float] | None = None,
+                    sample_height_cm: float | None = None) -> bool:
         """Append one accepted step. Returns ``False`` when it was a duplicate."""
         self._require_open()
         _paths_for(self.publish_dir, self.meta.name)
@@ -125,7 +128,8 @@ class MeasurementBundleWriter:
             self._skipped_labels.append(label)
             return False
         append_step(self._staged.specimen_file, step)
-        append_rmg_record(self._staged.rmg_file, step, susceptibility=susceptibility)
+        append_rmg_record(self._staged.rmg_file, step, susceptibility=susceptibility, meta=self.meta,
+                          treatment=rmg_treatment, axis_sd_emu=axis_sd_emu, sample_height_cm=sample_height_cm)
         append_measurement(self._staged.magic_measurements_file, self.meta, step)
         self._appended_labels.append(label)
         return True
