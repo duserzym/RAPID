@@ -365,7 +365,8 @@ The build packages a newly staged installation wheel, including metadata,
 icons, common assets, helpers, and GPL licensing. Tests use isolated
 configuration and Qt preferences. The manually triggered **Qualify the
 portable Windows bundle** workflow runs the RAPID Main and Data Review suites,
-then verifies the transferred package on a separate Windows runner. The
+with Sequence layout checks on a 1920 × 1080 virtual display. It then verifies
+the transferred package on a separate Windows runner. The
 qualification artifact contains the report for that candidate commit. Physical
 station, vendor driver, and display checks use the lab's acceptance procedure.
 

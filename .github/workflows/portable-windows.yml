@@ -31,8 +31,15 @@ jobs:
       - name: Run the main-app regression suite
         shell: pwsh
         run: |
-          python -u tools/test_rapid_main.py --verbose --stall-trace > rapidpy-tests.log 2>&1
+          python -u tools/test_rapid_main.py --exclude-pattern test_sequence_ui_smoke.py --verbose --stall-trace > rapidpy-tests.log 2>&1
           if ($LASTEXITCODE -ne 0) { Get-Content rapidpy-tests.log -Tail 120; exit 1 }
+      - name: Run the Sequence layout checks on a desktop work area
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen:configfile=tools/sequence-test-display.json
+        run: |
+          python -u tools/test_rapid_main.py --pattern test_sequence_ui_smoke.py --verbose --stall-trace > sequence-layout-tests.log 2>&1
+          if ($LASTEXITCODE -ne 0) { Get-Content sequence-layout-tests.log -Tail 120; exit 1 }
       - name: Retain regression evidence
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -41,6 +48,7 @@ jobs:
           path: |
             rapidpy-tests.log
             data-review-tests.log
+            sequence-layout-tests.log
           if-no-files-found: ignore
           retention-days: 14
       - name: Build the portable release

@@ -1,6 +1,7 @@
 """Run a RAPID regression suite with isolated operator settings and registry state."""
 from pathlib import Path
 import argparse
+from fnmatch import fnmatchcase
 import os
 import sys
 import tempfile
@@ -31,11 +32,24 @@ class DiagnosticResult(unittest.TextTestResult):
         self.stream.flush()
 
 
+class RegressionLoader(unittest.TestLoader):
+    def __init__(self, excluded_pattern: str | None) -> None:
+        super().__init__()
+        self.excluded_pattern = excluded_pattern
+
+    def loadTestsFromModule(self, module, *args, **kwargs):
+        source = getattr(module, "__file__", None)
+        if self.excluded_pattern and source and fnmatchcase(Path(source).name, self.excluded_pattern):
+            return self.suiteClass()
+        return super().loadTestsFromModule(module, *args, **kwargs)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--suite', choices=('rapid_main', 'data_viewer'), default='rapid_main',
                         help='Test suite to run (default: rapid_main)')
     parser.add_argument('--pattern', default='test*.py', help='Unittest discovery filename pattern')
+    parser.add_argument('--exclude-pattern', help='Exclude test files matching this filename pattern')
     parser.add_argument('--verbose', action='store_true', help='Print each test name for diagnosing stalled runs')
     parser.add_argument('--stall-trace', action='store_true', help='Dump thread stacks after a minute without suite completion')
     args = parser.parse_args()
@@ -67,7 +81,7 @@ def run_suite(args) -> int:
                     super().__init__(*args, **kwargs)
         QtCore.QSettings = IsolatedSettings
         test_root = ROOT / "RapidPy" / args.suite / "tests"
-        suite = unittest.defaultTestLoader.discover(str(test_root), pattern=args.pattern)
+        suite = RegressionLoader(args.exclude_pattern).discover(str(test_root), pattern=args.pattern)
         if not suite.countTestCases():
             print(f"No tests matched {args.pattern!r} in the {args.suite} suite.", file=sys.stderr)
             return 2

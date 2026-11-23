@@ -1,0 +1,13 @@
+{
+  "screens": [
+    {
+      "name": "Sequence test display",
+      "width": 1920,
+      "height": 1080,
+      "logicalDpi": 96,
+      "logicalBaseDpi": 96,
+      "dpr": 1
+    }
+  ],
+  "windowFrameMargins": false
+}
