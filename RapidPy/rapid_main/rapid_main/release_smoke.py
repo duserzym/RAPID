@@ -49,6 +49,7 @@ def _check_transverse_probe(window, app):
         wait_until(lambda: not dialog.active)
         dialog.close()
         app.processEvents()
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
 
 
 def _write_webcam_fixture(path):
@@ -376,6 +377,35 @@ def _check_sample_index_registry(window, root):
         first.deleteLater()
 
 
+def _check_settings_backup(window, app, root):
+    from copy import deepcopy
+    from rapid_main.config import read_config_backup, write_config_backup
+
+    original = window.config
+    reason = window._operating_mode_change_blocker(original.general.nocomm)
+    if reason or window._sequence.has_unsaved_changes() or not original.general.nocomm:
+        print(reason or "The settings backup check requires a clean No-Comm session.", file=sys.stderr)
+        return False
+    backend = window.measurement_backend()
+    restored = deepcopy(original)
+    restored.general.operator = "Offline restored operator"
+    restored.squid.port = "COM22"
+    saved = write_config_backup(restored, root / "settings-backup.json")
+    if not window._restore_settings_and_close(read_config_backup(saved)):
+        return False
+    if window.isVisible() or window.config is not original or window.measurement_backend() is not backend:
+        return False
+
+    reopened = type(window)()
+    try:
+        return (reopened.config == restored and reopened.measurement_backend().simulated
+                and reopened.measurement_backend() is not backend)
+    finally:
+        reopened.hide()
+        reopened.deleteLater()
+        app.processEvents()
+
+
 def run_smoke_test() -> int:
     from PySide6 import QtWidgets
     from rapid_main.offline_profile import offline_profile
@@ -404,25 +434,28 @@ def run_smoke_test() -> int:
             manual_interruption = _check_manual_interruption(root)
             sample_index_registry = _check_sample_index_registry(window, root)
             vrm_practice = _check_vrm_practice(app, root)
+            panels, width, height = window._stack.count(), window.width(), window.height()
+            settings_backup = _check_settings_backup(window, app, root)
             report = {
                 "schema": "rapidpy.release_smoke.v1", "simulated": True,
                 "software_version": software_version(),
                 "ok": (window.config.general.nocomm and all(helpers.values()) and transverse_probe
                        and webcam_decode and measurement_archive and data_review_projection
                        and measurement_backup and sample_index_registry
-                       and vrm_practice and measurement_checkpoint and manual_interruption),
+                       and vrm_practice and measurement_checkpoint and manual_interruption and settings_backup),
                 "transverse_probe": transverse_probe,
                 "webcam_decode": webcam_decode,
                 "measurement_archive": measurement_archive,
                 "data_review_projection": data_review_projection,
                 "measurement_backup": measurement_backup,
+                "settings_backup": settings_backup,
                 "measurement_checkpoint": measurement_checkpoint,
                 "manual_interruption": manual_interruption,
                 "sample_index_registry": sample_index_registry,
                 "vrm_practice": vrm_practice,
                 "compact_display_check": True,
-                "panels": window._stack.count(), "helpers": helpers,
-                "width": window.width(), "height": window.height(),
+                "panels": panels, "helpers": helpers,
+                "width": width, "height": height,
             }
             print(json.dumps(report, indent=2, sort_keys=True))
             return 0 if report["ok"] else 2

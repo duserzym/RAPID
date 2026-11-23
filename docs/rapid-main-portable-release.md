@@ -34,7 +34,8 @@ The individual diagnostic entry points are also available.
 The smoke test uses temporary configuration and INI preferences, forces
 No-Communication, constructs all six main panels, imports all six helper entry
 points, decodes a generated video clip in Webcam Monitor, verifies a simulated
-VRM recording, and prints JSON.
+VRM recording, and reopens RAPID with a restored test settings backup. It prints
+the results as JSON.
 It uses an isolated configuration and leaves instrument connections untouched.
 Startup diagnostics are read-only. Configuration normally
 lives in `~/.rapid/config.json`; `RAPID_CONFIG` selects a different file.
