@@ -503,6 +503,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._owned_dialog_leases: dict[str, object] = {}
         self._owned_dialogs: dict[str, QtWidgets.QWidget] = {}
         self._shutdown_cleanup_requested = False
+        self._settings_to_restore: AppConfig | None = None
         self._shutdown_retry_pending = False
         self._shutdown_requested_dialogs = set()
         self._shutdown_timer = QtCore.QTimer(self)
@@ -3353,7 +3354,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event) -> None:
         """Confirm safe shutdown and persist layout settings before closing."""
         if not self._shutdown_cleanup_requested:
-            if not self._confirm_shutdown(prompt=True, on_close=True):
+            if self._settings_to_restore is None and not self._confirm_shutdown(prompt=True, on_close=True):
                 event.ignore()
                 return
             self._shutdown_cleanup_requested = True
@@ -3380,6 +3381,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._shutdown_timer.stop()
         self._save_layout_state()
+        if self._settings_to_restore is not None:
+            try:
+                self._settings_to_restore.save()
+            except OSError as exc:
+                self._shutdown_cleanup_requested = False
+                event.ignore()
+                QtWidgets.QMessageBox.critical(self, "Restore Settings Backup", f"Restore could not be saved:\n{exc}")
+                return
         super().closeEvent(event)
 
     @QtCore.Slot()
@@ -3455,6 +3464,23 @@ class MainWindow(QtWidgets.QMainWindow):
     def _request_shutdown(self) -> None:
         """Run shutdown flow from menu and toolbar actions."""
         self.close()
+
+    def _restore_settings_and_close(self, restored: AppConfig) -> bool:
+        """Save restored settings at shutdown so active backends keep one configuration."""
+        if not self._sequence.confirm_discard_changes():
+            return False
+        reason = self._operating_mode_change_blocker(restored.general.nocomm)
+        if reason:
+            QtWidgets.QMessageBox.warning(self, "Restore Settings Backup", reason)
+            return False
+        self._settings_to_restore = restored
+        try:
+            closed = self.close()
+            if not closed and self._shutdown_cleanup_requested:
+                self._diagnostic_shutdown_blocked("Settings restore cancelled because the session could not close.")
+            return closed
+        finally:
+            self._settings_to_restore = None
 
     def _restore_layout_state(self) -> None:
         geometry = self._settings.value("ui/window_geometry")

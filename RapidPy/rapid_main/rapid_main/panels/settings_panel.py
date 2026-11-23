@@ -41,18 +41,6 @@ class SettingsPanel(QtWidgets.QWidget):
         hdr.setObjectName("sectionHdr")
         root.addWidget(hdr)
 
-        self._restart_notice = QtWidgets.QLabel(
-            "Restart required: restored hardware settings are saved but are not active yet."
-        )
-        self._restart_notice.setWordWrap(True)
-        self._restart_notice.setStyleSheet(
-            "color: #92400e; background: rgba(245,158,11,0.13); "
-            "border: 1px solid rgba(217,119,6,0.38); border-radius: 8px; "
-            "padding: 7px 10px; font-weight: 650;"
-        )
-        self._restart_notice.hide()
-        root.addWidget(self._restart_notice)
-
         self._tabs = QtWidgets.QTabWidget()
         root.addWidget(self._tabs)
 
@@ -975,8 +963,6 @@ class SettingsPanel(QtWidgets.QWidget):
         self.save_to_config(candidate)
         if not self._apply_settings(candidate, "Settings"):
             return
-        self._restart_notice.hide()
-        setattr(mw, "_settings_restart_required", False)
         QtWidgets.QMessageBox.information(self, "Settings", "Settings saved.")
 
     def _revert(self) -> None:
@@ -1084,7 +1070,7 @@ class SettingsPanel(QtWidgets.QWidget):
         return target
 
     def _restore_backup(self) -> bool:
-        """Validate and persist a backup while leaving live backends untouched."""
+        """Validate a backup and close RAPID before using the new configuration."""
 
         mw = self.window()
         current = getattr(mw, "config", None)
@@ -1114,8 +1100,7 @@ class SettingsPanel(QtWidgets.QWidget):
             QtWidgets.QMessageBox.question(
                 self,
                 "Restore Settings Backup",
-                "Replace all saved RAPID settings with this validated backup?\n\n"
-                "The application must be restarted before restored hardware settings are used.",
+                "Restore this backup and close RAPID? The restored settings will be used the next time RAPID opens.",
                 QtWidgets.QMessageBox.StandardButton.Yes
                 | QtWidgets.QMessageBox.StandardButton.No,
                 QtWidgets.QMessageBox.StandardButton.No,
@@ -1123,26 +1108,4 @@ class SettingsPanel(QtWidgets.QWidget):
             != QtWidgets.QMessageBox.StandardButton.Yes
         ):
             return False
-        if self._settings_change_blocked("Restore Settings Backup", nocomm=restored.general.nocomm):
-            return False
-        try:
-            restored.save()
-        except OSError as exc:
-            QtWidgets.QMessageBox.critical(
-                self, "Restore Settings Backup", f"Restore could not be saved:\n{exc}"
-            )
-            return False
-        mw.config = restored
-        self.load_from_config(restored)
-        if hasattr(mw, "_estimator"):
-            mw._estimator.step_times = restored.sequence.as_estimator_dict()
-        setattr(mw, "_settings_restart_required", True)
-        self._restart_notice.show()
-        if hasattr(mw, "set_status"):
-            mw.set_status("Settings backup restored. Restart required before hardware use.")
-        QtWidgets.QMessageBox.information(
-            self,
-            "Restore Settings Backup",
-            "Settings were restored and saved. Restart RAPID before connecting to or controlling hardware.",
-        )
-        return True
+        return mw._restore_settings_and_close(restored)

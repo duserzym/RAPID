@@ -5,7 +5,6 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from PySide6 import QtWidgets
@@ -17,6 +16,7 @@ from rapid_main.config import (
     write_config_backup,
 )
 from rapid_main.panels.settings_panel import SettingsPanel
+from rapid_main.offline_profile import offline_profile
 
 
 class ConfigBackupTests(unittest.TestCase):
@@ -69,48 +69,60 @@ class ConfigBackupTests(unittest.TestCase):
             self.assertEqual(AppConfig.load(path).general.lab_name, "Atomic Lab")
             self.assertEqual(list(root.glob("*.tmp")), [])
 
-    def test_restore_persists_validated_config_and_requires_restart(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
+    def test_restore_persists_only_when_closing_and_reloads_on_next_launch(self) -> None:
+        from rapid_main.app import MainWindow
+
+        with tempfile.TemporaryDirectory() as temporary, offline_profile(Path(temporary)) as profile:
             root = Path(temporary)
             backup = root / "backup.json"
-            active_config = root / "active.json"
-            restored = AppConfig()
+            active_config = AppConfig.default_path()
+            restored = AppConfig.load(active_config)
             restored.general.operator = "Restored Operator"
             restored.squid.port = "COM22"
             write_config_backup(restored, backup)
 
-            window = QtWidgets.QMainWindow()
-            window.config = AppConfig()  # type: ignore[attr-defined]
-            window._operating_mode_change_blocker = Mock(return_value="")  # type: ignore[attr-defined]
-            window._on_nocomm_toggled = Mock()  # type: ignore[attr-defined]
-            window._estimator = SimpleNamespace(step_times={})  # type: ignore[attr-defined]
-            window.set_status = Mock()  # type: ignore[attr-defined]
-            panel = SettingsPanel()
-            window.setCentralWidget(panel)
+            window = MainWindow()
+            window._set_show_startup_guide(False)
+            window.show()
+            original = window.config
+            backend = window.measurement_backend()
+            original_bytes = active_config.read_bytes()
+            self.assertTrue(original.general.nocomm)
+            try:
+                with (
+                    patch.object(QtWidgets.QFileDialog, "getOpenFileName", return_value=(str(backup), "")),
+                    patch.object(QtWidgets.QMessageBox, "question", return_value=QtWidgets.QMessageBox.StandardButton.Yes),
+                    patch.object(QtWidgets.QMessageBox, "critical") as error,
+                ):
+                    with patch.object(window._sequence, "confirm_discard_changes", return_value=False):
+                        self.assertFalse(window._settings_panel._restore_backup())
+                    with patch.object(AppConfig, "save", side_effect=OSError("Disk unavailable")):
+                        self.assertFalse(window._settings_panel._restore_backup())
+                    error.assert_called_once()
+                    self.assertTrue(window.isVisible())
+                    self.assertIs(window.config, original)
+                    self.assertEqual(active_config.read_bytes(), original_bytes)
+                    self.assertTrue(window._settings_panel._restore_backup())
+                self.assertFalse(window.isVisible())
+                self.assertIs(window.config, original)
+                self.assertIs(window.measurement_backend(), backend)
+                self.assertEqual(window.config.general.operator, profile.general.operator)
 
-            with (
-                patch.dict(os.environ, {"RAPID_CONFIG": str(active_config)}),
-                patch.object(
-                    QtWidgets.QFileDialog,
-                    "getOpenFileName",
-                    return_value=(str(backup), ""),
-                ),
-                patch.object(
-                    QtWidgets.QMessageBox,
-                    "question",
-                    return_value=QtWidgets.QMessageBox.StandardButton.Yes,
-                ),
-                patch.object(QtWidgets.QMessageBox, "information"),
-            ):
-                self.assertTrue(panel._restore_backup())
-
-            self.assertEqual(window.config.general.operator, "Restored Operator")  # type: ignore[attr-defined]
-            self.assertEqual(AppConfig.load(active_config).squid.port, "COM22")
-            self.assertEqual(panel._operator.text(), "Restored Operator")
-            self.assertTrue(window._settings_restart_required)  # type: ignore[attr-defined]
-            self.assertFalse(panel._restart_notice.isHidden())
-            window._on_nocomm_toggled.assert_not_called()  # type: ignore[attr-defined]
-            window.deleteLater()
+                reopened = MainWindow()
+                try:
+                    self.assertTrue(reopened.config.general.nocomm)
+                    self.assertEqual(reopened.config.general.operator, "Restored Operator")
+                    self.assertEqual(reopened.config.squid.port, "COM22")
+                    self.assertIsNot(reopened.measurement_backend(), backend)
+                finally:
+                    reopened._shutdown_cleanup_requested = True
+                    reopened.close()
+                    reopened.deleteLater()
+            finally:
+                if window.isVisible():
+                    window._shutdown_cleanup_requested = True
+                    window.close()
+                window.deleteLater()
 
     def test_restore_is_blocked_while_workflow_is_active(self) -> None:
         window = QtWidgets.QMainWindow()
