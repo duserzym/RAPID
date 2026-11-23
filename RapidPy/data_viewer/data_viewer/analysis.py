@@ -62,19 +62,22 @@ def principal_component_fit(
         return None
     # Fit on a unitless scale so numerical cutoffs do not depend on moment units.
     vectors /= scale
-    if include_origin:
-        centered = vectors.copy()
-        center = np.zeros(3, dtype=float)
-    else:
-        center = vectors.mean(axis=0)
-        centered = vectors - center
+    mean = vectors.mean(axis=0)
+    center = np.zeros(3, dtype=float) if include_origin else mean
+    centered = vectors - center
     cov = centered.T @ centered
     eigenvalues, eigenvectors = np.linalg.eigh(cov)
     order = np.argsort(eigenvalues)[::-1]
     eigenvalues = eigenvalues[order]
     direction = eigenvectors[:, order[0]]
-    span = vectors[-1] - vectors[0]
-    if np.dot(direction, span) < 0:
+    # Free fits follow the remanence removed by treatment. Anchored fits
+    # point from the origin toward the measured vectors.
+    removed_component = vectors[0] - vectors[-1]
+    reference = mean if include_origin else removed_component
+    alignment = float(np.dot(direction, reference))
+    if include_origin and alignment == 0.0:
+        alignment = float(np.dot(direction, removed_component))
+    if alignment < 0.0:
         direction = -direction
     dec, inc = _cartesian_to_dir(direction)
     lam1 = eigenvalues[0]
@@ -96,17 +99,21 @@ def principal_component_segment(
     coordinate_system: CoordinateSystem = "specimen",
     include_origin: bool = False,
 ) -> tuple[np.ndarray, np.ndarray] | None:
-    """Return the fitted line segment over the projected span of the selected measurements."""
+    """Return the projected line segment in first-to-last treatment order."""
     fit = principal_component_fit(steps, coordinate_system, include_origin)
     if fit is None:
         return None
     distances = [float(np.dot(vector_for_step(step, coordinate_system) - fit.center, fit.direction))
                  for step in steps]
+    descending = distances[0] > distances[-1]
     if include_origin:
         distances.append(0.0)
+    start, end = min(distances), max(distances)
+    if descending:
+        start, end = end, start
     return (
-        fit.center + fit.direction * min(distances),
-        fit.center + fit.direction * max(distances),
+        fit.center + fit.direction * start,
+        fit.center + fit.direction * end,
     )
 
 

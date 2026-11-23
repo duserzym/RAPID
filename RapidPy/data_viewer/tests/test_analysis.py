@@ -54,6 +54,20 @@ class TestViewerAnalysis(unittest.TestCase):
         self.assertGreater(fit.eigenvalues[0], fit.eigenvalues[1])
         self.assertLess(fit.mad, 25.0)
 
+    def test_free_fit_reports_the_removed_remanence_direction(self) -> None:
+        steps = [_step("NRM", 3, 0, 0), _step("AF20", 2, 0, 0), _step("AF40", 1, 0, 0)]
+        fit = principal_component_fit(steps)
+        assert fit is not None
+        np.testing.assert_allclose(fit.direction, [1, 0, 0])
+        self.assertAlmostEqual(fit.dang, 0.0)
+
+    def test_anchored_fit_points_from_the_origin_toward_the_readings(self) -> None:
+        steps = [_step("NRM", 1, 0, 0), _step("AF20", 2, 0, 0), _step("AF40", 3, 0, 0)]
+        for order in (steps, steps[::-1]):
+            fit = principal_component_fit(order, include_origin=True)
+            assert fit is not None
+            np.testing.assert_allclose(fit.direction, [1, 0, 0])
+
     def test_fit_angles_are_independent_of_the_moment_scale(self) -> None:
         steps = [
             replace(_step(label, moment, 0, 0), crdec=dec, crinc=inc)
