@@ -32,10 +32,12 @@ from data_viewer.data_loading import (
     MeasurementStep, SpecimenMeta, SusceptibilityPoint, ViewerDataset, ViewerSpecimen,
     load_cit_specimen, load_input, load_magic_directory, watch_paths_for_dataset,
 )
+from rapidpy_common.flow_layout import FlowLayout
 from rapidpy_common.ui import apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon
 from rapidpy_common.resources import asset_directory
 
 FitBounds = tuple[tuple[str, int] | None, tuple[str, int] | None]
+_COMPACT_VIEW_WIDTH = 850
 
 
 # ── Demo data ────────────────────────────────────────────────────────────────
@@ -771,6 +773,13 @@ class DataTableWidget(QtWidgets.QTableWidget):
 
 
 # ── Main window ───────────────────────────────────────────────────────────────
+class _ReviewContent(QtWidgets.QWidget):
+    def heightForWidth(self, width: int) -> int:
+        # Scroll when the wrapped controls and panels need extra height.
+        layout = self.layout()
+        return layout.minimumHeightForWidth(width) if layout is not None else super().heightForWidth(width)
+
+
 class ZijderveldWindow(QtWidgets.QMainWindow):
     """Main application window for RapidPy DataViewer."""
 
@@ -778,7 +787,8 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("RapidPy DataViewer — RAPID")
         self.resize(1380, 860)
-        self.setMinimumSize(980, 620)
+        self._compact_layout = False
+        self._wide_split_sizes = ([290, 980], [640, 430])
         self._dataset: ViewerDataset | None = None
         self._current_specimen: ViewerSpecimen | None = None
         self._recent_step_count = 0
@@ -797,104 +807,20 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
 
     # ── UI ─────────────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
-        root = QtWidgets.QWidget()
-        self.setCentralWidget(root)
+        root = _ReviewContent()
         vl = QtWidgets.QVBoxLayout(root)
         vl.setContentsMargins(0, 0, 0, 0)
         vl.setSpacing(0)
 
-        # Toolbar strip
-        tb_frame = QtWidgets.QFrame()
-        tb_frame.setFixedHeight(92)
-        tb_frame.setStyleSheet(
-            "QFrame { background: #ffffff; border-bottom: 1px solid rgba(122,2,25,0.10); }"
-        )
-        tb_layout = QtWidgets.QVBoxLayout(tb_frame)
-        tb_layout.setContentsMargins(14, 8, 14, 8)
-        tb_layout.setSpacing(6)
-
-        # Top row: title, dataset, load buttons
-        top_row = QtWidgets.QHBoxLayout()
-        top_row.setSpacing(8)
-        title = QtWidgets.QLabel("RapidPy DataViewer")
-        title.setStyleSheet("font-size: 14px; font-weight: 700; color: #7A0219;")
-        top_row.addWidget(title)
-
-        top_row.addWidget(_vline())
-
-        self._dataset_lbl = QtWidgets.QLabel("Demo dataset")
-        self._dataset_lbl.setStyleSheet("color: #6b7280; font-size: 12px;")
-        top_row.addWidget(self._dataset_lbl)
-
-        top_row.addStretch()
-
-        load_btn = QtWidgets.QPushButton("📂  Open File")
-        load_btn.clicked.connect(self._open_file)
-        dir_btn = QtWidgets.QPushButton("📁  Open MagIC Directory")
-        dir_btn.clicked.connect(self._open_directory)
-        demo_btn = QtWidgets.QPushButton("🔄  Load Demo")
-        demo_btn.clicked.connect(self._load_demo)
-        top_row.addWidget(load_btn)
-        top_row.addWidget(dir_btn)
-        top_row.addWidget(demo_btn)
-        tb_layout.addLayout(top_row)
-
-        # Bottom row: controls and settings
-        bottom_row = QtWidgets.QHBoxLayout()
-        bottom_row.setSpacing(8)
-
-        bottom_row.addWidget(QtWidgets.QLabel("Coords"))
-        self._coord_combo = QtWidgets.QComboBox()
-        self._coord_combo.addItem("Specimen", "specimen")
-        self._coord_combo.addItem("Geographic", "geographic")
-        self._coord_combo.addItem("Tilt-corrected", "tilt-corrected")
-        self._coord_combo.currentIndexChanged.connect(self._update_all)
-        bottom_row.addWidget(self._coord_combo)
-
-        bottom_row.addWidget(QtWidgets.QLabel("Plot"))
-        self._view_combo = QtWidgets.QComboBox()
-        self._view_combo.setAccessibleName("Specimen plot")
-        self._view_combo.addItems(["2D component view", "3D vector view"])
-        self._view_combo.currentIndexChanged.connect(self._sync_directional_stack)
-        bottom_row.addWidget(self._view_combo)
-
-        self._scale_csd = QtWidgets.QCheckBox("Scale point size by CSD")
-        self._scale_csd.toggled.connect(self._update_all)
-        bottom_row.addWidget(self._scale_csd)
-
-        bottom_row.addWidget(QtWidgets.QLabel("Fit range"))
-        self._fit_start = QtWidgets.QComboBox()
-        self._fit_end = QtWidgets.QComboBox()
-        self._fit_start.currentIndexChanged.connect(self._handle_fit_range_change)
-        self._fit_end.currentIndexChanged.connect(self._handle_fit_range_change)
-        self._fit_start.setMinimumWidth(120)
-        self._fit_end.setMinimumWidth(120)
-        bottom_row.addWidget(self._fit_start)
-        bottom_row.addWidget(QtWidgets.QLabel("to"))
-        bottom_row.addWidget(self._fit_end)
-
-        self._include_origin = QtWidgets.QCheckBox("Include origin in fit")
-        self._include_origin.toggled.connect(self._update_all)
-        bottom_row.addWidget(self._include_origin)
-
-        self._auto_watch = QtWidgets.QCheckBox("Auto-watch")
-        self._auto_watch.setChecked(True)
-        self._auto_watch.toggled.connect(self._refresh_watch_paths)
-        bottom_row.addWidget(self._auto_watch)
-
-        self._watch_lbl = QtWidgets.QLabel("Watch off")
-        self._watch_lbl.setStyleSheet("color: #7a736d; font-size: 11px;")
-        bottom_row.addWidget(self._watch_lbl)
-
-        bottom_row.addStretch()
-        tb_layout.addLayout(bottom_row)
-
-        vl.addWidget(tb_frame)
+        self._toolbar = self._build_toolbar()
+        vl.addWidget(self._toolbar)
 
         main_split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         main_split.setChildrenCollapsible(False)
+        self._main_split = main_split
 
         left_panel = QtWidgets.QFrame()
+        self._summary_panel = left_panel
         left_panel.setMaximumWidth(340)
         left_layout = QtWidgets.QVBoxLayout(left_panel)
         left_layout.setContentsMargins(12, 12, 12, 12)
@@ -907,12 +833,12 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         source_layout.setSpacing(6)
         source_layout.addWidget(_section_label("Dataset Summary"))
         self._source_lbl = QtWidgets.QLabel("Demo dataset")
-        self._source_lbl.setWordWrap(True)
+        self._source_lbl.setTextFormat(QtCore.Qt.TextFormat.PlainText)
         self._experiment_lbl = QtWidgets.QLabel("Experiment type: AF")
         self._step_count_lbl = QtWidgets.QLabel("Steps: 0")
         self._fit_summary = QtWidgets.QLabel("Fit summary will appear here once a specimen is loaded.")
-        self._fit_summary.setWordWrap(True)
         for widget in (self._source_lbl, self._experiment_lbl, self._step_count_lbl, self._fit_summary):
+            widget.setWordWrap(True)
             widget.setStyleSheet("color: #5b544f;")
             source_layout.addWidget(widget)
         left_layout.addWidget(source_card)
@@ -926,10 +852,6 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         self._specimen_list = QtWidgets.QListWidget()
         self._specimen_list.currentRowChanged.connect(self._change_specimen)
         specimen_layout.addWidget(self._specimen_list, 1)
-        helper = QtWidgets.QLabel("Use the fit-range controls above to mimic quick lower/upper-bound PCA selection without opening the heavier PmagPy GUIs.")
-        helper.setWordWrap(True)
-        helper.setStyleSheet("color: #7a736d; font-size: 11px;")
-        specimen_layout.addWidget(helper)
         left_layout.addWidget(specimen_card, 1)
 
         suggestion_card = QtWidgets.QFrame()
@@ -939,6 +861,7 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         suggestion_layout.setSpacing(8)
         suggestion_layout.addWidget(_section_label("Next-Step Hint"))
         self._suggestion_title = QtWidgets.QLabel("No suggestion yet")
+        self._suggestion_title.setWordWrap(True)
         self._suggestion_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #7A0219;")
         self._suggestion_text = QtWidgets.QTextBrowser()
         self._suggestion_text.setOpenExternalLinks(True)
@@ -952,6 +875,7 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         right_split = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         right_split.setChildrenCollapsible(False)
         right_split.setHandleWidth(6)
+        self._right_split = right_split
 
         self._directional_stack = QtWidgets.QStackedWidget()
         self._zij = ZijderveldWidget()
@@ -978,6 +902,7 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         plots_split.setChildrenCollapsible(False)
         plots_split.setHandleWidth(6)
         plots_split.addWidget(_panel_card("Specimen Plot", self._directional_stack))
+        self._plots_split = plots_split
 
         secondary_split = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         secondary_split.setChildrenCollapsible(False)
@@ -994,23 +919,117 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         secondary_split.setSizes([320, 260])
 
         plots_split.addWidget(secondary_split)
-        plots_split.setSizes([640, 430])
+        plots_split.setSizes(self._wide_split_sizes[1])
         right_split.addWidget(plots_split)
 
         self._table = DataTableWidget()
         right_split.addWidget(_panel_card("Measurement Table", self._table, "Vector columns follow the selected coordinate system."))
         right_split.setSizes([580, 220])
         main_split.addWidget(right_split)
-        main_split.setSizes([290, 980])
-
+        main_split.setSizes(self._wide_split_sizes[0])
         vl.addWidget(main_split, 1)
 
-        # Status bar
+        self._body = QtWidgets.QScrollArea()
+        self._body.setAccessibleName("Data Review content")
+        self._body.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self._body.setWidgetResizable(True)
+        self._body.setWidget(root)
+        self.setCentralWidget(self._body)
+
         self.statusBar().showMessage("Open a CIT specimen, a sample index, or a MagIC directory.")
         self.setStyleSheet(
             "QFrame#viewerCard { background: #ffffff; border: 1px solid #d9dde3; border-radius: 12px; }"
             "QListWidget, QTableWidget, QComboBox, QTextBrowser { background: #ffffff; }"
         )
+
+    def _build_toolbar(self) -> QtWidgets.QFrame:
+        toolbar = QtWidgets.QFrame()
+        toolbar.setObjectName("viewerToolbar")
+        toolbar.setStyleSheet(
+            "QFrame#viewerToolbar { background: #ffffff; border-bottom: 1px solid rgba(122,2,25,0.10); }"
+        )
+        layout = QtWidgets.QVBoxLayout(toolbar)
+        layout.setContentsMargins(10, 7, 10, 7)
+        layout.setSpacing(5)
+
+        actions = QtWidgets.QWidget()
+        files = FlowLayout(actions)
+        for text, open_source in (("Open File…", self._open_file), ("Open MagIC…", self._open_directory),
+                                  ("Load Demo", self._load_demo)):
+            button = QtWidgets.QPushButton(text)
+            button.clicked.connect(open_source)
+            files.addWidget(button)
+        layout.addWidget(actions)
+
+        settings = QtWidgets.QWidget()
+        controls = FlowLayout(settings)
+        self._coord_combo = QtWidgets.QComboBox()
+        self._coord_combo.setAccessibleName("Coordinate system")
+        self._coord_combo.addItem("Specimen", "specimen")
+        self._coord_combo.addItem("Geographic", "geographic")
+        self._coord_combo.addItem("Tilt-corrected", "tilt-corrected")
+        self._coord_combo.currentIndexChanged.connect(self._update_all)
+        controls.addWidget(_control_group(QtWidgets.QLabel("Frame"), self._coord_combo))
+
+        self._scale_csd = QtWidgets.QCheckBox("Scale by CSD")
+        self._scale_csd.setToolTip("Scale point size by circular standard deviation.")
+        self._scale_csd.toggled.connect(self._update_all)
+        controls.addWidget(self._scale_csd)
+
+        self._view_combo = QtWidgets.QComboBox()
+        self._view_combo.setAccessibleName("Specimen plot")
+        self._view_combo.addItems(["Zijderveld (2D)", "Vectors (3D)"])
+        self._view_combo.currentIndexChanged.connect(self._sync_directional_stack)
+        controls.addWidget(_control_group(QtWidgets.QLabel("Plot"), self._view_combo))
+
+        self._fit_start = QtWidgets.QComboBox()
+        self._fit_end = QtWidgets.QComboBox()
+        for combo, name in ((self._fit_start, "Fit start"), (self._fit_end, "Fit end")):
+            combo.setAccessibleName(name)
+            combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(10)
+            combo.currentTextChanged.connect(combo.setToolTip)
+            combo.currentIndexChanged.connect(self._handle_fit_range_change)
+        controls.addWidget(_control_group(QtWidgets.QLabel("Fit from"), self._fit_start))
+        controls.addWidget(_control_group(QtWidgets.QLabel("Fit to"), self._fit_end))
+
+        self._include_origin = QtWidgets.QCheckBox("Anchor fit to origin")
+        self._include_origin.toggled.connect(self._update_all)
+        controls.addWidget(self._include_origin)
+
+        self._auto_watch = QtWidgets.QCheckBox("Auto-watch")
+        self._auto_watch.setChecked(True)
+        self._auto_watch.toggled.connect(self._refresh_watch_paths)
+        controls.addWidget(self._auto_watch)
+
+        self._watch_lbl = QtWidgets.QLabel("Watch off")
+        self._watch_lbl.setStyleSheet("color: #7a736d; font-size: 11px;")
+        controls.addWidget(self._watch_lbl)
+        layout.addWidget(settings)
+        return toolbar
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        compact = event.size().width() < _COMPACT_VIEW_WIDTH
+        if compact == self._compact_layout:
+            return
+        self._compact_layout = compact
+        if compact:
+            self._wide_split_sizes = (self._main_split.sizes(), self._plots_split.sizes())
+
+        orientation = QtCore.Qt.Vertical if compact else QtCore.Qt.Horizontal
+        self._main_split.setOrientation(orientation)
+        self._main_split.insertWidget(0 if compact else 1, self._right_split)
+        self._plots_split.setOrientation(orientation)
+        self._analysis_split.setOrientation(orientation)
+        self._summary_panel.setMaximumWidth(self._body.maximumWidth() if compact else 340)
+        if compact:
+            self._main_split.setSizes([3, 1])
+            self._plots_split.setSizes([1, 1])
+        else:
+            self._main_split.setSizes(self._wide_split_sizes[0])
+            self._plots_split.setSizes(self._wide_split_sizes[1])
+        self._body.verticalScrollBar().setValue(0)
 
     # ── Menu ───────────────────────────────────────────────────────────────
     def _build_menu(self) -> None:
@@ -1099,7 +1118,6 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         self._dataset = dataset
         self._load_request = load_request
         self._loaded_dataset_name = dataset_name
-        self._dataset_lbl.setText(dataset_name)
         self._source_lbl.setText(f"Source: {dataset_name}\nKind: {dataset.source_kind.replace('_', ' ')}")
         row = -1
         with QtCore.QSignalBlocker(self._specimen_list):
@@ -1154,6 +1172,8 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
                 if self._fit_start.currentIndex() > self._fit_end.currentIndex():
                     self._fit_start.setCurrentIndex(0)
                     self._fit_end.setCurrentIndex(last - first)
+        for combo in (self._fit_start, self._fit_end):
+            combo.setToolTip(combo.currentText())
 
     def _handle_fit_range_change(self) -> None:
         if self._fit_start.currentIndex() > self._fit_end.currentIndex():
@@ -1199,6 +1219,7 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         return label, occurrence
 
     def _refresh_watch_paths(self) -> None:
+        self._watch_lbl.setToolTip("")
         existing = self._watcher.files() + self._watcher.directories()
         if existing:
             self._watcher.removePaths(existing)
@@ -1220,7 +1241,8 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
     def _schedule_watched_reload(self, changed_path: str) -> None:
         if not self._auto_watch.isChecked() or self._load_request is None:
             return
-        self._watch_lbl.setText(f"Change detected: {Path(changed_path).name}")
+        self._watch_lbl.setText("Change detected")
+        self._watch_lbl.setToolTip(Path(changed_path).name)
         self._reload_timer.start()
 
     def _reload_watched_source(self) -> None:
@@ -1325,11 +1347,14 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-def _vline() -> QtWidgets.QFrame:
-    f = QtWidgets.QFrame()
-    f.setFrameShape(QtWidgets.QFrame.VLine)
-    f.setStyleSheet("color: rgba(122,2,25,0.20); margin: 8px 2px;")
-    return f
+def _control_group(*widgets: QtWidgets.QWidget) -> QtWidgets.QWidget:
+    group = QtWidgets.QWidget()
+    layout = QtWidgets.QHBoxLayout(group)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(6)
+    for widget in widgets:
+        layout.addWidget(widget)
+    return group
 
 
 def _section_label(text: str) -> QtWidgets.QLabel:

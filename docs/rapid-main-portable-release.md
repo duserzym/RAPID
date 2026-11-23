@@ -69,11 +69,13 @@ The preview and snapshot button become active on receipt of a usable frame.
 6. Review results in Plots/Data Review. Simulation output stays in `SIMULATED`.
    Use **Open File** in **Data Review** to open a CIT specimen directly or to
    browse the specimens listed in a `.sam` index.
-   In the **2D component view**, choose **N–S projection** for east to the
+   In **Zijderveld (2D)**, choose **N–S projection** for east to the
    right or **E–W projection** for north to the right. Positive inclination
    is plotted below zero in both views.
    Use **View → Step labels** to show endpoints, label every measured
    treatment step, or hide labels on the directional plots.
+   On narrow displays the controls wrap and the plots stack vertically. Scroll
+   down to reach the measurement table and specimen list.
    Use **View → Recent steps** to review the latest measurements in the
    directional plots, intensity decay plot, measurement table, and fit range.
    Enter `0` to show all steps, the default. With Auto-watch on, both edges
@@ -388,10 +390,11 @@ to one logical processor. The verifier samples Windows memory every 100 ms.
 The report identifies the candidate revision and records the workload at each
 run so the lab can compare equivalent results on its control computers.
 
-The portable verifier opens the Sample Index dialog at 150% and 200% scaling
-on offscreen work areas. It checks that the registry and specimen selection
-controls fit and that a maximized window keeps its state. Lab sign-off covers
-monitor moves and dock or undock events on the actual workstation displays.
+The portable verifier opens Sample Index and Data Review at 150% and 200%
+scaling on offscreen work areas. It checks that the registry and Data Review
+controls fit, that the plot, measurement table, and specimen list are reachable,
+and that a maximized window keeps its state. Lab sign-off covers monitor moves
+and dock or undock events on the actual workstation displays.
 
 `StationAcceptance.md` ships beside this guide. Its evidence audit checks the
 recorded bench cases and attachment hashes for the candidate revision.
