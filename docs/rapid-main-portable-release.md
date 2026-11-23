@@ -92,6 +92,10 @@ The preview and snapshot button become active on receipt of a usable frame.
    RAPID bundles and archives.
    Run bundles retain scientific outputs, provenance, workflow summaries,
    communication evidence, and a hashed artifact index.
+   Saved quicklooks fit the recorded specimen directions. **Live Measure →
+   Plots** fits the selected coordinate frame and identifies it in the analysis
+   table and exports. Both use the Data Review principal-component calculation
+   and report MAD and DANG with the fit.
    For specimens with orientation headers, use **Core**, **Geographic**, or
    **Bedding** to review the corresponding direction. RAPID uses the `.sam`
    magnetic declination when supplied. New CIT rows use moment per volume

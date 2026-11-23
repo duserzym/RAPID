@@ -11,9 +11,12 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from statistics import mean, median, pstdev
-from typing import Iterable, Sequence
+from typing import TYPE_CHECKING, Iterable, Sequence
 
 from rapid_main.data_model import MeasurementStep
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 Vector3 = tuple[float, float, float]
@@ -35,7 +38,7 @@ class MeasurementVector:
 
 @dataclass(frozen=True)
 class PrincipalAxisFit:
-    """PCA-style best-fit line through measurement vectors."""
+    """Best-fit line through measurement vectors with population variances."""
 
     count: int
     centroid: Vector3
@@ -46,10 +49,25 @@ class PrincipalAxisFit:
     total_variance: float
     variance_fraction: float
     rms_perpendicular: float
+    mad_deg: float | None = None
+    dang_deg: float | None = None
 
     @property
     def is_degenerate(self) -> bool:
-        return self.count < 2 or self.total_variance <= 0.0
+        return self.count < 2 or self.variance_fraction <= 0.0
+
+
+@dataclass(frozen=True)
+class CartesianComponent:
+    """Principal component in the same Cartesian frame as its inputs."""
+
+    center: np.ndarray
+    direction: np.ndarray
+    eigenvalues: np.ndarray
+    variance_fraction: float
+    rms_perpendicular: float
+    mad_deg: float
+    dang_deg: float
 
 
 @dataclass(frozen=True)
@@ -122,36 +140,76 @@ def vector_centroid(vectors: Iterable[MeasurementVector | Vector3]) -> Vector3:
     )
 
 
-def fit_principal_axis(steps_or_vectors: Iterable[MeasurementStep | MeasurementVector | Vector3]) -> PrincipalAxisFit:
-    """Fit a deterministic PCA-style line to measurement vectors.
+def fit_cartesian_component(
+    vectors: Iterable[Sequence[float]], *, include_origin: bool = False,
+) -> CartesianComponent | None:
+    """Fit a line through the centroid or constrained to pass through the origin."""
+    samples = list(vectors)
+    if len(samples) < 2:
+        return None
+    import numpy as np
 
-    The returned axis is the dominant eigenvector of the centered covariance
-    matrix. Its sign is stabilized toward the centroid, or the first non-zero
-    vector when the centroid is zero, so repeated runs produce identical output.
-    """
+    points = np.array(samples, dtype=float)
+    if not np.isfinite(points).all():
+        return None
+    scale = float(np.max(np.abs(points)))
+    if scale == 0.0 or (not include_origin and np.all(points == points[0])):
+        return None
+    # Fit on a unitless scale so the result is independent of moment units.
+    points /= scale
+    mean = points.mean(axis=0)
+    center = np.zeros(3, dtype=float) if include_origin else mean
+    centered = points - center
+    eigenvalues, eigenvectors = np.linalg.eigh(centered.T @ centered)
+    eigenvalues = np.maximum(eigenvalues[::-1], 0.0)
+    primary, second, third = map(float, eigenvalues)
+    if primary <= 0.0:
+        return None
+    direction = eigenvectors[:, -1]
+    # Free fits point along the remanence removed between the endpoint steps.
+    # Anchored fits point away from the origin toward the measured vectors.
+    removed_component = points[0] - points[-1]
+    reference = mean if include_origin else removed_component
+    alignment = float(np.dot(direction, reference))
+    if include_origin and alignment == 0.0:
+        alignment = float(np.dot(direction, removed_component))
+    if alignment < 0.0:
+        direction = -direction
+
+    perpendicular = second + third
+    mad = math.degrees(math.atan(math.sqrt(perpendicular / primary)))
+    center_norm = float(np.linalg.norm(center))
+    dang = 0.0
+    if center_norm > 0.0:
+        cosine = float(np.dot(center, direction)) / center_norm
+        dang = math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
+    residuals = centered - np.outer(centered @ direction, direction)
+    return CartesianComponent(
+        center=center * scale,
+        direction=direction,
+        eigenvalues=(eigenvalues * scale) * scale,
+        variance_fraction=primary / (primary + perpendicular),
+        rms_perpendicular=scale * math.sqrt(float(np.sum(residuals**2)) / len(points)),
+        mad_deg=mad,
+        dang_deg=dang,
+    )
+
+
+def fit_principal_axis(steps_or_vectors: Iterable[MeasurementStep | MeasurementVector | Vector3]) -> PrincipalAxisFit:
+    """Report the free principal-component fit in North/East/Down coordinates."""
 
     points = [_coerce_step_or_vector(item) for item in steps_or_vectors]
     count = len(points)
-    centroid = vector_centroid(points)
-    if count < 2:
+    component = fit_cartesian_component(points)
+    if component is None:
+        centroid = vector_centroid(points)
         axis = _stable_axis((1.0, 0.0, 0.0), centroid, points)
         dec, inc = vector_orientation(axis)
         return PrincipalAxisFit(count, centroid, axis, dec, inc, 0.0, 0.0, 0.0, 0.0)
 
-    centered = [_sub(point, centroid) for point in points]
-    covariance = _covariance(centered)
-    total_variance = covariance[0][0] + covariance[1][1] + covariance[2][2]
-    if total_variance <= 0.0:
-        axis = _stable_axis((1.0, 0.0, 0.0), centroid, points)
-        dec, inc = vector_orientation(axis)
-        return PrincipalAxisFit(count, centroid, axis, dec, inc, 0.0, 0.0, 0.0, 0.0)
-
-    axis = _dominant_eigenvector(covariance)
-    axis = _stable_axis(axis, centroid, points)
-    primary_variance = _rayleigh(covariance, axis)
-    variance_fraction = max(0.0, min(1.0, primary_variance / total_variance))
-    residuals = [_perpendicular_distance(point, centroid, axis) for point in points]
-    rms_perpendicular = math.sqrt(sum(value * value for value in residuals) / count)
+    centroid = tuple(float(value) for value in component.center)
+    axis = tuple(float(value) for value in component.direction)
+    variances = component.eigenvalues / count
     dec, inc = vector_orientation(axis)
     return PrincipalAxisFit(
         count=count,
@@ -159,15 +217,17 @@ def fit_principal_axis(steps_or_vectors: Iterable[MeasurementStep | MeasurementV
         axis=axis,
         declination_deg=dec,
         inclination_deg=inc,
-        primary_variance=primary_variance,
-        total_variance=total_variance,
-        variance_fraction=variance_fraction,
-        rms_perpendicular=rms_perpendicular,
+        primary_variance=float(variances[0]),
+        total_variance=float(variances.sum()),
+        variance_fraction=component.variance_fraction,
+        rms_perpendicular=component.rms_perpendicular,
+        mad_deg=component.mad_deg,
+        dang_deg=component.dang_deg,
     )
 
 
 def vector_orientation(vector: Vector3) -> tuple[float, float]:
-    """Return specimen-frame declination and inclination in degrees."""
+    """Return declination and inclination for a North/East/Down vector."""
 
     x, y, z = vector
     horizontal = math.hypot(x, y)
@@ -293,51 +353,10 @@ def _coerce_vector(item: MeasurementVector | Vector3) -> Vector3:
     return (float(x), float(y), float(z))
 
 
-def _covariance(centered: Sequence[Vector3]) -> tuple[Vector3, Vector3, Vector3]:
-    count = len(centered)
-    return (
-        (
-            sum(point[0] * point[0] for point in centered) / count,
-            sum(point[0] * point[1] for point in centered) / count,
-            sum(point[0] * point[2] for point in centered) / count,
-        ),
-        (
-            sum(point[1] * point[0] for point in centered) / count,
-            sum(point[1] * point[1] for point in centered) / count,
-            sum(point[1] * point[2] for point in centered) / count,
-        ),
-        (
-            sum(point[2] * point[0] for point in centered) / count,
-            sum(point[2] * point[1] for point in centered) / count,
-            sum(point[2] * point[2] for point in centered) / count,
-        ),
-    )
-
-
-def _dominant_eigenvector(matrix: tuple[Vector3, Vector3, Vector3]) -> Vector3:
-    vector = _normalize((1.0, 1.0, 1.0))
-    for _ in range(32):
-        next_vector = _matvec(matrix, vector)
-        if _norm(next_vector) == 0.0:
-            return (1.0, 0.0, 0.0)
-        vector = _normalize(next_vector)
-    return vector
-
-
 def _stable_axis(axis: Vector3, centroid: Vector3, points: Sequence[Vector3]) -> Vector3:
     reference = centroid if _norm(centroid) > 0.0 else next((point for point in points if _norm(point) > 0.0), (1.0, 0.0, 0.0))
     axis = _normalize(axis)
     return _scale(axis, -1.0) if _dot(axis, reference) < 0.0 else axis
-
-
-def _rayleigh(matrix: tuple[Vector3, Vector3, Vector3], axis: Vector3) -> float:
-    return _dot(axis, _matvec(matrix, axis))
-
-
-def _perpendicular_distance(point: Vector3, centroid: Vector3, axis: Vector3) -> float:
-    delta = _sub(point, centroid)
-    parallel = _scale(axis, _dot(delta, axis))
-    return _norm(_sub(delta, parallel))
 
 
 def _directional_spread_deg(samples: Sequence[Vector3], mean_vector: Vector3) -> float | None:
@@ -371,14 +390,6 @@ def _log_decay_slope(moments: Sequence[float]) -> float | None:
     if denominator == 0.0:
         return None
     return sum((index - index_mean) * (value - value_mean) for index, value in zip(indexes, values)) / denominator
-
-
-def _matvec(matrix: tuple[Vector3, Vector3, Vector3], vector: Vector3) -> Vector3:
-    return (
-        _dot(matrix[0], vector),
-        _dot(matrix[1], vector),
-        _dot(matrix[2], vector),
-    )
 
 
 def _sub(left: Vector3, right: Vector3) -> Vector3:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import json
+from datetime import datetime
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +16,9 @@ from rapid_main.dialogs.plots import (
     write_quicklook_csv,
     write_quicklook_json,
 )
+from rapid_main.measurement_worker import _build_step
+from rapid_main.quicklook import write_measurement_quicklook
+from data_viewer.analysis import principal_component_fit
 
 
 class PlotsDialogTests(unittest.TestCase):
@@ -40,7 +44,7 @@ class PlotsDialogTests(unittest.TestCase):
         self.assertAlmostEqual(data["intensity"][0], 1.0)
         self.assertAlmostEqual(data["intensity"][1], math.sqrt(2.0))
         self.assertIn("principal_axis", data["analysis"])
-        self.assertEqual(dialog._analysis_table.rowCount(), 11)
+        self.assertEqual(dialog._analysis_table.rowCount(), 14)
         self.assertTrue(dialog._analysis_table.accessibleName())
         dialog.deleteLater()
 
@@ -88,6 +92,43 @@ class PlotsDialogTests(unittest.TestCase):
         principal = summary["analysis"]["principal_axis"]
         self.assertEqual(principal["coordinate_convention"], "north_east_down")
         self.assertAlmostEqual(principal["inclination_deg"], 90.0)
+
+    def test_quicklook_fit_finds_a_component_orthogonal_to_the_former_starting_vector(self) -> None:
+        for scale in (1.0, 1e-9, 1e-18):
+            with self.subTest(scale=scale):
+                north = [3 * scale, 2 * scale, scale]
+                summary = build_quicklook_summary(north, [-value for value in north], [0.0] * 3,
+                                                  ["NRM", "AF10", "AF20"])
+                fit = summary["analysis"]["principal_axis"]
+                self.assertFalse(fit["degenerate"])
+                self.assertAlmostEqual(fit["declination_deg"], 315.0)
+                self.assertAlmostEqual(fit["variance_fraction"], 1.0)
+                self.assertAlmostEqual(fit["rms_perpendicular"] / scale, 0.0)
+
+    def test_published_quicklook_matches_data_review_in_specimen_coordinates(self) -> None:
+        timestamp = datetime(2026, 5, 26, 12, 0, 0)
+        steps = [
+            _build_step(label, x, y, z, "fixture", timestamp)
+            for label, x, y, z in (
+                ("NRM", 3.0e-9, 0.0, 5.0e-9),
+                ("ATAFX20", 0.0, -3.0e-9, -2.0e-9),
+                ("ATAFY40", 1.0e-9, -1.0e-9, 0.1e-9),
+            )
+        ]
+        review = principal_component_fit(steps)
+        assert review is not None
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "quicklook.json"
+            write_measurement_quicklook(output, steps, simulated=True)
+            summary = json.loads(output.read_bytes())
+        self.assertEqual(summary["labels"], [step.demag_label for step in steps])
+        for plotted, step in zip(summary["inclination"], steps):
+            self.assertAlmostEqual(plotted, step.crinc)
+        fit = summary["analysis"]["principal_axis"]
+        self.assertEqual(fit["coordinate_frame"], "specimen")
+        for field, expected in (("declination_deg", review.dec), ("inclination_deg", review.inc),
+                                ("mad_deg", review.mad), ("dang_deg", review.dang)):
+            self.assertAlmostEqual(fit[field], expected)
 
     def test_dialog_starts_empty_without_implicit_demo_evidence(self) -> None:
         dialog = PlotsDialog()
@@ -164,6 +205,7 @@ class PlotsDialogTests(unittest.TestCase):
         self.assertIn("not hardware evidence", payload["provenance"]["statement"])
         self.assertIn("simulated,provenance_statement", csv_text.splitlines()[0])
         self.assertIn("pca_declination_deg", csv_text.splitlines()[0])
+        self.assertIn("coordinate_frame,pca_mad_deg,pca_dang_deg", csv_text.splitlines()[0])
         self.assertIn(",true,Example plot data; not hardware evidence", csv_text)
         dialog.deleteLater()
 

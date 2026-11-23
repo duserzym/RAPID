@@ -7,6 +7,8 @@ from typing import Iterable, Literal, Sequence
 import numpy as np
 
 from data_viewer.data_loading import MeasurementStep, PaleointensityPoint, ViewerSpecimen
+from rapid_main.analysis import fit_cartesian_component
+from rapid_main.geometry import Angular3D, angular3d_to_viewer_cartesian3d
 
 
 CoordinateSystem = Literal["specimen", "geographic", "tilt-corrected"]
@@ -54,43 +56,15 @@ def principal_component_fit(
     coordinate_system: CoordinateSystem = "specimen",
     include_origin: bool = False,
 ) -> FitResult | None:
-    vectors = np.array([vector_for_step(step, coordinate_system) for step in steps], dtype=float)
-    if len(vectors) < 2 or not np.isfinite(vectors).all():
+    component = fit_cartesian_component(
+        (vector_for_step(step, coordinate_system) for step in steps), include_origin=include_origin,
+    )
+    if component is None:
         return None
-    scale = float(np.max(np.abs(vectors)))
-    if scale == 0.0 or (not include_origin and np.all(vectors == vectors[0])):
-        return None
-    # Fit on a unitless scale so numerical cutoffs do not depend on moment units.
-    vectors /= scale
-    mean = vectors.mean(axis=0)
-    center = np.zeros(3, dtype=float) if include_origin else mean
-    centered = vectors - center
-    cov = centered.T @ centered
-    eigenvalues, eigenvectors = np.linalg.eigh(cov)
-    order = np.argsort(eigenvalues)[::-1]
-    eigenvalues = eigenvalues[order]
-    direction = eigenvectors[:, order[0]]
-    # Free fits follow the remanence removed by treatment. Anchored fits
-    # point from the origin toward the measured vectors.
-    removed_component = vectors[0] - vectors[-1]
-    reference = mean if include_origin else removed_component
-    alignment = float(np.dot(direction, reference))
-    if include_origin and alignment == 0.0:
-        alignment = float(np.dot(direction, removed_component))
-    if alignment < 0.0:
-        direction = -direction
-    dec, inc = _cartesian_to_dir(direction)
-    lam1 = eigenvalues[0]
-    if lam1 <= 0:
-        return None
-    lam2 = max(eigenvalues[1], 0.0)
-    lam3 = max(eigenvalues[2], 0.0)
-    mad = math.degrees(math.atan(math.sqrt((lam2 + lam3) / lam1)))
-    center_norm = float(np.linalg.norm(center))
-    dang = math.degrees(math.acos(np.clip(float(np.dot(center, direction)) / center_norm, -1.0, 1.0))) if center_norm > 0 else 0.0
+    dec, inc = _cartesian_to_dir(component.direction)
     return FitResult(
-        center=center * scale, direction=direction, eigenvalues=(eigenvalues * scale) * scale,
-        dec=dec, inc=inc, mad=mad, dang=dang,
+        center=component.center, direction=component.direction, eigenvalues=component.eigenvalues,
+        dec=dec, inc=inc, mad=component.mad_deg, dang=component.dang_deg,
     )
 
 
@@ -350,14 +324,8 @@ def _cartesian_to_dir(vector: np.ndarray) -> tuple[float, float]:
 
 
 def _dir_to_cartesian(dec_deg: float, inc_deg: float, moment: float) -> np.ndarray:
-    dec = math.radians(dec_deg)
-    inc = math.radians(inc_deg)
-    horiz = moment * math.cos(inc)
-    return np.array([
-        horiz * math.cos(dec),
-        horiz * math.sin(dec),
-        -moment * math.sin(inc),
-    ], dtype=float)
+    vector = angular3d_to_viewer_cartesian3d(Angular3D(dec_deg, inc_deg, moment))
+    return np.array([vector.x, vector.y, vector.z], dtype=float)
 
 
 def _extract_temperature(label: str) -> float:

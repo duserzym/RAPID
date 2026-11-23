@@ -74,7 +74,7 @@ class AnalysisTests(unittest.TestCase):
 
         self.assertEqual(fit.count, 4)
         self.assertTupleAlmostEqual(fit.centroid, (2.5, 2.5, 0.0))
-        self.assertAlmostEqual(fit.declination_deg, 45.0)
+        self.assertAlmostEqual(fit.declination_deg, 225.0)
         self.assertAlmostEqual(fit.inclination_deg, 0.0)
         self.assertAlmostEqual(fit.variance_fraction, 1.0)
         self.assertAlmostEqual(fit.rms_perpendicular, 0.0)

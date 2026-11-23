@@ -9,6 +9,7 @@ from typing import Sequence
 
 from rapid_main.analysis import fit_principal_axis, moment_value_statistics
 from rapid_main.data_model import MeasurementStep
+from rapid_main.geometry import Angular3D, angular3d_to_viewer_cartesian3d
 
 
 def _cart_to_inc_dec(x: float, y: float, z: float) -> tuple[float, float]:
@@ -24,6 +25,8 @@ def build_quicklook_summary(
     east: Sequence[float],
     up: Sequence[float],
     labels: Sequence[str],
+    *,
+    coordinate_frame: str = "unspecified",
 ) -> dict[str, object]:
     """Build the backend-independent quicklook payload without creating a dialog."""
 
@@ -42,7 +45,7 @@ def build_quicklook_summary(
             if not math.isfinite(float(value)):
                 raise ValueError(f"Quicklook {axis} value {index} is not finite.")
     down = [-z for z in u]
-    intensity = [math.sqrt(x**2 + y**2 + z**2) for x, y, z in zip(n, e, u)]
+    intensity = [math.hypot(x, y, z) for x, y, z in zip(n, e, u)]
     inc: list[float] = []
     dec: list[float] = []
     for x, y, z in zip(n, e, u):
@@ -67,6 +70,7 @@ def build_quicklook_summary(
         "analysis": {
             "principal_axis": {
                 "coordinate_convention": "north_east_down",
+                "coordinate_frame": coordinate_frame,
                 "count": principal.count,
                 "centroid": list(principal.centroid),
                 "axis": list(principal.axis),
@@ -76,6 +80,8 @@ def build_quicklook_summary(
                 "total_variance": principal.total_variance,
                 "variance_fraction": principal.variance_fraction,
                 "rms_perpendicular": principal.rms_perpendicular,
+                "mad_deg": principal.mad_deg,
+                "dang_deg": principal.dang_deg,
                 "degenerate": principal.is_degenerate,
             },
             "moment_statistics": {
@@ -136,12 +142,14 @@ def _atomic_write_text(target: Path, text: str) -> Path:
 def write_measurement_quicklook(
     path: Path, steps: Sequence[MeasurementStep], *, simulated: bool
 ) -> Path:
-    """Write the current run's plot data with its measurement provenance."""
+    """Write the run's specimen-frame plot data with its measurement provenance."""
+    vectors = [angular3d_to_viewer_cartesian3d(Angular3D(step.crdec, step.crinc, step.moment)) for step in steps]
     summary = build_quicklook_summary(
-        [step.sdx for step in steps],
-        [step.sdy for step in steps],
-        [step.sdz for step in steps],
+        [vector.x for vector in vectors],
+        [vector.y for vector in vectors],
+        [vector.z for vector in vectors],
         [step.demag_label for step in steps],
+        coordinate_frame="specimen",
     )
     summary["provenance"] = {
         "kind": "simulated" if simulated else "measurement",

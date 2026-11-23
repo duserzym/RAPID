@@ -228,9 +228,10 @@ class TestMeasurementPanelHelpers(unittest.TestCase):
 
         self.assertTrue(applied)
         self.assertEqual(dialog._last_plot_data["labels"], ["NRM", "AF20"])
-        self.assertEqual(dialog._last_plot_data["north"], [1.0, 0.0])
-        self.assertEqual(dialog._last_plot_data["east"], [0.0, 1.0])
-        self.assertEqual(dialog._last_plot_data["up"], [0.0, -1.0])
+        self.assertAlmostEqual(dialog._last_plot_data["east"][1], 2.0**0.5)
+        self.assertAlmostEqual(dialog._last_plot_data["up"][1], -(2.0**0.5))
+        self.assertAlmostEqual(dialog._last_plot_data["inclination"][1], 45.0)
+        self.assertEqual(dialog._last_plot_data["analysis"]["principal_axis"]["coordinate_frame"], "specimen")
         self.assertTrue(dialog._demo_lbl.text().startswith("READY —"))
         self.assertIn("Current measurement run", dialog.quicklook_summary()["provenance"]["statement"])
         dialog.deleteLater()
@@ -356,11 +357,13 @@ class TestMeasurementPanelHolderStats(unittest.TestCase):
         class Plot:
             def set_data(self, *vectors, **kwargs):
                 self.data = vectors
+                self.frame = kwargs.get("coordinate_frame")
 
         plot = Plot()
         self.assertTrue(panel._apply_completed_steps_to_plots(plot))
+        self.assertEqual(plot.frame, "tilt-corrected")
         self.assertLess(plot.data[0][0], 0.)
-        self.assertGreater(plot.data[2][0], 0.)
+        self.assertLess(plot.data[2][0], 0.)
 
         panel._clear_measurement_plot()
         panel._on_step_complete(StepResult(replace(step, core_orientation_available=False), 0., 0, 1))

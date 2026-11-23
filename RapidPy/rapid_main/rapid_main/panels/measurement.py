@@ -16,7 +16,7 @@ from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.specimen_metadata import resolve_specimen_meta, validate_specimen_provenance
 from rapid_main.device_ownership import DeviceOwnershipError
 from rapid_main.dialogs.external_thermal import ExternalThermalDialog
-from rapid_main.geometry import Angular3D, Cartesian3D, angular3d_to_cartesian3d
+from rapid_main.geometry import Angular3D, angular3d_to_viewer_cartesian3d
 from rapid_main.hardware_contracts import MeasurementBackend, NoCommBackend, config_fingerprint
 from rapid_main.io.measurement_bundle import SIMULATED_SUBDIR, validate_measurement_output
 from rapid_main.specimen_paths import specimen_run_directory
@@ -529,17 +529,20 @@ class MeasurementPanel(QtWidgets.QWidget):
             return False
         vectors = []
         for step in self._completed_steps:
-            if self._coord_core.isChecked() and step.core_orientation_available is None:
-                vectors.append(Cartesian3D(step.sdx, step.sdy, step.sdz))
-            else:
-                dec, inc = self._selected_direction(step)
-                vectors.append(angular3d_to_cartesian3d(Angular3D(dec, inc, step.moment)))
+            dec, inc = self._selected_direction(step)
+            vectors.append(angular3d_to_viewer_cartesian3d(Angular3D(dec, inc, step.moment)))
+        frame = "specimen"
+        if self._coord_geo.isChecked():
+            frame = "geographic"
+        elif self._coord_bed.isChecked():
+            frame = "tilt-corrected"
         dialog.set_data(
             [vector.x for vector in vectors],
             [vector.y for vector in vectors],
             [vector.z for vector in vectors],
             [step.demag_label for step in self._completed_steps],
             simulated=self._current_run_simulated,
+            coordinate_frame=frame,
             provenance_statement=(
                 "Current run used a simulated backend; not hardware evidence."
                 if self._current_run_simulated

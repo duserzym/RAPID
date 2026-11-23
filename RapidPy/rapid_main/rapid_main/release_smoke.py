@@ -147,11 +147,23 @@ def _check_measurement_archive(root):
 
 
 def _check_data_review_projection(root):
+    from data_viewer.analysis import principal_component_fit
     from data_viewer.app import ZijderveldWidget
     from data_viewer.data_loading import load_cit_specimen
+    from rapid_main.quicklook import write_measurement_quicklook
 
     source = root / "data" / "SIMULATED" / "offline-specimen"
     specimen, = load_cit_specimen(source).specimens
+    reading, = specimen.steps
+    steps = [reading, replace(reading, demag_label="AF40", moment=reading.moment * 0.5)]
+    quicklook = write_measurement_quicklook(root / "review-fit.json", steps, simulated=True)
+    exported = json.loads(quicklook.read_bytes())["analysis"]["principal_axis"]
+    review = principal_component_fit(steps)
+    fit_matches = (review is not None and exported["coordinate_frame"] == "specimen"
+                   and math.isclose(exported["declination_deg"], review.dec)
+                   and math.isclose(exported["inclination_deg"], review.inc)
+                   and math.isclose(exported["mad_deg"], review.mad, abs_tol=1e-6)
+                   and math.isclose(exported["dang_deg"], review.dang, abs_tol=1e-6))
     plot = ZijderveldWidget()
     try:
         plot.set_specimen(specimen, "specimen", False, [], False)
@@ -165,7 +177,7 @@ def _check_data_review_projection(root):
         plot._projection.setCurrentIndex(plot._projection.findData("ew"))
         x_ew, y_ew = plot._horiz_line.getData()
         _, z_ew = plot._vert_line.getData()
-        return (labels_ok and len(x_ns) == len(x_ew) == 1 and z_ns[0] < 0
+        return (fit_matches and labels_ok and len(x_ns) == len(x_ew) == 1 and z_ns[0] < 0
                 and math.isclose(x_ns[0], -y_ew[0]) and math.isclose(y_ns[0], x_ew[0])
                 and math.isclose(z_ns[0], z_ew[0]))
     finally:

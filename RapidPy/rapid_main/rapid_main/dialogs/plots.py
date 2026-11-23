@@ -86,6 +86,9 @@ def write_quicklook_csv(path: str | Path, summary: dict[str, object]) -> Path:
             "decay_percent_loss",
             "decay_monotonic_nonincreasing",
             "log_decay_slope",
+            "coordinate_frame",
+            "pca_mad_deg",
+            "pca_dang_deg",
         ]
     )
     for index, label in enumerate(labels):
@@ -109,6 +112,9 @@ def write_quicklook_csv(path: str | Path, summary: dict[str, object]) -> Path:
                 decay.get("percent_loss", ""),
                 decay.get("monotonic_nonincreasing", ""),
                 decay.get("log_decay_slope", ""),
+                principal.get("coordinate_frame", ""),
+                principal.get("mad_deg", ""),
+                principal.get("dang_deg", ""),
             ]
         )
     return _atomic_write_text(Path(path), output.getvalue())
@@ -285,7 +291,7 @@ class _IntensityWidget(QtWidgets.QWidget):
             self._plot = pg.PlotWidget()
             self._plot.showGrid(x=True, y=True, alpha=0.2)
             self._plot.getAxis("bottom").setLabel("Step")
-            self._plot.getAxis("left").setLabel("Intensity (A/m)")
+            self._plot.getAxis("left").setLabel("Magnitude (recorded units)")
             self._curve = self._plot.plot(
                 [], [],
                 pen=pg.mkPen("#7A0219", width=2),
@@ -384,9 +390,10 @@ class PlotsDialog(QtWidgets.QDialog):
         *,
         simulated: bool = False,
         provenance_statement: str = "",
+        coordinate_frame: str = "unspecified",
     ) -> None:
-        """Update all three plots.  Coordinates in A/m (N, E, Up)."""
-        summary = build_quicklook_summary(north, east, up, labels)
+        """Update the three plots using North/East/Up vectors in the input units."""
+        summary = build_quicklook_summary(north, east, up, labels, coordinate_frame=coordinate_frame)
         vectors = summary["vectors"]
         self._zij.set_data(vectors["north"], vectors["east"], vectors["down"])
         self._int_plot.set_data(
@@ -583,10 +590,13 @@ class PlotsDialog(QtWidgets.QDialog):
 
         rows = [
             ("Step count", stats.get("count")),
+            ("Coordinate frame", str(principal.get("coordinate_frame", "unspecified")).capitalize()),
             ("Principal declination", _format_analysis_value(principal.get("declination_deg"), "°")),
             ("Principal inclination", _format_analysis_value(principal.get("inclination_deg"), "°")),
             ("PCA variance explained", _format_analysis_percent(principal.get("variance_fraction"))),
             ("PCA RMS perpendicular", _format_analysis_value(principal.get("rms_perpendicular"))),
+            ("PCA MAD", _format_analysis_value(principal.get("mad_deg"), "°")),
+            ("PCA DANG", _format_analysis_value(principal.get("dang_deg"), "°")),
             ("Initial intensity", _format_analysis_value(decay.get("initial"))),
             ("Final intensity", _format_analysis_value(decay.get("final"))),
             ("Final / initial", _format_analysis_value(decay.get("final_ratio"))),
