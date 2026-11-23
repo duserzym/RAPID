@@ -76,6 +76,8 @@ The preview and snapshot button become active on receipt of a usable frame.
    around each reading. Solid arcs are in the lower hemisphere. Dashed arcs
    are in the upper hemisphere. New MagIC measurements carry recorded CSD
    in `dir_csd`.
+   Data Review fills blank CSD values from matched RMG readings in verified
+   RAPID bundles and archives.
    Run bundles retain scientific outputs, provenance, workflow summaries,
    communication evidence, and a hashed artifact index.
    For specimens with orientation headers, use **Core**, **Geographic**, or

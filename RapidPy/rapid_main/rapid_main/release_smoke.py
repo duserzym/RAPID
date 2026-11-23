@@ -121,6 +121,11 @@ def _check_measurement_archive(root):
         with MeasurementBundleWriter(root / "data", specimen, simulated=True) as writer:
             writer.append_step(measurement, susceptibility=susceptibility,
                                rmg_treatment=describe_rmg_treatment(measurement.demag_label))
+        if measurement.demag_label == "NRM":
+            # Exercise an older archived table whose RMG retains its measured CSD.
+            path = writer.paths.magic_measurements_file
+            table, *rows = path.read_text(encoding="utf-8").splitlines()
+            path.write_text("\n".join([table, *(row.rsplit("\t", 1)[0] for row in rows)]) + "\n", encoding="utf-8")
     output = writer.publish_dir
     provenance = json.loads((output / "provenance.json").read_text(encoding="utf-8"))
     archive = output / provenance["previous_publication"]["relative_path"]
@@ -129,6 +134,7 @@ def _check_measurement_archive(root):
     direct = load_input(output / specimen.name)
     return (previous.source_kind == "measurement_archive"
             and [item.demag_label for item in previous.specimens[0].steps] == ["NRM"]
+            and previous.specimens[0].steps[0].error_angle == 2.0
             and [item.demag_label for item in current.specimens[0].steps] == ["AF20"]
             and direct.source_kind == "cit_specimen"
             and [item.demag_label for item in direct.specimens[0].steps] == ["AF20"]

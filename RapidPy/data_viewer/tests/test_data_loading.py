@@ -4,7 +4,8 @@ import json
 import sys
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
+import hashlib
 from pathlib import Path
 
 VIEWER_ROOT = Path(__file__).resolve().parents[1]
@@ -49,7 +50,76 @@ def _step(label: str, x: float = 1.0, y: float = 0.2, z: float = 0.1, error_angl
     )
 
 
+def _write_review_index(root: Path, specimen: str) -> None:
+    files = ("measurements.txt", f"{specimen}.rmg")
+    (root / "artifact_index.json").write_text(json.dumps({
+        "schema": "rapidpy.measurement.artifact_index.v1",
+        "sample": specimen,
+        "aborted": False,
+        "artifacts": [
+            {"relative_path": name, "exists": True, "sha256": hashlib.sha256((root / name).read_bytes()).hexdigest()}
+            for name in files
+        ],
+    }), encoding="utf-8")
+
+
 class TestViewerDataLoading(unittest.TestCase):
+    def test_recovers_only_missing_csd_from_the_matching_indexed_rmg(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with MeasurementBundleWriter(root, SpecimenMeta("A")) as writer:
+                for number, (label, csd) in enumerate((("NRM", 2), ("AF20", 7), ("AF20", 11))):
+                    step = _step(label, error_angle=csd)
+                    step.timestamp += timedelta(seconds=number)
+                    writer.append_step(step, retain_repeats=True)
+            magic_path = root / "measurements.txt"
+            header, columns, *rows = magic_path.read_text(encoding="utf-8").splitlines()
+            rows = [row.rsplit("\t", 1)[0] + "\t" + csd for row, csd in zip(rows, ("", "0", "4"))]
+            magic_path.write_text("\n".join([header, columns, *rows]) + "\n", encoding="utf-8")
+            rmg_path = root / "A.rmg"
+            original_rmg = rmg_path.read_bytes()
+
+            def angles() -> list[float]:
+                return [step.error_angle for step in load_magic_directory(root).specimens[0].steps]
+
+            self.assertEqual(angles(), [0, 0, 4])
+            _write_review_index(root, "A")
+            old_magic = magic_path.read_bytes()
+            self.assertEqual(angles(), [2, 0, 4])
+            self.assertEqual(magic_path.read_bytes(), old_magic)
+            self.assertEqual(rmg_path.read_bytes(), original_rmg)
+
+            magic_path.write_bytes(old_magic + b"\n")
+            self.assertEqual(angles(), [0, 0, 4])
+            magic_path.write_bytes(old_magic)
+            rmg_path.write_bytes(original_rmg + b"\r\n")
+            self.assertEqual(angles(), [0, 0, 4])
+            rmg_rows = original_rmg.splitlines()
+            rmg_rows[2], rmg_rows[3] = rmg_rows[3], rmg_rows[2]
+            rmg_path.write_bytes(b"\r\n".join(rmg_rows) + b"\r\n")
+            _write_review_index(root, "A")
+            self.assertEqual(angles(), [0, 0, 4])
+
+    def test_recovers_legacy_csd_from_verified_archive_members(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            meta = SpecimenMeta("A")
+            with MeasurementBundleWriter(root, meta) as writer:
+                writer.append_step(_step("NRM", error_angle=9.5))
+                writer.append_step(_step("AF20", error_angle=7.25))
+                writer.append_step(_step("AF20", error_angle=5.5), retain_repeats=True)
+            table, *rows = (root / "measurements.txt").read_text(encoding="utf-8").splitlines()
+            legacy = "\n".join([table, *(row.rsplit("\t", 1)[0] for row in rows)]) + "\n"
+            (root / "measurements.txt").write_text(legacy, encoding="utf-8")
+            with MeasurementBundleWriter(root, meta) as writer:
+                writer.append_step(_step("AF20", error_angle=13))
+            provenance = json.loads((root / "provenance.json").read_bytes())
+            archive = (root / provenance["previous_publication"]["relative_path"]).parent
+            old_steps = load_magic_directory(archive).specimens[0].steps
+            self.assertEqual([(step.demag_label, step.error_angle) for step in old_steps],
+                             [("NRM", 9.5), ("AF20", 7.25), ("AF20", 5.5)])
+            self.assertEqual(load_magic_directory(root).specimens[0].steps[0].error_angle, 13)
+
     def test_opens_individual_cit_files_and_preserves_the_full_specimen_name(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

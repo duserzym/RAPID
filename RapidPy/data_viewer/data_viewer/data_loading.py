@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import math
 import re
 import sys
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime
-from io import TextIOWrapper
+from io import BytesIO, StringIO, TextIOWrapper
 from pathlib import Path
 from typing import Iterable
+from zipfile import ZipFile
 
 try:
     from rapid_main.data_model import MeasurementStep, RmgRecord, SpecimenMeta
     from rapid_main.io.bundle_history import ARCHIVE_MANIFEST, ARCHIVE_PAYLOAD, is_bundle_archive, open_bundle_archive
-    from rapid_main.io.rmg_reader import parse_rmg, read_rmg
+    from rapid_main.io.rmg_reader import parse_rmg
     from rapid_main.io.sam_reader import read_sam, specimen_path
     from rapid_main.io.specimen_reader import read_specimen
     from rapid_main.specimen_paths import contained_path, relative_specimen_path
@@ -26,7 +29,7 @@ except ModuleNotFoundError:
     sys.modules.pop("rapid_main", None)
     from rapid_main.data_model import MeasurementStep, RmgRecord, SpecimenMeta
     from rapid_main.io.bundle_history import ARCHIVE_MANIFEST, ARCHIVE_PAYLOAD, is_bundle_archive, open_bundle_archive
-    from rapid_main.io.rmg_reader import parse_rmg, read_rmg
+    from rapid_main.io.rmg_reader import parse_rmg
     from rapid_main.io.sam_reader import read_sam, specimen_path
     from rapid_main.io.specimen_reader import read_specimen
     from rapid_main.specimen_paths import contained_path, relative_specimen_path
@@ -117,16 +120,19 @@ def _susceptibility_points(records: Iterable[RmgRecord]) -> list[SusceptibilityP
     return points
 
 
-def _load_rmg_sidecar(root: Path, specimen: ViewerSpecimen) -> None:
+def _load_rmg_sidecar(root: Path, specimen: ViewerSpecimen) -> tuple[bytes, list[RmgRecord]] | None:
     try:
         path = contained_path(root, specimen.name + ".rmg")
         if not path.is_file():
-            return
-        specimen.susceptibility_points = _susceptibility_points(read_rmg(path))
+            return None
+        data = path.read_bytes()
+        records = parse_rmg(StringIO(data.decode("latin-1"), newline=""))
+        specimen.susceptibility_points = _susceptibility_points(records)
         specimen.rmg_path = path
+        return data, records
     except (OSError, ValueError, csv.Error):
         # A missing, unreadable or unsafe optional sidecar does not hide direction data.
-        return
+        return None
 
 
 def _cit_specimen(source: Path, data_path: Path, name: str, *, indexed: bool) -> ViewerSpecimen:
@@ -217,16 +223,24 @@ def load_magic_directory(path: str | Path) -> ViewerDataset:
     source_kind = "measurement_archive" if archived else "magic_dir"
     source_file = root / (ARCHIVE_PAYLOAD if archived else "measurements.txt")
     specimens_by_name: dict[str, ViewerSpecimen] = {}
+    row_evidence: dict[str, list[tuple[str, bool]]] = {}
     with ExitStack() as stack:
         archive = None
+        magic_data = None
         if archived:
             archive = stack.enter_context(open_bundle_archive(root))
             if "measurements.txt" not in archive.namelist():
                 raise ValueError(f"Could not find measurements.txt in the archive at {root}")
-            handle = stack.enter_context(TextIOWrapper(archive.open("measurements.txt"), encoding="utf-8-sig", newline=""))
+            magic_data = archive.read("measurements.txt")
         else:
             if not source_file.exists():
                 raise ValueError(f"Could not find measurements.txt in {root}")
+        index = _bundle_metadata(root, "artifact_index.json", archive)
+        if not archived and isinstance(index, dict) and index.get("schema") == "rapidpy.measurement.artifact_index.v1":
+            magic_data = source_file.read_bytes()
+        if magic_data is not None:
+            handle = stack.enter_context(TextIOWrapper(BytesIO(magic_data), encoding="utf-8-sig", newline=""))
+        else:
             handle = stack.enter_context(source_file.open("r", encoding="utf-8-sig", newline=""))
         header_line = handle.readline().strip().lower()
         if "measurements" not in header_line:
@@ -256,20 +270,51 @@ def load_magic_directory(path: str | Path) -> ViewerDataset:
                 )
                 specimens_by_name[specimen_name] = specimen
             specimen.steps.append(_measurement_row_to_step(row, specimen_name))
+            if magic_data is not None:
+                row_evidence.setdefault(specimen_name, []).append(
+                    ((row.get("timestamp") or "").strip(), bool(_magic_csd_text(row).strip())),
+                )
 
-        if archive is not None:
-            members = set(archive.namelist())
-            for specimen in specimens_by_name.values():
+        members = set(archive.namelist()) if archive is not None else set()
+        for specimen in specimens_by_name.values():
+            sidecar = None
+            if archive is not None:
                 try:
                     member = relative_specimen_path(specimen.name + ".rmg").as_posix()
                     if member in members:
-                        with TextIOWrapper(archive.open(member), encoding="latin-1", newline="") as rmg:
-                            specimen.susceptibility_points = _susceptibility_points(parse_rmg(rmg))
+                        data = archive.read(member)
+                        records = parse_rmg(StringIO(data.decode("latin-1"), newline=""))
+                        specimen.susceptibility_points = _susceptibility_points(records)
+                        sidecar = data, records
                 except (ValueError, csv.Error):
                     continue
-        else:
-            for specimen in specimens_by_name.values():
-                _load_rmg_sidecar(root, specimen)
+            else:
+                sidecar = _load_rmg_sidecar(root, specimen)
+            evidence = row_evidence.get(specimen.name)
+            if magic_data is None or not (sidecar and evidence and any(not has_csd for _, has_csd in evidence)):
+                continue
+            rmg_data, records = sidecar
+            if len(records) != len(evidence) or not all(
+                stamp and stamp.replace("T", " ", 1) == record.timestamp
+                for (stamp, _), record in zip(evidence, records)
+            ):
+                continue
+            rmg_name = relative_specimen_path(specimen.name + ".rmg").as_posix()
+            if archive is not None and "artifact_index.json" not in members:
+                # Older snapshots can authenticate their members through the archive manifest.
+                provenance = _bundle_metadata(root, "provenance.json", archive)
+                verified = (len(specimens_by_name) == 1 and isinstance(provenance, dict)
+                            and provenance.get("schema") == "rapidpy.measurement.provenance.v1"
+                            and provenance.get("specimen") == specimen.name
+                            and provenance.get("labels") == [step.demag_label for step in specimen.steps])
+            else:
+                verified = _matches_publication_index(
+                    index, specimen.name, {"measurements.txt": magic_data, rmg_name: rmg_data},
+                )
+            if verified:
+                for step, record, (_, has_csd) in zip(specimen.steps, records, evidence):
+                    if not has_csd and record.csd is not None and 0 < record.csd < 180:
+                        step.error_angle = record.csd
 
     specimens = sorted(specimens_by_name.values(), key=lambda specimen: specimen.name)
     if not specimens:
@@ -278,6 +323,28 @@ def load_magic_directory(path: str | Path) -> ViewerDataset:
         specimen.experiment_type = detect_experiment_type(specimen.steps)
         specimen.paleointensity_points = build_paleointensity_points(specimen.steps)
     return ViewerDataset(source_kind, root, specimens)
+
+
+def _bundle_metadata(root: Path, name: str, archive: ZipFile | None) -> object:
+    try:
+        data = archive.read(name) if archive is not None else contained_path(root, name).read_bytes()
+        return json.loads(data)
+    except (KeyError, OSError, ValueError):
+        return None
+
+
+def _matches_publication_index(index: object, specimen: str, sources: dict[str, bytes]) -> bool:
+    if (not isinstance(index, dict) or index.get("schema") != "rapidpy.measurement.artifact_index.v1"
+            or index.get("aborted") is not False or index.get("sample") != specimen
+            or not isinstance(index.get("artifacts"), list)):
+        return False
+    for name, data in sources.items():
+        entries = [entry for entry in index["artifacts"]
+                   if isinstance(entry, dict) and entry.get("relative_path") == name]
+        if (len(entries) != 1 or entries[0].get("exists") is not True
+                or entries[0].get("sha256") != hashlib.sha256(data).hexdigest()):
+            return False
+    return True
 
 
 def watch_paths_for_dataset(dataset: ViewerDataset) -> list[Path]:
@@ -381,9 +448,7 @@ def _measurement_row_to_step(row: dict[str, str], specimen_name: str) -> Measure
     dec = _to_float(_first_present(row, "dir_dec", "measurement_dec", default=str(vector_dec)))
     inc = _to_float(_first_present(row, "dir_inc", "measurement_inc", default=str(vector_inc)))
     mx, my, mz = _dir_to_cartesian(dec, inc, moment)
-    error_angle = _to_float(_first_present(
-        row, "dir_csd", "measurement_csd", "meas_csd", "error_angle", default="0",
-    ))
+    error_angle = _to_float(_magic_csd_text(row))
     timestamp = _parse_timestamp(row.get("timestamp", ""))
 
     return MeasurementStep(
@@ -403,6 +468,9 @@ def _measurement_row_to_step(row: dict[str, str], specimen_name: str) -> Measure
         timestamp=timestamp,
     )
 
+
+def _magic_csd_text(row: dict[str, str]) -> str:
+    return _first_present(row, "dir_csd", "measurement_csd", "meas_csd", "error_angle")
 
 def _label_from_measurement_row(row: dict[str, str], specimen_name: str) -> str:
     measurement_name = row.get("measurement", "").strip()
