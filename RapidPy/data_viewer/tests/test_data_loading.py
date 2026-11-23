@@ -63,6 +63,7 @@ class TestViewerDataLoading(unittest.TestCase):
                     dataset = reader(source)
                     specimen, = dataset.specimens
                     self.assertEqual(dataset.source_kind, "cit_specimen")
+                    self.assertEqual(specimen.magnitude_label, "Recorded magnitude")
                     self.assertEqual((specimen.name, specimen.meta.comment, specimen.meta.volume),
                                      (name, "Original specimen", 3.2))
                     measurement, = specimen.steps
@@ -128,6 +129,8 @@ class TestViewerDataLoading(unittest.TestCase):
         self.assertEqual(dataset.specimens[0].name, "THERM01")
         self.assertEqual(dataset.specimens[0].experiment_type, "Thermal")
         self.assertEqual(dataset.specimens[0].meta.site, "SITE1")
+        self.assertEqual(dataset.specimens[0].magnitude_label, "Moment (A·m²)")
+        self.assertAlmostEqual(dataset.specimens[0].steps[0].moment, steps[0].magn_moment_Am2(), places=8)
         watched = watch_paths_for_dataset(dataset)
         self.assertEqual(watched, [root, root / "measurements.txt"])
 
@@ -181,6 +184,7 @@ class TestViewerDataLoading(unittest.TestCase):
 
             previous = json.loads((root / "provenance.json").read_bytes())["previous_publication"]
             archived, = load_magic_directory((root / previous["relative_path"]).parent).specimens
+            self.assertEqual(archived.magnitude_label, current.magnitude_label)
             reading, = archived.susceptibility_points
             self.assertEqual((reading.level_kind, reading.level, reading.susceptibility), ("af", 250, .001))
             self.assertIsNone(archived.rmg_path)

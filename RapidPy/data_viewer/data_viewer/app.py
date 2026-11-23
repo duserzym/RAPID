@@ -490,7 +490,7 @@ class IntensityWidget(QtWidgets.QWidget):
             self._plot = pg.PlotWidget()
             self._plot.showGrid(x=True, y=True, alpha=0.14)
             self._plot.getAxis("bottom").setLabel("Step #")
-            self._plot.getAxis("left").setLabel("Moment (emu)")
+            self._plot.getAxis("left").setLabel("Recorded magnitude")
             self._plot.setMenuEnabled(False)
             self._curve = self._plot.plot(
                 [], [],
@@ -508,6 +508,7 @@ class IntensityWidget(QtWidgets.QWidget):
     def set_specimen(self, specimen: ViewerSpecimen | None) -> None:
         if not _HAS_PG:
             return
+        self._plot.getAxis("left").setLabel(specimen.magnitude_label if specimen else "Recorded magnitude")
         if not specimen:
             self._curve.setData([], [])
             return
@@ -660,8 +661,6 @@ class PaleointensityWidget(QtWidgets.QWidget):
 
 # ── Data table widget ─────────────────────────────────────────────────────────
 class DataTableWidget(QtWidgets.QTableWidget):
-    _BASE_COLS = ("Step", "Inc (°)", "Dec (°)", "Moment (emu)", "CSD (°)")
-
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(0, 8)
         self.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
@@ -685,13 +684,14 @@ class DataTableWidget(QtWidgets.QTableWidget):
         self._numeric_font.setPointSize(max(9, self._numeric_font.pointSize()))
         self._apply_headers("specimen")
 
-    def _apply_headers(self, coordinate_system: str) -> None:
+    def _apply_headers(self, coordinate_system: str, specimen: ViewerSpecimen | None = None) -> None:
         vector_headers = _vector_headers_for_coordinate_system(coordinate_system)
-        self.setHorizontalHeaderLabels(["Step", *vector_headers, *self._BASE_COLS[1:]])
+        magnitude = specimen.magnitude_label if specimen else "Recorded magnitude"
+        self.setHorizontalHeaderLabels(["Step", *vector_headers, "Inc (°)", "Dec (°)", magnitude, "CSD (°)"])
 
     def set_specimen(self, specimen: ViewerSpecimen | None, coordinate_system: str) -> None:
         self.setRowCount(0)
-        self._apply_headers(coordinate_system)
+        self._apply_headers(coordinate_system, specimen)
         if not specimen:
             return
         for step in specimen.steps:

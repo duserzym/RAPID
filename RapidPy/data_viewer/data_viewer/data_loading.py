@@ -63,6 +63,14 @@ class ViewerSpecimen:
     susceptibility_points: list[SusceptibilityPoint] = field(default_factory=list)
     rmg_path: Path | None = None
 
+    @property
+    def magnitude_label(self) -> str:
+        if self.source_kind in {"magic_dir", "measurement_archive"}:
+            return "Moment (A·m²)"
+        if self.source_kind == "demo":
+            return "Magnitude (a.u.)"
+        return "Recorded magnitude"
+
 
 @dataclass
 class ViewerDataset:

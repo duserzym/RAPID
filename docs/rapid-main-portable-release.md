@@ -75,6 +75,8 @@ The preview and snapshot button become active on receipt of a usable frame.
    **Bedding** to review the corresponding direction. RAPID uses the `.sam`
    magnetic declination when supplied. New CIT rows use moment per volume
    (emu/cm³), while the live moment and MagIC use the measured moment.
+   Data Review displays the magnitude stored in a CIT file as recorded.
+   MagIC magnitudes are displayed in A·m².
    RMG files include treatment levels in gauss or °C, susceptibility, moment
    components, available uncertainty, and core direction. Sample height is
    included when a queue measured it and the station has an imported `UpDownMotor1cm`.
