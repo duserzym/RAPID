@@ -36,6 +36,7 @@ def _observe(seconds, finished=None):
     deadline.setSingleShot(True)
     gaps = []
     wall_start = previous = time.perf_counter_ns()
+    wall_deadline = wall_start + seconds * 1_000_000_000
     cpu_start = time.process_time_ns()
 
     def tick():
@@ -46,8 +47,15 @@ def _observe(seconds, finished=None):
         if finished is not None and finished():
             loop.quit()
 
+    def finish_at_deadline():
+        remaining_ns = wall_deadline - time.perf_counter_ns()
+        if remaining_ns > 0:
+            deadline.start((remaining_ns + 999_999) // 1_000_000)
+        else:
+            loop.quit()
+
     sampler.timeout.connect(tick)
-    deadline.timeout.connect(loop.quit)
+    deadline.timeout.connect(finish_at_deadline)
     sampler.start()
     deadline.start(seconds * 1000)
     loop.exec()

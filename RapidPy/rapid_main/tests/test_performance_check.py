@@ -6,8 +6,11 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
-from rapid_main.performance_check import timer_summary
+from PySide6 import QtCore, QtWidgets
+
+from rapid_main.performance_check import _observe, timer_summary
 
 
 class PerformanceCheckTests(unittest.TestCase):
@@ -15,6 +18,23 @@ class PerformanceCheckTests(unittest.TestCase):
         self.assertEqual(timer_summary([]), dict(samples=0, p95_interval_ms=None, max_interval_ms=None))
         self.assertEqual(timer_summary(list(range(20, 0, -1))),
                          dict(samples=20, p95_interval_ms=19, max_interval_ms=20))
+
+    def test_observation_continues_when_the_deadline_timer_fires_early(self):
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        start_timer = QtCore.QTimer.start
+        fired_early = False
+
+        def start_with_early_timeout(timer, *args):
+            nonlocal fired_early
+            if timer.isSingleShot() and not fired_early:
+                fired_early = True
+                return start_timer(timer, 1)
+            return start_timer(timer, *args)
+
+        with patch.object(QtCore.QTimer, 'start', start_with_early_timeout):
+            report = _observe(1)
+        self.assertTrue(fired_early)
+        self.assertGreaterEqual(report['elapsed_ms'], 1000)
 
     def test_offline_cli_finishes_a_real_queue_in_an_isolated_profile(self):
         with TemporaryDirectory() as temporary:

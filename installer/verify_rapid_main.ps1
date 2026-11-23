@@ -228,6 +228,7 @@ try {
         if ($performance.schema -cne 'rapidpy.performance_check.v1' -or $performance.ok -ne $true -or
             $performance.simulated -ne $true -or $performance.software_version -cne $smoke.software_version -or
             $performance.idle_seconds_requested -ne $PerformanceIdleSeconds -or
+            $performance.idle.elapsed_ms -lt ($PerformanceIdleSeconds * 1000) -or
             $performance.queue.requested_specimens -ne $PerformanceSpecimens -or
             $performance.queue.published_specimens -ne $PerformanceSpecimens) {
             throw 'The performance report did not identify a completed workload for this candidate.'
