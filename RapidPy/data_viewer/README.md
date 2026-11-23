@@ -11,7 +11,7 @@ This module now supports:
 - fallback loading of the older `label,n,e,u` CSV format for quick ad hoc inspection
 - auto-detecting the experiment type for each specimen as `AF`, `Thermal`, `AF + thermal`, or `IZZI Thellier`
 - a lightweight directional workspace with:
-  - 2D component-style Zijderveld view
+  - 2D Zijderveld view with the VB6 N–S and E–W projections
   - 3D vector view with a PCA fit line
   - equal-area stereonet
   - intensity decay curve

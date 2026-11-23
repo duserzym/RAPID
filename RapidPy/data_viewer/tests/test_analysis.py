@@ -16,7 +16,9 @@ sys.path.insert(0, str(RAPID_MAIN_ROOT))
 
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from data_viewer.app import _has_paleointensity_data, _orthogonal_projection_components
-from data_viewer.analysis import next_step_suggestion, principal_component_fit, summarize_paleointensity, vector_for_step
+from data_viewer.analysis import (
+    next_step_suggestion, principal_component_fit, principal_component_segment, summarize_paleointensity, vector_for_step,
+)
 from data_viewer.data_loading import PaleointensityPoint, ViewerSpecimen
 
 
@@ -98,12 +100,19 @@ class TestViewerAnalysis(unittest.TestCase):
         self.assertEqual(summary.point_count, 4)
         self.assertIsNotNone(summary.slope)
 
-    def test_orthogonal_projection_matches_pmagpy_default_orientation(self) -> None:
-        east, north, down = _orthogonal_projection_components(np.array([1.5, -0.25, -0.75], dtype=float))
+    def test_orthogonal_projections_match_vb6_on_upward_positive_screen_axes(self) -> None:
+        vector = np.array([1.5, 0.25, -0.75], dtype=float)
+        self.assertEqual(_orthogonal_projection_components(vector), (0.25, 1.5, -0.75))
+        self.assertEqual(_orthogonal_projection_components(vector, "ew"), (1.5, -0.25, -0.75))
 
-        self.assertEqual(east, -0.25)
-        self.assertEqual(north, 1.5)
-        self.assertEqual(down, 0.75)
+    def test_fit_segment_spans_selected_readings_at_their_own_magnitude(self) -> None:
+        steps = [_step("NRM", 8e-10, 0, 0), _step("AF20", 3e-10, 0, 0)]
+        free = principal_component_segment(steps)
+        anchored = principal_component_segment(steps, include_origin=True)
+        self.assertIsNotNone(free)
+        self.assertIsNotNone(anchored)
+        np.testing.assert_allclose(free, [[8e-10, 0, 0], [3e-10, 0, 0]], rtol=1e-12, atol=1e-23)
+        np.testing.assert_allclose(anchored, [[8e-10, 0, 0], [0, 0, 0]], rtol=1e-12, atol=1e-23)
 
     def test_paleointensity_helper_detects_points(self) -> None:
         specimen = ViewerSpecimen(

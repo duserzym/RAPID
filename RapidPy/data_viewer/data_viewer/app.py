@@ -23,7 +23,9 @@ try:
 except ImportError:
     _HAS_PG = False
 
-from data_viewer.analysis import next_step_suggestion, principal_component_fit, summarize_paleointensity, vector_for_step
+from data_viewer.analysis import (
+    next_step_suggestion, principal_component_fit, principal_component_segment, summarize_paleointensity, vector_for_step,
+)
 from data_viewer.data_loading import (
     MeasurementStep, SpecimenMeta, SusceptibilityPoint, ViewerDataset, ViewerSpecimen,
     load_cit_specimen, load_input, load_magic_directory, watch_paths_for_dataset,
@@ -91,9 +93,12 @@ def _equal_area(inc_deg: float, dec_deg: float) -> tuple[float, float]:
     return r * math.sin(dec), r * math.cos(dec)
 
 
-def _orthogonal_projection_components(vector: np.ndarray) -> tuple[float, float, float]:
+def _orthogonal_projection_components(vector: np.ndarray, projection: str = "ns") -> tuple[float, float, float]:
+    """Return the common abscissa and both ordinates on upward-positive plot axes."""
     north, east, up = float(vector[0]), float(vector[1]), float(vector[2])
-    return east, north, -up
+    if projection == "ew":
+        return north, -east, up
+    return east, north, up
 
 
 def _vector_headers_for_coordinate_system(coordinate_system: str) -> tuple[str, str, str]:
@@ -240,17 +245,27 @@ class ZijderveldWidget(QtWidgets.QWidget):
 
         if _HAS_PG:
             pg.setConfigOptions(antialias=True, background="#ffffff", foreground="#1f2937")
+            controls = QtWidgets.QHBoxLayout()
+            self._projection = QtWidgets.QComboBox()
+            self._projection.setAccessibleName("Zijderveld projection")
+            self._projection.addItem("N–S projection", "ns")
+            self._projection.addItem("E–W projection", "ew")
+            self._projection.setToolTip("N–S has east to the right. E–W has north to the right.")
+            self._projection.currentIndexChanged.connect(self._update_plot)
+            controls.addWidget(self._projection)
+            controls.addStretch()
+            vl.addLayout(controls)
             self._plot = pg.PlotWidget()
             self._plot.setAspectLocked(True)
             self._plot.showGrid(x=True, y=True, alpha=0.14)
             self._plot.getAxis("bottom").setLabel("East →")
-            self._plot.getAxis("left").setLabel("North ↑    Down ↓")
+            self._plot.getAxis("left").setLabel("North / Up ↑")
             self._plot.addLegend(offset=(10, 10))
             self._plot.setMenuEnabled(False)
 
             self._horiz_line = self._plot.plot(
                 [], [], pen=pg.mkPen("#111111", width=1.5),
-                name="Horizontal projection (E/N)",
+                name="Horizontal",
             )
             self._horiz_pts = self._plot.plot(
                 [], [], pen=None,
@@ -260,7 +275,7 @@ class ZijderveldWidget(QtWidgets.QWidget):
             )
             self._vert_line = self._plot.plot(
                 [], [], pen=pg.mkPen("#5c6470", width=1.5, style=QtCore.Qt.DashLine),
-                name="Vertical projection (E/Down)",
+                name="Vertical",
             )
             self._vert_pts = self._plot.plot(
                 [], [], pen=None,
@@ -294,6 +309,10 @@ class ZijderveldWidget(QtWidgets.QWidget):
     def _update_plot(self) -> None:
         if not _HAS_PG:
             return
+        projection = self._projection.currentData()
+        east_west = projection == "ew"
+        self._plot.getAxis("bottom").setLabel("North →" if east_west else "East →")
+        self._plot.getAxis("left").setLabel("West / Up ↑" if east_west else "North / Up ↑")
         for item in self._label_items:
             self._plot.removeItem(item)
         self._label_items.clear()
@@ -306,37 +325,31 @@ class ZijderveldWidget(QtWidgets.QWidget):
             return
 
         vectors = [vector_for_step(step, self._coordinate_system) for step in self._specimen.steps]
-        east_north_down = [_orthogonal_projection_components(vector) for vector in vectors]
-        e = [component[0] for component in east_north_down]
-        n = [component[1] for component in east_north_down]
-        d = [component[2] for component in east_north_down]
+        projected = [_orthogonal_projection_components(vector, projection) for vector in vectors]
+        abscissa = [component[0] for component in projected]
+        horizontal = [component[1] for component in projected]
+        vertical = [component[2] for component in projected]
         sizes = [_dot_radius(step.error_angle, self._scale_by_csd) * 1.8 for step in self._specimen.steps]
-        self._horiz_line.setData(e, n)
-        self._horiz_pts.setData(e, n, symbolSize=sizes)
-        self._vert_line.setData(e, d)
-        self._vert_pts.setData(e, d, symbolSize=sizes)
+        self._horiz_line.setData(abscissa, horizontal)
+        self._horiz_pts.setData(abscissa, horizontal, symbolSize=sizes)
+        self._vert_line.setData(abscissa, vertical)
+        self._vert_pts.setData(abscissa, vertical, symbolSize=sizes)
 
-        fit = principal_component_fit(
+        segment = principal_component_segment(
             self._fit_steps or self._specimen.steps,
             coordinate_system=self._coordinate_system,
             include_origin=self._include_origin,
         )
-        if fit is None:
+        if segment is None:
             self._fit_line.setData([], [])
         else:
-            fit_vectors = [vector_for_step(step, self._coordinate_system) for step in (self._fit_steps or self._specimen.steps)]
-            projections = [float(np.dot(vector - fit.center, fit.direction)) for vector in fit_vectors]
-            half_span = max(abs(min(projections, default=-1.0)), abs(max(projections, default=1.0)), 1.0)
-            p1 = fit.center - fit.direction * half_span
-            p2 = fit.center + fit.direction * half_span
-            fit_e1, fit_n1, _fit_d1 = _orthogonal_projection_components(p1)
-            fit_e2, fit_n2, _fit_d2 = _orthogonal_projection_components(p2)
-            self._fit_line.setData([fit_e1, fit_e2], [fit_n1, fit_n2])
+            start, end = (_orthogonal_projection_components(point, projection) for point in segment)
+            self._fit_line.setData([start[0], end[0]], [start[1], end[1]])
 
         for index, step in enumerate(self._specimen.steps):
             if index in (0, len(self._specimen.steps) - 1):
                 label = pg.TextItem(text=step.demag_label, color="#5b544f", anchor=(0, 1))
-                label.setPos(e[index], n[index])
+                label.setPos(abscissa[index], horizontal[index])
                 self._plot.addItem(label)
                 self._label_items.append(label)
 
@@ -428,17 +441,13 @@ class Vector3DWidget(QtWidgets.QWidget):
         for index in range(1, len(points)):
             p.drawLine(points[index - 1], points[index])
 
-        fit = principal_component_fit(
+        segment = principal_component_segment(
             self._fit_steps or self._specimen.steps,
             coordinate_system=self._coordinate_system,
             include_origin=self._include_origin,
         )
-        if fit is not None:
-            fit_vectors = [vector_for_step(step, self._coordinate_system) for step in (self._fit_steps or self._specimen.steps)]
-            projections = [float(np.dot(vector - fit.center, fit.direction)) for vector in fit_vectors]
-            half_span = max(abs(min(projections, default=-1.0)), abs(max(projections, default=1.0)), 1.0)
-            p1 = self._project(fit.center - fit.direction * half_span, scale, center)
-            p2 = self._project(fit.center + fit.direction * half_span, scale, center)
+        if segment is not None:
+            p1, p2 = (self._project(point, scale, center) for point in segment)
             p.setPen(QtGui.QPen(QtGui.QColor("#0c7a6b"), 2, QtCore.Qt.DashLine))
             p.drawLine(p1, p2)
 

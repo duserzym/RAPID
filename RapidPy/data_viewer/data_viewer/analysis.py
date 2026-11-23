@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Iterable, Literal
+from typing import Iterable, Literal, Sequence
 
 import numpy as np
 
@@ -80,6 +80,24 @@ def principal_component_fit(
     dang = math.degrees(math.acos(np.clip(float(np.dot(center, direction)) / max(center_norm, 1e-15), -1.0, 1.0))) if center_norm > 0 else 0.0
     return FitResult(center=center, direction=direction, eigenvalues=eigenvalues, dec=dec, inc=inc, mad=mad, dang=dang)
 
+
+def principal_component_segment(
+    steps: Sequence[MeasurementStep],
+    coordinate_system: CoordinateSystem = "specimen",
+    include_origin: bool = False,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Return the fitted line segment over the projected span of the selected measurements."""
+    fit = principal_component_fit(steps, coordinate_system, include_origin)
+    if fit is None:
+        return None
+    distances = [float(np.dot(vector_for_step(step, coordinate_system) - fit.center, fit.direction))
+                 for step in steps]
+    if include_origin:
+        distances.append(0.0)
+    return (
+        fit.center + fit.direction * min(distances),
+        fit.center + fit.direction * max(distances),
+    )
 
 def summarize_paleointensity(points: Iterable[PaleointensityPoint]) -> PaleointensitySummary:
     series = [point for point in points if point.step_kind in {"ZF", "IF"}]

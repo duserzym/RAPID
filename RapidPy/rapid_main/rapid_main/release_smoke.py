@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 from importlib import import_module
 import json
+import math
 import os
 from pathlib import Path
 import struct
@@ -135,6 +136,27 @@ def _check_measurement_archive(root):
             and [item.susceptibility for item in previous.specimens[0].susceptibility_points] == [0.001]
             and [(item.level, item.susceptibility) for item in current.specimens[0].susceptibility_points]
             == [(200.0, -0.002)])
+
+
+def _check_data_review_projection(root):
+    from data_viewer.app import ZijderveldWidget
+    from data_viewer.data_loading import load_cit_specimen
+
+    source = root / "data" / "SIMULATED" / "offline-specimen"
+    specimen, = load_cit_specimen(source).specimens
+    plot = ZijderveldWidget()
+    try:
+        plot.set_specimen(specimen, "specimen", False, [], False)
+        x_ns, y_ns = plot._horiz_line.getData()
+        _, z_ns = plot._vert_line.getData()
+        plot._projection.setCurrentIndex(plot._projection.findData("ew"))
+        x_ew, y_ew = plot._horiz_line.getData()
+        _, z_ew = plot._vert_line.getData()
+        return (len(x_ns) == len(x_ew) == 1 and z_ns[0] < 0
+                and math.isclose(x_ns[0], -y_ew[0]) and math.isclose(y_ns[0], x_ew[0])
+                and math.isclose(z_ns[0], z_ew[0]))
+    finally:
+        plot.deleteLater()
 
 
 def _check_measurement_backup(app, root):
@@ -336,6 +358,7 @@ def run_smoke_test() -> int:
             transverse_probe = _check_transverse_probe(window, app)
             webcam_decode = _check_webcam_decode(window, app, root)
             measurement_archive = _check_measurement_archive(root)
+            data_review_projection = _check_data_review_projection(root)
             measurement_backup = _check_measurement_backup(app, root)
             measurement_checkpoint = _check_measurement_checkpoint(root)
             manual_interruption = _check_manual_interruption(root)
@@ -345,11 +368,13 @@ def run_smoke_test() -> int:
                 "schema": "rapidpy.release_smoke.v1", "simulated": True,
                 "software_version": software_version(),
                 "ok": (window.config.general.nocomm and all(helpers.values()) and transverse_probe
-                       and webcam_decode and measurement_archive and measurement_backup and sample_index_registry
+                       and webcam_decode and measurement_archive and data_review_projection
+                       and measurement_backup and sample_index_registry
                        and vrm_practice and measurement_checkpoint and manual_interruption),
                 "transverse_probe": transverse_probe,
                 "webcam_decode": webcam_decode,
                 "measurement_archive": measurement_archive,
+                "data_review_projection": data_review_projection,
                 "measurement_backup": measurement_backup,
                 "measurement_checkpoint": measurement_checkpoint,
                 "manual_interruption": manual_interruption,

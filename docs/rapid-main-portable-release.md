@@ -69,6 +69,9 @@ The preview and snapshot button become active on receipt of a usable frame.
 6. Review results in Plots/Data Review. Simulation output stays in `SIMULATED`.
    Use **Open File** in **Data Review** to open a CIT specimen directly or to
    browse the specimens listed in a `.sam` index.
+   In the **2D component view**, choose **N–S projection** for east to the
+   right or **E–W projection** for north to the right. Positive inclination
+   is plotted below zero in both views.
    Run bundles retain scientific outputs, provenance, workflow summaries,
    communication evidence, and a hashed artifact index.
    For specimens with orientation headers, use **Core**, **Geographic**, or
