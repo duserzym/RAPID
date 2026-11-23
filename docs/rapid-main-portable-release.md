@@ -152,7 +152,8 @@ In live mode RAPID records fresh stopped-axis readbacks before confirming the sa
 After relaunching, open the same specimen and sequence with the original
 station settings and holder correction. Choose **Continue Saved Run** and
 confirm the specimen identity, orientation, and treatment history. RAPID
-verifies the saved evidence and starts with the next untouched step. It
+verifies the saved evidence and starts with the next untouched step. Live plots
+and the saved quicklook use the original measured moments for restored steps. RAPID
 publishes the full sequence after the remaining steps finish and the safe
 return succeeds. If a later treatment may already have started, inspect the
 specimen and station before deciding whether to start a fresh run.

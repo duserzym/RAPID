@@ -50,9 +50,10 @@ class MeasurementCheckpointTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.output = self.root / 'SIMULATED'
         self.labels = ['NRM', 'AF10', 'AF10']
+        self.meta = SpecimenMeta('A', volume=5.0)
 
     def run_worker(self, backend, *, checkpoint=False, saved=None, profile='station-a', labels=None):
-        worker = MeasurementWorker(SpecimenMeta('A'), labels or self.labels, self.root, backend,
+        worker = MeasurementWorker(self.meta, labels or self.labels, self.root, backend,
                                    run_id='reopened' if saved else 'original', checkpoint_profile=profile,
                                    continue_from=saved)
         if checkpoint:
@@ -85,6 +86,11 @@ class MeasurementCheckpointTests(unittest.TestCase):
         self.assertEqual([step.demag_label for step in load_magic_directory(self.output).specimens[0].steps], self.labels)
         quicklook = json.loads((self.output / 'quicklook.json').read_bytes())
         self.assertEqual(quicklook['labels'], self.labels)
+        original_steps = [original._quicklook_steps[0], middle._quicklook_steps[1], continued._quicklook_steps[2]]
+        for reported, restored, measured in zip(quicklook['intensity'], continued._quicklook_steps, original_steps):
+            self.assertAlmostEqual(reported, measured.moment, places=18)
+            self.assertEqual(restored.moment, measured.moment)
+            self.assertEqual((restored.crdec, restored.crinc), (measured.crdec, measured.crinc))
         provenance = json.loads((self.output / 'provenance.json').read_bytes())
         self.assertEqual(provenance['continued_from_saved_step'], 2)
         index = json.loads((self.output / 'artifact_index.json').read_bytes())
@@ -109,7 +115,7 @@ class MeasurementCheckpointTests(unittest.TestCase):
         self.assertEqual(pending_checkpoint(self.output), checkpoint)
 
     def test_save_preserves_accepted_output_and_detects_an_edit_before_restoring(self):
-        previous = MeasurementWorker(SpecimenMeta('A'), ['AF20'], self.root, RecordingBackend(), run_id='previous')
+        previous = MeasurementWorker(self.meta, ['AF20'], self.root, RecordingBackend(), run_id='previous')
         previous.run()
         self.assertFalse(previous._pending_run_result)
         index = (self.output / 'artifact_index.json').read_bytes()
@@ -170,6 +176,11 @@ class MeasurementCheckpointTests(unittest.TestCase):
         restored = self.run_worker(expected, saved=checkpoint, labels=['NRM', 'AF10'])
         self.assertFalse(restored._pending_run_result, restored._error_messages)
         self.assertEqual(expected.treatments, ['AF10'])
+        measured = first._quicklook_steps[0]
+        retained = restored._quicklook_steps[0]
+        self.assertEqual(retained.moment, measured.moment)
+        self.assertEqual((retained.crdec, retained.crinc), (measured.crdec, measured.crinc))
+        self.assertEqual(retained.axis_sd_raw, measured.axis_sd_raw)
 
     def test_live_measure_reopens_a_saved_run_in_a_fresh_window(self):
         app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])

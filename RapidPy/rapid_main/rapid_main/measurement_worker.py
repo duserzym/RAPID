@@ -430,7 +430,22 @@ class MeasurementWorker(QtCore.QThread):
                                                for step in prior if step['block_statistics'] is not None)
             susceptibility_records.extend(checkpoint['susceptibility'])
             bundle.set_provenance(**self._base_provenance())
-            _, retained_steps = read_specimen(bundle._staged.specimen_file, specimen_name=self._meta.name)
+            _, saved_rows = read_specimen(bundle._staged.specimen_file, specimen_name=self._meta.name)
+            if len(saved_rows) != self._restored_count:
+                raise ValueError('The saved specimen rows do not match the acquisition prefix.')
+            retained_steps = []
+            for record, row in zip(prior, saved_rows):
+                blocks = record['blocks']
+                statistics = record['block_statistics']
+                # The CIT row carries the timestamp but reports intensity per volume.
+                # Use the verified cycle mean in emu, as for freshly acquired steps.
+                step = _build_step(record['label'], *record['cycle_statistics']['mean_vector'],
+                    self._operator, row.timestamp, meta=self._meta,
+                    error_angle=statistics['fischer_sd_deg'] if statistics is not None else 0.0,
+                    axis_sd_raw=tuple(statistics['axis_sd_raw']) if statistics is not None else None,
+                    range_factor=blocks[0]['range_factor'] if blocks else None)
+                self._validate_step(step)
+                retained_steps.append(step)
             self._quicklook_steps.extend(retained_steps)
             self.checkpoint_loaded.emit(retained_steps)
             self._emit_warning(f'Continuing at step {self._restored_count + 1}. The saved steps will not be repeated.')
@@ -684,7 +699,8 @@ class MeasurementWorker(QtCore.QThread):
                 step = _build_step(label, sdx, sdy, sdz, self._operator, datetime.now(),
                     error_angle=(self._last_collection_stats.fischer_sd_deg
                                  if self._last_collection_stats is not None else 0.0),
-                    meta=self._meta, collection=self._last_collection_stats,
+                    meta=self._meta, axis_sd_raw=(self._last_collection_stats.axis_sd_raw
+                                                 if self._last_collection_stats is not None else None),
                     range_factor=self._cycle_blocks[0].range_factor if self._cycle_blocks else None)
                 self._validate_step(step)
                 self._emit_phase(WorkflowPhase.SAVING)
@@ -1823,7 +1839,7 @@ def _build_step(
     error_angle: float = 0.0,
     *,
     meta: SpecimenMeta | None = None,
-    collection: BlockCollectionStatistics | None = None,
+    axis_sd_raw: tuple[float, float, float] | None = None,
     range_factor: float | None = None,
 ) -> MeasurementStep:
     """Convert raw SQUID Cartesian readings to a ``MeasurementStep``."""
@@ -1852,6 +1868,6 @@ def _build_step(
         operator=operator[:8] if operator else "",
         timestamp=timestamp,
         intensity_emu_per_cm3=moment / volume,
-        axis_sd_raw=collection.axis_sd_raw if collection is not None else None,
+        axis_sd_raw=axis_sd_raw,
         core_orientation_available=meta.has_core_orientation if meta is not None else None,
     )
