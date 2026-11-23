@@ -5,6 +5,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Build-Fingerprint.ps1')
 
 $projectPath = Join-Path $PSScriptRoot 'Paleomag v3.vbp'
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -207,6 +208,30 @@ if ($unregisteredDependencies.Count -gt 0) {
 }
 
 $warnings = [System.Collections.Generic.List[string]]::new()
+$compiledProblem = $null
+if ($compiledPath) {
+    try {
+        $receiptPath = Join-Path (Split-Path -Parent $compiledPath) 'vb6-build-receipt.json'
+        if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf)) {
+            throw 'The executable has no build receipt.'
+        }
+        $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+        if ($receipt.schema -cne 'rapid.vb6.build-receipt.v2' -or $receipt.succeeded -isnot [bool] -or
+            -not $receipt.succeeded -or $receipt.exitCode -ne 0) {
+            throw 'The executable has no current, successful build receipt.'
+        }
+        if ($receipt.exeSha256 -cne (Get-FileHash -LiteralPath $compiledPath -Algorithm SHA256).Hash) {
+            throw 'The executable hash differs from the build receipt.'
+        }
+        if ($receipt.sourceFingerprint -cne (Get-VB6SourceFingerprint -Project $projectPath)) {
+            throw 'The VB6 project inputs differ from the build receipt.'
+        }
+    } catch {
+        $compiledProblem = "Compiled launch blocked: $($_.Exception.Message) Rebuild with VB6\Build-VB6Project.ps1."
+        if ($Launch) { $blockers.Add($compiledProblem) }
+        else { $warnings.Add($compiledProblem) }
+    }
+}
 if (-not $comHiveWritable) {
     $warnings.Add('This token cannot write the machine COM hive, so opening the project in the IDE will fail with "Error accessing the system registry". Use VB6\Start-VB6.ps1, which runs the IDE elevated.')
 }
@@ -226,7 +251,9 @@ if ($blockers.Count -gt 0) {
         foreach ($warning in $warnings) { Write-Host " - $warning" }
     }
     Write-Host ''
-    Write-Host 'Install the VB6 IDE (to run source) or copy a known-good PALEOMAG2013.exe, then install/register the missing 32-bit dependencies with the 32-bit regsvr32 at C:\Windows\SysWOW64\regsvr32.exe.'
+    if ($missingDependencies.Count -gt 0 -or $unregisteredDependencies.Count -gt 0) {
+        Write-Host 'Install or register the missing 32-bit components using C:\Windows\SysWOW64\regsvr32.exe where applicable.'
+    }
     exit 1
 }
 
@@ -236,9 +263,9 @@ if ($warnings.Count -gt 0) {
     Write-Host ''
 }
 
-Write-Host 'READY: Required launch files are present.' -ForegroundColor Green
+Write-Host 'Required VB6 dependencies are present.' -ForegroundColor Green
 if (-not $Launch) {
-    Write-Host 'Re-run with -Launch to start Paleomag.'
+    if (-not $compiledProblem) { Write-Host 'Re-run with -Launch to start Paleomag.' }
     exit 0
 }
 

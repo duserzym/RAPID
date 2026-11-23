@@ -45,6 +45,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Build-Fingerprint.ps1')
 
 $ideCandidates = @(
     'C:\Program Files (x86)\Microsoft Visual Studio\VB98\VB6.EXE',
@@ -319,6 +320,7 @@ if ((-not $elevated) -and (-not $NoElevate) -and (-not $PlanOnly)) {
 }
 
 # ------------------------------------------------------------------ prepare
+$sourceFingerprint = if (-not $PlanOnly) { Get-VB6SourceFingerprint -Project $Project }
 $local = New-LocalProject -SourceProject $Project -ApplyFixups (-not $NoFixups)
 
 if (@($local.Changes).Count -gt 0) {
@@ -350,6 +352,15 @@ if ($PlanOnly) {
 }
 
 # ------------------------------------------------------------------ compile
+$exeName = ''
+foreach ($line in [IO.File]::ReadLines($Project)) {
+    if ($line -like 'ExeName32=*') { $exeName = $line.Substring(10).Trim('"'); break }
+}
+$exePath = if ($exeName) { Join-Path $OutDir $exeName }
+$previousWriteTime = [DateTime]::MinValue
+if ($exePath -and (Test-Path -LiteralPath $exePath -PathType Leaf)) {
+    $previousWriteTime = (Get-Item -LiteralPath $exePath).LastWriteTimeUtc
+}
 $logPath = Join-Path $OutDir 'vb6-build.log'
 if (Test-Path -LiteralPath $logPath) { Remove-Item -LiteralPath $logPath -Force }
 
@@ -369,7 +380,7 @@ if (Test-Path -LiteralPath $workspacePath -PathType Leaf) {
 Write-Host ("Running: VB6.EXE {0}" -f ($makeArgs -join ' '))
 $started = Get-Date
 $process = Start-Process -FilePath $idePath -ArgumentList $makeArgs `
-    -WorkingDirectory (Split-Path -Parent $Project) -PassThru
+    -WorkingDirectory (Split-Path -Parent $Project) -WindowStyle Hidden -PassThru
 
 # /make normally runs headless, but a component it cannot load makes the IDE
 # raise a modal dialog that nobody is there to dismiss. Do not leave an
@@ -418,28 +429,31 @@ if (Test-Path -LiteralPath $logPath -PathType Leaf) {
 }
 
 # ------------------------------------------------------------------ verify
-$exeName = ''
-foreach ($line in [System.IO.File]::ReadLines($Project)) {
-    if ($line -like 'ExeName32=*') { $exeName = $line.Substring(10).Trim('"'); break }
-}
-$exePath = ''
-if ($exeName) { $exePath = Join-Path $OutDir $exeName }
-
 $succeeded = $false
-if ($exePath -and (Test-Path -LiteralPath $exePath -PathType Leaf)) {
+$exeSha256 = $null
+if ($exitCode -eq 0 -and $exePath -and (Test-Path -LiteralPath $exePath -PathType Leaf)) {
     $exeItem = Get-Item -LiteralPath $exePath
-    if ($exeItem.LastWriteTime -ge $started.AddSeconds(-5)) {
-        $succeeded = $true
-        Write-Host ('BUILT: ' + $exePath) -ForegroundColor Green
-        Write-Host ("  size:     {0:n0} bytes" -f $exeItem.Length)
-        Write-Host ("  modified: {0}" -f $exeItem.LastWriteTime)
-        $info = $exeItem.VersionInfo
-        if ($info.FileVersion) { Write-Host ("  version:  {0}" -f $info.FileVersion) }
+    if ($exeItem.Length -gt 0 -and $exeItem.LastWriteTimeUtc -gt $previousWriteTime -and
+        $exeItem.LastWriteTimeUtc -ge $started.ToUniversalTime().AddSeconds(-5)) {
+        try {
+            if ((Get-VB6SourceFingerprint -Project $Project) -cne $sourceFingerprint) {
+                throw 'Project inputs changed while VB6 was compiling.'
+            }
+            $exeSha256 = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
+            $succeeded = $true
+            Write-Host ('BUILT: ' + $exePath) -ForegroundColor Green
+            Write-Host ("  size:     {0:n0} bytes" -f $exeItem.Length)
+            Write-Host ("  modified: {0}" -f $exeItem.LastWriteTime)
+            $info = $exeItem.VersionInfo
+            if ($info.FileVersion) { Write-Host ("  version:  {0}" -f $info.FileVersion) }
+        } catch {
+            Write-Host $_.Exception.Message -ForegroundColor Yellow
+        }
     }
 }
 
 if (-not $succeeded) {
-    Write-Host 'BUILD FAILED: no fresh EXE was produced.' -ForegroundColor Red
+    Write-Host 'BUILD FAILED: no fresh EXE was verified.' -ForegroundColor Red
     if ($logText -match 'Working Model Edition') {
         Write-Host ''
         Write-Host 'Cause: the VB6 compiler is disabled because the edition was never registered.' -ForegroundColor Yellow
@@ -453,7 +467,7 @@ if (-not $succeeded) {
 
 # ------------------------------------------------------------------ receipt
 $receipt = [pscustomobject]@{
-    schema         = 'rapid.vb6.build-receipt.v1'
+    schema         = 'rapid.vb6.build-receipt.v2'
     builtAtIso     = (Get-Date).ToString('o')
     machine        = $env:COMPUTERNAME
     user           = [Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -464,9 +478,11 @@ $receipt = [pscustomobject]@{
     editionCanCompile = $edition.CanCompile
     editionReasons = @($edition.Reasons)
     sourceProject  = $Project
+    sourceFingerprint = $sourceFingerprint
     builtProject   = $local.Path
     outputDir      = $OutDir
     exePath        = $exePath
+    exeSha256      = $exeSha256
     succeeded      = $succeeded
     exitCode       = $exitCode
     timedOut       = $timedOut

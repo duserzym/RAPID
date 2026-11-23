@@ -107,6 +107,10 @@ Rather than edit the committed `.vbp` — which would break every other machine
 that does have 2.2 — the build writes `<name>.localbuild.vbp` beside it with the
 substitutions applied, compiles that, deletes it afterwards, and records every
 substitution in `build\vb6\vb6-build-receipt.json`. The file is gitignored.
+On a successful build, the receipt records SHA-256 fingerprints of the project
+inputs and executable. `Test-LaunchReadiness.ps1 -Launch` checks both before
+starting the compiled application. Rebuild after changing project inputs or
+when the existing executable has an older receipt.
 
 Use `-KeepLocalProject` to inspect what was generated, or `-NoFixups` to compile
 the project exactly as committed.
