@@ -55,8 +55,13 @@ def principal_component_fit(
     include_origin: bool = False,
 ) -> FitResult | None:
     vectors = np.array([vector_for_step(step, coordinate_system) for step in steps], dtype=float)
-    if len(vectors) < 2:
+    if len(vectors) < 2 or not np.isfinite(vectors).all():
         return None
+    scale = float(np.max(np.abs(vectors)))
+    if scale == 0.0 or (not include_origin and np.all(vectors == vectors[0])):
+        return None
+    # Fit on a unitless scale so numerical cutoffs do not depend on moment units.
+    vectors /= scale
     if include_origin:
         centered = vectors.copy()
         center = np.zeros(3, dtype=float)
@@ -72,13 +77,18 @@ def principal_component_fit(
     if np.dot(direction, span) < 0:
         direction = -direction
     dec, inc = _cartesian_to_dir(direction)
-    lam1 = max(eigenvalues[0], 1e-15)
+    lam1 = eigenvalues[0]
+    if lam1 <= 0:
+        return None
     lam2 = max(eigenvalues[1], 0.0)
     lam3 = max(eigenvalues[2], 0.0)
     mad = math.degrees(math.atan(math.sqrt((lam2 + lam3) / lam1)))
     center_norm = float(np.linalg.norm(center))
-    dang = math.degrees(math.acos(np.clip(float(np.dot(center, direction)) / max(center_norm, 1e-15), -1.0, 1.0))) if center_norm > 0 else 0.0
-    return FitResult(center=center, direction=direction, eigenvalues=eigenvalues, dec=dec, inc=inc, mad=mad, dang=dang)
+    dang = math.degrees(math.acos(np.clip(float(np.dot(center, direction)) / center_norm, -1.0, 1.0))) if center_norm > 0 else 0.0
+    return FitResult(
+        center=center * scale, direction=direction, eigenvalues=(eigenvalues * scale) * scale,
+        dec=dec, inc=inc, mad=mad, dang=dang,
+    )
 
 
 def principal_component_segment(

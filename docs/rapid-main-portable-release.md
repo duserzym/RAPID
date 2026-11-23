@@ -74,6 +74,8 @@ The preview and snapshot button become active on receipt of a usable frame.
    is plotted below zero in both views.
    Use **View → Step labels** to show endpoints, label every measured
    treatment step, or hide labels on the directional plots.
+   Fit angles use the relative spread of the measured vectors and are
+   independent of the moment scale.
    On the stereonet, enable **CSD contours** to show the angular scatter
    around each reading. Solid arcs are in the lower hemisphere. Dashed arcs
    are in the upper hemisphere. New MagIC measurements carry recorded CSD

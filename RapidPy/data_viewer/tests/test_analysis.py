@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from dataclasses import replace
 from datetime import datetime
 import math
 from pathlib import Path
@@ -52,6 +53,33 @@ class TestViewerAnalysis(unittest.TestCase):
         assert fit is not None
         self.assertGreater(fit.eigenvalues[0], fit.eigenvalues[1])
         self.assertLess(fit.mad, 25.0)
+
+    def test_fit_angles_are_independent_of_the_moment_scale(self) -> None:
+        steps = [
+            replace(_step(label, moment, 0, 0), crdec=dec, crinc=inc)
+            for label, moment, dec, inc in (
+                ("NRM", 1.0, 22.0, 43.0),
+                ("AF20", 0.8, 26.0, 39.0),
+                ("AF40", 0.5, 31.0, 36.0),
+                ("AF60", 0.3, 28.0, 32.0),
+            )
+        ]
+        reference = principal_component_fit(steps)
+        assert reference is not None
+        self.assertGreater(reference.mad, 0.1)
+        for factor in (1e-9, 1e-18):
+            with self.subTest(factor=factor):
+                scaled = principal_component_fit([replace(step, moment=step.moment * factor) for step in steps])
+                assert scaled is not None
+                self.assertAlmostEqual(scaled.mad, reference.mad, places=10)
+                self.assertAlmostEqual(scaled.dang, reference.dang, places=10)
+                np.testing.assert_allclose(scaled.center / factor, reference.center, rtol=1e-12)
+                np.testing.assert_allclose(scaled.eigenvalues / factor**2, reference.eigenvalues, rtol=1e-10)
+
+    def test_identical_steps_do_not_define_a_free_fit(self) -> None:
+        step = _step("NRM", 1e-9, 0.0, 0.0)
+        self.assertIsNone(principal_component_fit([step] * 3))
+        self.assertIsNotNone(principal_component_fit([step] * 3, include_origin=True))
 
     def test_coordinate_system_mapping(self) -> None:
         step = MeasurementStep(
