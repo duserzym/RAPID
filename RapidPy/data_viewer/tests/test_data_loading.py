@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,8 @@ sys.path.insert(0, str(RAPID_MAIN_ROOT))
 
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
 from rapid_main.io.magic_writer import write_measurements
+from rapid_main.io.measurement_bundle import MeasurementBundleWriter
+from rapid_main.io.rmg_writer import RmgTreatment
 from rapid_main.io.specimen_writer import append_step, write_header
 from data_viewer.data_loading import (
     build_paleointensity_points,
@@ -83,6 +86,60 @@ class TestViewerDataLoading(unittest.TestCase):
         self.assertEqual(dataset.specimens[0].meta.site, "SITE1")
         watched = watch_paths_for_dataset(dataset)
         self.assertEqual(watched, [root, root / "measurements.txt"])
+
+    def test_cit_reads_measured_susceptibility_and_watches_its_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            sam = root / "set.sam"
+            sam.write_text("SPEC.01\n", encoding="latin-1")
+            specimen_path = root / "SPEC.01"
+            write_header(specimen_path, SpecimenMeta(name="SPEC.01"))
+            append_step(specimen_path, _step("NRM"))
+            rmg = root / "SPEC.01.rmg"
+            rmg.write_text(
+                ",Level,Bias Field,Spin Speed,Hold Time,Mz,Std. Dev.,Mz/Vol,Moment Susceptibility\n"
+                "NRM,0,,,,,,,0\n"
+                "AF,250,,,,,,,0.002\n"
+                "AF,250,,,,,,,-0.001\n"
+                "TT,450,,,,,,,0.003\n"
+                "SUSC,0,,,,,,,\n"
+                "SUSC,0,,,,,,,0\n"
+                "TT,500,,,,,,,nan\n",
+                encoding="latin-1",
+            )
+
+            dataset = load_cit_sam(sam)
+            specimen, = dataset.specimens
+            self.assertIn(rmg, watch_paths_for_dataset(dataset))
+            self.assertEqual([point.rmg_step for point in specimen.susceptibility_points], [2, 3, 4, 6])
+            self.assertEqual(
+                [(point.treatment, point.level, point.level_kind, point.susceptibility)
+                 for point in specimen.susceptibility_points],
+                [("AF", 250, "af", .002), ("AF", 250, "af", -.001),
+                 ("TT", 450, "thermal", .003), ("SUSC", 0, "", 0)],
+            )
+
+    def test_loads_distinct_susceptibility_readings_from_current_and_archived_bundles(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            meta = SpecimenMeta(name="A")
+            with MeasurementBundleWriter(root, meta) as writer:
+                writer.append_step(_step("AF25"), susceptibility=.001,
+                                   rmg_treatment=RmgTreatment("AF25", "AF", 250.0))
+            with MeasurementBundleWriter(root, meta) as writer:
+                writer.append_step(_step("TT450"), susceptibility=-.002,
+                                   rmg_treatment=RmgTreatment("TT450", "TT", 450.0))
+            primary = load_magic_directory(root)
+            current, = primary.specimens
+            reading, = current.susceptibility_points
+            self.assertEqual((reading.level_kind, reading.level, reading.susceptibility), ("thermal", 450, -.002))
+            self.assertIn(root / "A.rmg", watch_paths_for_dataset(primary))
+
+            previous = json.loads((root / "provenance.json").read_bytes())["previous_publication"]
+            archived, = load_magic_directory((root / previous["relative_path"]).parent).specimens
+            reading, = archived.susceptibility_points
+            self.assertEqual((reading.level_kind, reading.level, reading.susceptibility), ("af", 250, .001))
+            self.assertIsNone(archived.rmg_path)
 
     def test_detects_izzi_and_builds_points(self) -> None:
         steps = [

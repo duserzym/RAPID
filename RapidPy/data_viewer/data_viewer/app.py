@@ -8,6 +8,7 @@ This module is intentionally smaller than pmag_gui / demag_gui. It focuses on:
 """
 from __future__ import annotations
 
+from html import escape
 import math
 import sys
 from pathlib import Path
@@ -22,7 +23,10 @@ except ImportError:
     _HAS_PG = False
 
 from data_viewer.analysis import next_step_suggestion, principal_component_fit, summarize_paleointensity, vector_for_step
-from data_viewer.data_loading import MeasurementStep, SpecimenMeta, ViewerDataset, ViewerSpecimen, load_input, load_magic_directory, watch_paths_for_dataset
+from data_viewer.data_loading import (
+    MeasurementStep, SpecimenMeta, SusceptibilityPoint, ViewerDataset, ViewerSpecimen,
+    load_input, load_magic_directory, watch_paths_for_dataset,
+)
 from rapidpy_common.ui import apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon
 from rapidpy_common.resources import asset_directory
 
@@ -511,6 +515,88 @@ class IntensityWidget(QtWidgets.QWidget):
         self._curve.setData(xs, ys)
 
 
+class SusceptibilityWidget(QtWidgets.QWidget):
+    """Review readings in RMG order or by a single demagnetization unit."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._specimen: ViewerSpecimen | None = None
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 4, 0, 0)
+        self._axis = QtWidgets.QComboBox()
+        self._axis.setAccessibleName("Susceptibility horizontal axis")
+        self._axis.setToolTip("Choose measurement order, AF levels as stored in the RMG, or treatment temperature.")
+        self._axis.currentIndexChanged.connect(self._refresh)
+        layout.addWidget(self._axis)
+        if _HAS_PG:
+            self._plot = pg.PlotWidget(background="#ffffff")
+            self._plot.setAccessibleName("RMG moment susceptibility plot")
+            self._plot.showGrid(x=True, y=True, alpha=0.14)
+            self._plot.setLabel("left", "Moment susceptibility (emu/Oe)")
+            self._plot.setMenuEnabled(False)
+            self._dots = pg.ScatterPlotItem(
+                size=8, brush=pg.mkBrush("#7A0219"), pen=pg.mkPen("#7A0219"),
+                hoverable=True, tip=self._reading_tip,
+            )
+            self._plot.addItem(self._dots)
+            layout.addWidget(self._plot, 1)
+        else:
+            self._table = QtWidgets.QTableWidget(0, 3)
+            self._table.setAccessibleName("RMG moment susceptibility readings")
+            self._table.setHorizontalHeaderLabels(["RMG step", "Treatment", "Susceptibility (emu/Oe)"])
+            self._table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+            self._table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+            layout.addWidget(self._table, 1)
+
+    def set_specimen(self, specimen: ViewerSpecimen | None) -> None:
+        if specimen is self._specimen:
+            return
+        self._specimen = specimen
+        previous_axis = self._axis.currentData()
+        points = specimen.susceptibility_points if specimen else []
+        level_kinds = {point.level_kind for point in points if point.level is not None}
+        with QtCore.QSignalBlocker(self._axis):
+            self._axis.clear()
+            self._axis.addItem("Step (RMG order)", "")
+            if "af" in level_kinds:
+                self._axis.addItem("Recorded AF level", "af")
+            if "thermal" in level_kinds:
+                self._axis.addItem("Temperature (°C)", "thermal")
+            self._axis.setCurrentIndex(max(0, self._axis.findData(previous_axis)))
+        self._axis.setEnabled(self._axis.count() > 1)
+        self._refresh()
+
+    @staticmethod
+    def _reading_tip(*, x: float, y: float, data: str) -> str:
+        return f"<span>{escape(data)}<br>{y:.7g} emu/Oe</span>"
+
+    @staticmethod
+    def _treatment_description(point: SusceptibilityPoint) -> str:
+        if point.level is None:
+            return point.treatment
+        unit = " °C" if point.level_kind == "thermal" else ""
+        return f"{point.treatment} {point.level:g}{unit}"
+
+    def _refresh(self) -> None:
+        level_kind = self._axis.currentData()
+        points = self._specimen.susceptibility_points if self._specimen else []
+        if level_kind:
+            points = [point for point in points if point.level is not None and point.level_kind == level_kind]
+        if _HAS_PG:
+            self._plot.setLabel("bottom", self._axis.currentText())
+            self._dots.setData(
+                x=[point.level if level_kind else point.rmg_step for point in points],
+                y=[point.susceptibility for point in points],
+                data=[f"RMG step {point.rmg_step} · {self._treatment_description(point)}" for point in points],
+            )
+        else:
+            self._table.setRowCount(len(points))
+            for row, point in enumerate(points):
+                values = (str(point.rmg_step), self._treatment_description(point), f"{point.susceptibility:.7g}")
+                for column, value in enumerate(values):
+                    self._table.setItem(row, column, QtWidgets.QTableWidgetItem(value))
+
+
 class PaleointensityWidget(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -716,8 +802,9 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         self._coord_combo.currentIndexChanged.connect(self._update_all)
         bottom_row.addWidget(self._coord_combo)
 
-        bottom_row.addWidget(QtWidgets.QLabel("Directional view"))
+        bottom_row.addWidget(QtWidgets.QLabel("Plot"))
         self._view_combo = QtWidgets.QComboBox()
+        self._view_combo.setAccessibleName("Specimen plot")
         self._view_combo.addItems(["2D component view", "3D vector view"])
         self._view_combo.currentIndexChanged.connect(self._sync_directional_stack)
         bottom_row.addWidget(self._view_combo)
@@ -822,6 +909,8 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         self._vector3d = Vector3DWidget()
         self._directional_stack.addWidget(self._zij)
         self._directional_stack.addWidget(self._vector3d)
+        self._susceptibility_widget = SusceptibilityWidget()
+        self._directional_stack.addWidget(self._susceptibility_widget)
 
         stereo_wrap = QtWidgets.QWidget()
         sl = QtWidgets.QHBoxLayout(stereo_wrap)
@@ -837,7 +926,7 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         plots_split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         plots_split.setChildrenCollapsible(False)
         plots_split.setHandleWidth(6)
-        plots_split.addWidget(_panel_card("Directional", self._directional_stack, "PmagPy-style orthogonal view defaults to east-right and north-up."))
+        plots_split.addWidget(_panel_card("Specimen Plot", self._directional_stack))
 
         secondary_split = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         secondary_split.setChildrenCollapsible(False)
@@ -1123,6 +1212,18 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         )
 
     def _sync_analysis_panels(self) -> None:
+        specimen = self._current_specimen
+        self._susceptibility_widget.set_specimen(specimen)
+        susceptibility_index = self._view_combo.findData("susceptibility")
+        if specimen and specimen.susceptibility_points:
+            if susceptibility_index < 0:
+                self._view_combo.addItem("Susceptibility", "susceptibility")
+        elif susceptibility_index >= 0:
+            with QtCore.QSignalBlocker(self._view_combo):
+                if self._view_combo.currentIndex() == susceptibility_index:
+                    self._view_combo.setCurrentIndex(0)
+                self._view_combo.removeItem(susceptibility_index)
+            self._directional_stack.setCurrentIndex(self._view_combo.currentIndex())
         has_paleointensity = _has_paleointensity_data(self._current_specimen)
         self._pint_card.setVisible(has_paleointensity)
         if has_paleointensity:

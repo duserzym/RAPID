@@ -12,20 +12,24 @@ from pathlib import Path
 from typing import Iterable
 
 try:
-    from rapid_main.data_model import MeasurementStep, SpecimenMeta
+    from rapid_main.data_model import MeasurementStep, RmgRecord, SpecimenMeta
     from rapid_main.io.bundle_history import ARCHIVE_MANIFEST, ARCHIVE_PAYLOAD, is_bundle_archive, open_bundle_archive
+    from rapid_main.io.rmg_reader import parse_rmg, read_rmg
     from rapid_main.io.sam_reader import read_sam, specimen_path
     from rapid_main.io.specimen_reader import read_specimen
+    from rapid_main.specimen_paths import contained_path, relative_specimen_path
 except ModuleNotFoundError:
     rapidpy_root = Path(__file__).resolve().parents[2]
     rapid_main_root = rapidpy_root / "rapid_main"
     if str(rapid_main_root) not in sys.path:
         sys.path.insert(0, str(rapid_main_root))
     sys.modules.pop("rapid_main", None)
-    from rapid_main.data_model import MeasurementStep, SpecimenMeta
+    from rapid_main.data_model import MeasurementStep, RmgRecord, SpecimenMeta
     from rapid_main.io.bundle_history import ARCHIVE_MANIFEST, ARCHIVE_PAYLOAD, is_bundle_archive, open_bundle_archive
+    from rapid_main.io.rmg_reader import parse_rmg, read_rmg
     from rapid_main.io.sam_reader import read_sam, specimen_path
     from rapid_main.io.specimen_reader import read_specimen
+    from rapid_main.specimen_paths import contained_path, relative_specimen_path
 
 
 @dataclass
@@ -35,6 +39,15 @@ class PaleointensityPoint:
     nrm_remaining: float
     ptrm_gained: float
     label: str
+
+
+@dataclass(frozen=True)
+class SusceptibilityPoint:
+    rmg_step: int
+    treatment: str
+    level: float | None
+    level_kind: str
+    susceptibility: float
 
 
 @dataclass
@@ -47,6 +60,8 @@ class ViewerSpecimen:
     source_path: Path | None = None
     data_path: Path | None = None
     paleointensity_points: list[PaleointensityPoint] = field(default_factory=list)
+    susceptibility_points: list[SusceptibilityPoint] = field(default_factory=list)
+    rmg_path: Path | None = None
 
 
 @dataclass
@@ -72,24 +87,58 @@ def load_input(path: str | Path) -> ViewerDataset:
     raise ValueError(f"Unsupported input: {source}")
 
 
+def _susceptibility_points(records: Iterable[RmgRecord]) -> list[SusceptibilityPoint]:
+    points = []
+    for step, record in enumerate(records, start=1):
+        treatment = record.step_type.upper()
+        fields = record.raw_fields
+        if len(fields) < 9 or not fields[8].strip():
+            continue
+        # The historical sidecar puts zero in unmeasured treatment rows.
+        # A dedicated SUSC row can contain a valid zero result.
+        if record.susceptibility == 0.0 and treatment != "SUSC":
+            continue
+        level_kind = ""
+        if re.fullmatch(r"AF|AFZ|AFMAX|ATAF[XYZ]|UAF[XYZ][12]", treatment):
+            level_kind = "af"
+        elif treatment in {"TT", "TH", "TEMP"}:
+            level_kind = "thermal"
+        points.append(SusceptibilityPoint(
+            step, record.step_type, record.step_value, level_kind, record.susceptibility,
+        ))
+    return points
+
+
+def _load_rmg_sidecar(root: Path, specimen: ViewerSpecimen) -> None:
+    try:
+        path = contained_path(root, specimen.name + ".rmg")
+        if not path.is_file():
+            return
+        specimen.susceptibility_points = _susceptibility_points(read_rmg(path))
+        specimen.rmg_path = path
+    except (OSError, ValueError, csv.Error):
+        # A missing, unreadable or unsafe optional sidecar does not hide direction data.
+        return
+
+
 def load_cit_sam(path: str | Path) -> ViewerDataset:
     sam_path = Path(path)
     specimens: list[ViewerSpecimen] = []
     for name in read_sam(sam_path):
         specimen_file = specimen_path(sam_path, name)
         meta, steps = read_specimen(specimen_file, name)
-        specimens.append(
-            ViewerSpecimen(
-                name=name,
-                meta=meta,
-                steps=steps,
-                experiment_type=detect_experiment_type(steps),
-                source_kind="cit_sam",
-                source_path=sam_path,
-                data_path=specimen_file,
-                paleointensity_points=build_paleointensity_points(steps),
-            )
+        specimen = ViewerSpecimen(
+            name=name,
+            meta=meta,
+            steps=steps,
+            experiment_type=detect_experiment_type(steps),
+            source_kind="cit_sam",
+            source_path=sam_path,
+            data_path=specimen_file,
+            paleointensity_points=build_paleointensity_points(steps),
         )
+        _load_rmg_sidecar(sam_path.parent, specimen)
+        specimens.append(specimen)
     if not specimens:
         raise ValueError(f"No specimen files were found from {sam_path.name}.")
     return ViewerDataset("cit_sam", sam_path, specimens)
@@ -151,6 +200,7 @@ def load_magic_directory(path: str | Path) -> ViewerDataset:
     source_file = root / (ARCHIVE_PAYLOAD if archived else "measurements.txt")
     specimens_by_name: dict[str, ViewerSpecimen] = {}
     with ExitStack() as stack:
+        archive = None
         if archived:
             archive = stack.enter_context(open_bundle_archive(root))
             if "measurements.txt" not in archive.namelist():
@@ -189,6 +239,20 @@ def load_magic_directory(path: str | Path) -> ViewerDataset:
                 specimens_by_name[specimen_name] = specimen
             specimen.steps.append(_measurement_row_to_step(row, specimen_name))
 
+        if archive is not None:
+            members = set(archive.namelist())
+            for specimen in specimens_by_name.values():
+                try:
+                    member = relative_specimen_path(specimen.name + ".rmg").as_posix()
+                    if member in members:
+                        with TextIOWrapper(archive.open(member), encoding="latin-1", newline="") as rmg:
+                            specimen.susceptibility_points = _susceptibility_points(parse_rmg(rmg))
+                except (ValueError, csv.Error):
+                    continue
+        else:
+            for specimen in specimens_by_name.values():
+                _load_rmg_sidecar(root, specimen)
+
     specimens = sorted(specimens_by_name.values(), key=lambda specimen: specimen.name)
     if not specimens:
         raise ValueError(f"No specimen rows were found in {source_file}")
@@ -207,6 +271,8 @@ def watch_paths_for_dataset(dataset: ViewerDataset) -> list[Path]:
     for specimen in dataset.specimens:
         if specimen.data_path is not None:
             paths.append(Path(specimen.data_path))
+        if specimen.rmg_path is not None:
+            paths.append(specimen.rmg_path)
 
     unique: list[Path] = []
     seen: set[str] = set()

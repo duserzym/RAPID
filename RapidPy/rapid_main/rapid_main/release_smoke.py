@@ -110,14 +110,16 @@ def _check_measurement_archive(root):
     from data_viewer.data_loading import load_magic_directory
     from rapid_main.data_model import MeasurementStep, SpecimenMeta
     from rapid_main.io.measurement_bundle import MeasurementBundleWriter
+    from rapid_main.io.rmg_writer import describe_rmg_treatment
 
     specimen = SpecimenMeta("offline-specimen")
     step = MeasurementStep(demag_label="NRM", gdec=10.0, ginc=30.0, sdec=10.0, sinc=30.0,
                            moment=1e-6, error_angle=2.0, crdec=10.0, crinc=30.0,
                            sdx=0.0, sdy=0.0, sdz=0.0)
-    for measurement in (step, replace(step, demag_label="AF20")):
+    for measurement, susceptibility in ((step, 0.001), (replace(step, demag_label="AF20"), -0.002)):
         with MeasurementBundleWriter(root / "data", specimen, simulated=True) as writer:
-            writer.append_step(measurement)
+            writer.append_step(measurement, susceptibility=susceptibility,
+                               rmg_treatment=describe_rmg_treatment(measurement.demag_label))
     output = writer.publish_dir
     provenance = json.loads((output / "provenance.json").read_text(encoding="utf-8"))
     archive = output / provenance["previous_publication"]["relative_path"]
@@ -125,7 +127,10 @@ def _check_measurement_archive(root):
     current = load_magic_directory(output)
     return (previous.source_kind == "measurement_archive"
             and [item.demag_label for item in previous.specimens[0].steps] == ["NRM"]
-            and [item.demag_label for item in current.specimens[0].steps] == ["AF20"])
+            and [item.demag_label for item in current.specimens[0].steps] == ["AF20"]
+            and [item.susceptibility for item in previous.specimens[0].susceptibility_points] == [0.001]
+            and [(item.level, item.susceptibility) for item in current.specimens[0].susceptibility_points]
+            == [(200.0, -0.002)])
 
 
 def _check_measurement_backup(app, root):

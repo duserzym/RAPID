@@ -15,10 +15,11 @@ This module now supports:
   - 3D vector view with a PCA fit line
   - equal-area stereonet
   - intensity decay curve
+  - moment susceptibility from RMG sidecars in CIT, MagIC, and RAPID archives, with measurement-order, AF field, and temperature views where supported by the readings
   - Arai-style paleointensity tab for IZZI / Thellier-style labels
 - a quick next-step hint panel that suggests the next AF field, thermal step, or IZZI temperature pair and explains why
 - optional scaling of point size by measurement CSD so noisier points are visually obvious
-- automatic file watching with debounced reloads for `.sam`, specimen, CSV, or `measurements.txt` updates
+- automatic file watching with debounced reloads for `.sam`, specimen, RMG, CSV, or `measurements.txt` updates
 
 ## Lightweight Design Decision
 

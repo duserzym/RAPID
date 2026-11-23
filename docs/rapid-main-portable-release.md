@@ -76,6 +76,9 @@ The preview and snapshot button become active on receipt of a usable frame.
    RMG files include treatment levels in gauss or °C, susceptibility, moment
    components, available uncertainty, and core direction. Sample height is
    included when a queue measured it and the station has an imported `UpDownMotor1cm`.
+   In **Data Review**, choose **Susceptibility** under **Plot** to review RMG
+   readings in measurement order, by recorded AF level, or by temperature.
+   This view is available when the selected specimen has susceptibility readings.
    If publication is interrupted, reopening the original specimen for a run
    checks the journal before acquisition and restores the prior accepted files.
    Unexpected changes leave the journal available for review. A completed
