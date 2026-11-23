@@ -374,17 +374,13 @@ def _measurement_row_to_step(row: dict[str, str], specimen_name: str) -> Measure
     label = _label_from_measurement_row(row, specimen_name)
     mx = _to_float(row.get("magn_x"))
     my = _to_float(row.get("magn_y"))
-    mz = _to_float(row.get("magn_z"))
-    if mx == 0.0 and my == 0.0 and mz == 0.0:
+    # MagIC exports produced by RAPID use north/east/down. The viewer uses up-positive vectors.
+    vector_dec, vector_inc, moment = _cartesian_to_dir(mx, my, -_to_float(row.get("magn_z")))
+    if moment == 0.0:
         moment = _to_float(_first_present(row, "magn_moment", "measurement_magn_moment", default="0"))
-        dec = _to_float(_first_present(row, "dir_dec", "measurement_dec", default="0"))
-        inc = _to_float(_first_present(row, "dir_inc", "measurement_inc", default="0"))
-        mx, my, mz = _dir_to_cartesian(dec, inc, moment)
-    else:
-        dec, inc, moment = _cartesian_to_dir(mx, my, mz)
-
-    geographic_dec = _to_float(_first_present(row, "dir_dec", "measurement_dec", default=str(dec)))
-    geographic_inc = _to_float(_first_present(row, "dir_inc", "measurement_inc", default=str(inc)))
+    dec = _to_float(_first_present(row, "dir_dec", "measurement_dec", default=str(vector_dec)))
+    inc = _to_float(_first_present(row, "dir_inc", "measurement_inc", default=str(vector_inc)))
+    mx, my, mz = _dir_to_cartesian(dec, inc, moment)
     error_angle = _to_float(_first_present(
         row, "dir_csd", "measurement_csd", "meas_csd", "error_angle", default="0",
     ))
@@ -392,8 +388,8 @@ def _measurement_row_to_step(row: dict[str, str], specimen_name: str) -> Measure
 
     return MeasurementStep(
         demag_label=label,
-        gdec=geographic_dec,
-        ginc=geographic_inc,
+        gdec=dec,
+        ginc=inc,
         sdec=dec,
         sinc=inc,
         moment=moment,

@@ -130,10 +130,26 @@ class TestViewerDataLoading(unittest.TestCase):
         self.assertEqual(dataset.specimens[0].experiment_type, "Thermal")
         self.assertEqual(dataset.specimens[0].meta.site, "SITE1")
         self.assertEqual(dataset.specimens[0].steps[0].error_angle, 2.0)
+        self.assertEqual(dataset.specimens[0].steps[0].crinc, 30.0)
+        self.assertLess(dataset.specimens[0].steps[0].sdz, 0)
         self.assertEqual(dataset.specimens[0].magnitude_label, "Moment (A·m²)")
         self.assertAlmostEqual(dataset.specimens[0].steps[0].moment, steps[0].magn_moment_Am2(), places=8)
         watched = watch_paths_for_dataset(dataset)
         self.assertEqual(watched, [root, root / "measurements.txt"])
+
+    def test_magic_components_use_down_positive_z_when_direction_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "measurements.txt").write_text(
+                "tab delimited\tmeasurements\n"
+                "measurement\tspecimen\tmagn_x\tmagn_y\tmagn_z\tdir_csd\n"
+                "A-NRM\tA\t0\t0\t2e-9\t10\n",
+                encoding="utf-8",
+            )
+            specimen, = load_magic_directory(root).specimens
+            step, = specimen.steps
+            self.assertEqual((step.crinc, step.sinc, step.ginc, step.sdz), (90.0, 90.0, 90.0, -2e-9))
+            self.assertEqual(step.error_angle, 10)
 
     def test_cit_reads_measured_susceptibility_and_watches_its_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as td:

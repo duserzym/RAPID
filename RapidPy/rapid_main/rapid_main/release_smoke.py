@@ -133,6 +133,7 @@ def _check_measurement_archive(root):
             and direct.source_kind == "cit_specimen"
             and [item.demag_label for item in direct.specimens[0].steps] == ["AF20"]
             and current.specimens[0].steps[0].error_angle == direct.specimens[0].steps[0].error_angle == 2.0
+            and current.specimens[0].steps[0].crinc == direct.specimens[0].steps[0].crinc == 30.0
             and direct.specimens[0].susceptibility_points == current.specimens[0].susceptibility_points
             and [item.susceptibility for item in previous.specimens[0].susceptibility_points] == [0.001]
             and [(item.level, item.susceptibility) for item in current.specimens[0].susceptibility_points]
