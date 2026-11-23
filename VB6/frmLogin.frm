@@ -73,48 +73,10 @@ Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = True
 Attribute VB_Exposed = False
 Option Explicit
-Dim CurrentlyRunning As Boolean
-Dim WriteFile As String
-Dim iMsg, iConf, Flds
-Dim schema As String
-Dim SendEmailGmail As Boolean
 Public LoginSucceeded As Boolean
 
 Private Sub cmdCancel_Click()
     Dim f As Form
-    If CurrentlyRunning Then ' (December 2008 L Carporzen) Monopole survey
-    CurrentlyRunning = False
-    On Error GoTo alive
-    Set iMsg = CreateObject("CDO.Message")
-    Set iConf = CreateObject("CDO.Configuration")
-    Set Flds = iConf.Fields
-    schema = "http://schemas.microsoft.com/cdo/configuration/"
-    Flds.Item(schema & "sendusing") = 2
-    Flds.Item(schema & "smtpserver") = "smtp.gmail.com"
-    Flds.Item(schema & "smtpserverport") = 465
-    Flds.Item(schema & "smtpauthenticate") = 1
-    Flds.Item(schema & "sendusername") = "khramov.Ifz@gmail.com"
-    Flds.Item(schema & "sendpassword") = "magnetometer107"
-    Flds.Item(schema & "smtpusessl") = 1
-    Flds.Update
-    With iMsg
-    .To = "khramov.ifz@gmail.com"
-    .From = "RAPID <khramov.ifz@gmail.com>"
-    .Subject = MailFromName
-    .HTMLBody = "SQUID log"
-    .Sender = MailFromName
-    .Organization = MailFromName
-    .ReplyTo = "khramov.ifz@gmail.com"
-    Set .Configuration = iConf
-    .AddAttachment (WriteFile)
-    SendEmailGmail = .Send
-    End With
-    Set iMsg = Nothing
-    Set iConf = Nothing
-    Set Flds = Nothing
-    Kill (WriteFile)
-alive:
-    End If
     'set the global var to false
     'to denote a failed login
     LoginSucceeded = False
@@ -128,39 +90,6 @@ alive:
 End Sub
 
 Private Sub cmdOK_Click()
-    If CurrentlyRunning Then ' (December 2008 L Carporzen) Monopole survey
-    CurrentlyRunning = False
-    On Error GoTo alive
-    Set iMsg = CreateObject("CDO.Message")
-    Set iConf = CreateObject("CDO.Configuration")
-    Set Flds = iConf.Fields
-    schema = "http://schemas.microsoft.com/cdo/configuration/"
-    Flds.Item(schema & "sendusing") = 2
-    Flds.Item(schema & "smtpserver") = "smtp.gmail.com"
-    Flds.Item(schema & "smtpserverport") = 465
-    Flds.Item(schema & "smtpauthenticate") = 1
-    Flds.Item(schema & "sendusername") = "khramov.Ifz@gmail.com"
-    Flds.Item(schema & "sendpassword") = "magnetometer107"
-    Flds.Item(schema & "smtpusessl") = 1
-    Flds.Update
-    With iMsg
-    .To = "khramov.ifz@gmail.com"
-    .From = "RAPID <khramov.ifz@gmail.com>"
-    .Subject = MailFromName
-    .HTMLBody = "SQUID log"
-    .Sender = MailFromName
-    .Organization = MailFromName
-    .ReplyTo = "khramov.ifz@gmail.com"
-    Set .Configuration = iConf
-    .AddAttachment (WriteFile)
-    SendEmailGmail = .Send
-    End With
-    Set iMsg = Nothing
-    Set iConf = Nothing
-    Set Flds = Nothing
-    Kill (WriteFile)
-alive:
-    End If
     Prog_halted = False ' (September 2007 L Carporzen) New version of the Halt button
     ' Record the login name
     LoginSucceeded = True
@@ -193,76 +122,3 @@ Private Sub Form_Load()
     SetFormIcon Me
     
 End Sub
-
-Public Sub RunSQUID()
-    Dim CurrentData As Cartesian3D
-    Dim waitingTime As Double
-    Dim StartTime As String
-    CurrentlyRunning = True ' (December 2008 L Carporzen) Monopole survey
-    waitingTime = 1
-    StartTime = CStr(Timer) 'Format(Now, "yyyy-mm-dd hh:mm:ss"))
-    WriteFile = "C:\Paleomag\Paleomag 2010\SQUID" '& startTime
-    Do While CurrentlyRunning
-        DelayTime waitingTime
-        Set CurrentData = New Cartesian3D
-        CurrentData.X = 0
-        CurrentData.Y = 0
-        CurrentData.Z = 0
-        Set CurrentData = frmSQUID.getData
-        WriteSQUIDData WriteFile, Format(Now, "yyyy-mm-dd hh:mm:ss"), CurrentData
-        Set CurrentData = Nothing
-        If CStr(Timer) > (StartTime + 86400) Or CStr(Timer) < StartTime Then CurrentlyRunning = False ' send the email everyday or the next day
-    Loop
-    If CStr(Timer) > (StartTime + 86400) Or CStr(Timer) < StartTime Then ' (December 2008 L Carporzen) Monopole survey
-    CurrentlyRunning = True
-    On Error GoTo alive
-    Set iMsg = CreateObject("CDO.Message")
-    Set iConf = CreateObject("CDO.Configuration")
-    Set Flds = iConf.Fields
-    schema = "http://schemas.microsoft.com/cdo/configuration/"
-    Flds.Item(schema & "sendusing") = 2
-    Flds.Item(schema & "smtpserver") = "smtp.gmail.com"
-    Flds.Item(schema & "smtpserverport") = 465
-    Flds.Item(schema & "smtpauthenticate") = 1
-    Flds.Item(schema & "sendusername") = "khramov.Ifz@gmail.com"
-    Flds.Item(schema & "sendpassword") = "magnetometer107"
-    Flds.Item(schema & "smtpusessl") = 1
-    Flds.Update
-    With iMsg
-    .To = "khramov.ifz@gmail.com"
-    .From = "RAPID <khramov.ifz@gmail.com>"
-    .Subject = MailFromName
-    .HTMLBody = "SQUID log partial"
-    .Sender = MailFromName
-    .Organization = MailFromName
-    .ReplyTo = "khramov.ifz@gmail.com"
-    Set .Configuration = iConf
-    .AddAttachment (WriteFile)
-    SendEmailGmail = .Send
-    End With
-    Set iMsg = Nothing
-    Set iConf = Nothing
-    Set Flds = Nothing
-    Kill (WriteFile)
-alive:
-    RunSQUID
-    End If
-End Sub
-
-Private Sub WriteSQUIDData(filename As String, meastime As String, data As Cartesian3D)
-    Dim filenum As Integer
-    filenum = FreeFile
-    On Error GoTo oops
-    If CurrentlyRunning Then ' (December 2008 L Carporzen) Monopole survey
-    Open filename For Append As #filenum
-    With data
-        Print #filenum, meastime; ","; .X; ","; .Y; ","; .Z
-    End With
-    Close #filenum
-    End If
-    GoTo stillworking
-oops:
-    CurrentlyRunning = False
-stillworking:
-End Sub
-

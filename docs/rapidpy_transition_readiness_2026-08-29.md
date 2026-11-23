@@ -125,9 +125,10 @@ Do not extract and overwrite OCXs to evade installer prerequisites.
 The EXE exists but has not been launched. It needs a `Paleomag.ini` before it
 will start: `Sub Main` in `VB6/modProg.bas` reads the INI path from
 `GetSetting(App.EXEName, "Settings", "INIFile", ...)` and, on first run, opens a
-file dialog to choose one, then remembers it in the registry. Point it at the
-lab's real `Paleomag.ini`, or at a copy of `VB6/Defaults.ini` for a
-no-communication smoke test.
+file dialog to choose one, then remembers it in the registry. For the offline
+test, prepare a private copy of `VB6/settings/Paleomag_v3.INI` with
+`[Program] NoCommMode=True` following `VB6/LAUNCH-AND-BUILD.md`. The shorter
+`VB6/Defaults.ini` lacks sections required at startup.
 
 ### Gate 6 — physical RAPID-system test: **not attempted**
 
@@ -299,7 +300,7 @@ carry — is in `docs/rapid_hardware_acceptance_procedure_2026-08-29.md`. In
 summary:
 
 1. Reconfirm the verified VB6 IDE/project/build gates, then complete the
-   no-communication runtime smoke test against a copy of `VB6/Defaults.ini`.
+   No-Communication runtime smoke test with the private profile described above.
 2. Launch VB6 and RapidPy separately in no-communication mode; load all primary
    forms and confirm configuration/output paths.
 3. Inventory COM ports and map each physical device. Keep outputs and port

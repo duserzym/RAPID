@@ -253,6 +253,14 @@ missing, run the setup program from your licensed VB6 media, with two cautions:
 does not exist, so the program opens a file dialog asking for `Paleomag.ini`,
 then remembers your choice in the registry under `PALEOMAG2013`.
 
-Point it at the lab's real `Paleomag.ini`. For a no-communication smoke test,
-copy `VB6\Defaults.ini` somewhere writable, rename it `Paleomag.ini`, and select
-that — then confirm no-communication mode before anything is connected.
+For a No-Communication smoke test, copy `VB6\settings\Paleomag_v3.INI` to a
+private, writable folder. Set `[Program] NoCommMode=True` in the copy before
+launch and point `DefaultPath` and `UsageFile` into that folder. The smaller
+`VB6\Defaults.ini` contains DAQ defaults and lacks sections the application
+requires at startup. Use a disconnected test workstation and select the
+private copy at startup. Verify the application reports No-Communication mode
+before proceeding through the login and logout checks.
+
+Rebuild the executable from the current source for this check. The old Logout
+handler could start an automatic SQUID survey and email its output. That path
+has been removed. The sample profile leaves mail passwords blank.

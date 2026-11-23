@@ -378,7 +378,6 @@ Private Sub cmdLogout_Click()
     Else
         Logout
     End If
-    frmLogin.RunSQUID
 End Sub
 
 Private Sub cmdMagnetometerControl_click()
