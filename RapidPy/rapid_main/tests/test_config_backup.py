@@ -81,7 +81,7 @@ class ConfigBackupTests(unittest.TestCase):
 
             window = QtWidgets.QMainWindow()
             window.config = AppConfig()  # type: ignore[attr-defined]
-            window._has_active_workflow = Mock(return_value=False)  # type: ignore[attr-defined]
+            window._operating_mode_change_blocker = Mock(return_value="")  # type: ignore[attr-defined]
             window._on_nocomm_toggled = Mock()  # type: ignore[attr-defined]
             window._estimator = SimpleNamespace(step_times={})  # type: ignore[attr-defined]
             window.set_status = Mock()  # type: ignore[attr-defined]
@@ -115,7 +115,7 @@ class ConfigBackupTests(unittest.TestCase):
     def test_restore_is_blocked_while_workflow_is_active(self) -> None:
         window = QtWidgets.QMainWindow()
         window.config = AppConfig()  # type: ignore[attr-defined]
-        window._has_active_workflow = Mock(return_value=True)  # type: ignore[attr-defined]
+        window._operating_mode_change_blocker = Mock(return_value="Finish active work first.")  # type: ignore[attr-defined]
         panel = SettingsPanel()
         window.setCentralWidget(panel)
 
@@ -128,6 +128,87 @@ class ConfigBackupTests(unittest.TestCase):
         warning.assert_called_once()
         choose_file.assert_not_called()
         window.deleteLater()
+
+    def test_save_and_import_are_blocked_before_changing_active_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings = root / "config.json"
+            legacy = root / "legacy.ini"
+            legacy.write_text("[Program]\nNoCommMode=False\nLastLogin=Imported operator\n", encoding="utf-8")
+            window = QtWidgets.QMainWindow()
+            window.config = AppConfig()  # type: ignore[attr-defined]
+            window.config.general.operator = "Active operator"
+            window.config.general.nocomm = True
+            window._operating_mode_change_blocker = Mock(return_value="Finish active work first.")  # type: ignore[attr-defined]
+            window._on_nocomm_toggled = Mock()  # type: ignore[attr-defined]
+            panel = SettingsPanel(window)
+            window.setCentralWidget(panel)
+            panel.load_from_config(window.config)
+            panel._operator.setText("Edited operator")
+            panel._nocomm_chk.setChecked(False)
+            try:
+                with (
+                    patch.dict(os.environ, {"RAPID_CONFIG": str(settings)}),
+                    patch.object(QtWidgets.QFileDialog, "getOpenFileName", return_value=(str(legacy), "")) as choose,
+                    patch.object(QtWidgets.QMessageBox, "warning") as warn,
+                    patch.object(QtWidgets.QMessageBox, "information"),
+                ):
+                    window.config.save()
+                    original = settings.read_bytes()
+                    panel._save()
+                    panel._import_vb6_ini()
+                    choose.assert_not_called()
+                    window._operating_mode_change_blocker.side_effect = ["", "Finish active work first."]
+                    panel._import_vb6_ini()
+                self.assertEqual(settings.read_bytes(), original)
+                self.assertEqual(window.config.general.operator, "Active operator")
+                self.assertTrue(window.config.general.nocomm)
+                self.assertEqual(warn.call_count, 3)
+                choose.assert_called_once()
+                window._on_nocomm_toggled.assert_not_called()
+            finally:
+                window.deleteLater()
+
+    def test_import_applies_to_the_window_only_after_settings_are_saved(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings = root / "config.json"
+            legacy = root / "legacy.ini"
+            legacy.write_text("[Program]\nNoCommMode=True\nLastLogin=Imported operator\n", encoding="utf-8")
+            window = QtWidgets.QMainWindow()
+            window.config = AppConfig()  # type: ignore[attr-defined]
+            original = window.config
+            original.general.nocomm = False
+            window._nocomm_btn = QtWidgets.QCheckBox(window)  # type: ignore[attr-defined]
+            window._operating_mode_change_blocker = Mock(return_value="")  # type: ignore[attr-defined]
+            window._on_nocomm_toggled = Mock()  # type: ignore[attr-defined]
+            window._nocomm_btn.toggled.connect(window._on_nocomm_toggled)
+            panel = SettingsPanel(window)
+            window.setCentralWidget(panel)
+            try:
+                with (
+                    patch.dict(os.environ, {"RAPID_CONFIG": str(settings)}),
+                    patch.object(QtWidgets.QFileDialog, "getOpenFileName", return_value=(str(legacy), "")),
+                    patch.object(QtWidgets.QMessageBox, "critical") as error,
+                    patch.object(QtWidgets.QMessageBox, "information"),
+                ):
+                    original.save()
+                    before = settings.read_bytes()
+                    with patch.object(AppConfig, "save", side_effect=OSError("Disk unavailable")):
+                        panel._import_vb6_ini()
+                    self.assertIs(window.config, original)
+                    self.assertEqual(settings.read_bytes(), before)
+                    self.assertFalse(window._nocomm_btn.isChecked())
+                    window._on_nocomm_toggled.assert_not_called()
+                    error.assert_called_once()
+
+                    panel._import_vb6_ini()
+                    self.assertEqual(window.config.general.operator, "Imported operator")
+                    self.assertTrue(AppConfig.load(settings).general.nocomm)
+                    self.assertTrue(window._nocomm_btn.isChecked())
+                    window._on_nocomm_toggled.assert_called_once_with(True)
+            finally:
+                window.deleteLater()
 
 
 if __name__ == "__main__":

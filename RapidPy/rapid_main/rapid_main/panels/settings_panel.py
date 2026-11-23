@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 
 from PySide6 import QtCore, QtWidgets
@@ -939,18 +940,43 @@ class SettingsPanel(QtWidgets.QWidget):
         seq.default = self._seq_def.value()
 
     # ── Actions ───────────────────────────────────────────────────────────────
+    def _settings_change_blocked(self, title: str, *, nocomm: bool = False) -> bool:
+        check = getattr(self.window(), "_operating_mode_change_blocker", None)
+        reason = check(nocomm) if callable(check) else ""
+        if reason:
+            QtWidgets.QMessageBox.warning(self, title, reason)
+        return bool(reason)
+
+    def _apply_settings(self, candidate: AppConfig, title: str) -> bool:
+        if self._settings_change_blocked(title, nocomm=candidate.general.nocomm):
+            return False
+        try:
+            candidate.save()
+        except OSError as exc:
+            QtWidgets.QMessageBox.critical(self, title, f"Settings could not be saved:\n{exc}")
+            return False
+        mw = self.window()
+        mw.config = candidate
+        mode_button = getattr(mw, "_nocomm_btn", None)
+        if mode_button is not None:
+            with QtCore.QSignalBlocker(mode_button):
+                mode_button.setChecked(candidate.general.nocomm)
+        if hasattr(mw, "_on_nocomm_toggled"):
+            mw._on_nocomm_toggled(candidate.general.nocomm)
+        if hasattr(mw, "_estimator"):
+            mw._estimator.step_times = candidate.sequence.as_estimator_dict()
+        return True
+
     def _save(self) -> None:
         mw = self.window()
-        if hasattr(mw, "config"):
-            self.save_to_config(mw.config)
-            mw.config.save()
-            if hasattr(mw, "_on_nocomm_toggled"):
-                mw._on_nocomm_toggled(mw.config.general.nocomm)
-            # Propagate updated step times to the runtime estimator
-            if hasattr(mw, "_estimator"):
-                mw._estimator.step_times = mw.config.sequence.as_estimator_dict()
-            self._restart_notice.hide()
-            setattr(mw, "_settings_restart_required", False)
+        if not hasattr(mw, "config"):
+            return
+        candidate = deepcopy(mw.config)
+        self.save_to_config(candidate)
+        if not self._apply_settings(candidate, "Settings"):
+            return
+        self._restart_notice.hide()
+        setattr(mw, "_settings_restart_required", False)
         QtWidgets.QMessageBox.information(self, "Settings", "Settings saved.")
 
     def _revert(self) -> None:
@@ -962,6 +988,8 @@ class SettingsPanel(QtWidgets.QWidget):
         mw = self.window()
         if not hasattr(mw, "config"):
             QtWidgets.QMessageBox.warning(self, "Import VB6 INI", "Unable to access application settings model.")
+            return
+        if self._settings_change_blocked("Import VB6 INI"):
             return
 
         initial_dir = ""
@@ -987,18 +1015,16 @@ class SettingsPanel(QtWidgets.QWidget):
         if not selected:
             return
 
+        candidate = deepcopy(mw.config)
         try:
-            report = import_vb6_ini(mw.config, selected)
+            report = import_vb6_ini(candidate, selected)
         except Exception as exc:
             QtWidgets.QMessageBox.warning(self, "Import VB6 INI", f"Import failed:\n{exc}")
             return
 
-        mw.config.save()
-        self.load_from_config(mw.config)
-        if hasattr(mw, "_on_nocomm_toggled"):
-            mw._on_nocomm_toggled(mw.config.general.nocomm)
-        if hasattr(mw, "_estimator"):
-            mw._estimator.step_times = mw.config.sequence.as_estimator_dict()
+        if not self._apply_settings(candidate, "Import VB6 INI"):
+            return
+        self.load_from_config(candidate)
 
         summary_lines = [f"Imported legacy VB6 INI: {Path(selected).name}"]
         summary_lines.append(f"Mapped fields: {len(report.mapped_fields)}")
@@ -1067,13 +1093,7 @@ class SettingsPanel(QtWidgets.QWidget):
                 self, "Restore Settings Backup", "Unable to access application settings model."
             )
             return False
-        active_check = getattr(mw, "_has_active_workflow", None)
-        if callable(active_check) and active_check():
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Restore Settings Backup",
-                "Settings cannot be restored while a measurement or queue run is active.",
-            )
+        if self._settings_change_blocked("Restore Settings Backup"):
             return False
         selected, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
@@ -1102,6 +1122,8 @@ class SettingsPanel(QtWidgets.QWidget):
             )
             != QtWidgets.QMessageBox.StandardButton.Yes
         ):
+            return False
+        if self._settings_change_blocked("Restore Settings Backup", nocomm=restored.general.nocomm):
             return False
         try:
             restored.save()
