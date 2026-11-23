@@ -8,6 +8,7 @@ This module is intentionally smaller than pmag_gui / demag_gui. It focuses on:
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from html import escape
 import math
 import sys
@@ -25,7 +26,7 @@ except ImportError:
 from data_viewer.analysis import next_step_suggestion, principal_component_fit, summarize_paleointensity, vector_for_step
 from data_viewer.data_loading import (
     MeasurementStep, SpecimenMeta, SusceptibilityPoint, ViewerDataset, ViewerSpecimen,
-    load_input, load_magic_directory, watch_paths_for_dataset,
+    load_cit_specimen, load_input, load_magic_directory, watch_paths_for_dataset,
 )
 from rapidpy_common.ui import apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon
 from rapidpy_common.resources import asset_directory
@@ -733,7 +734,7 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         self.setMinimumSize(980, 620)
         self._dataset: ViewerDataset | None = None
         self._current_specimen: ViewerSpecimen | None = None
-        self._load_request: tuple[str, Path] | None = None
+        self._load_request: tuple[Callable[[Path], ViewerDataset], Path] | None = None
         self._loaded_dataset_name = ""
         self._watcher = QtCore.QFileSystemWatcher(self)
         self._watcher.fileChanged.connect(self._schedule_watched_reload)
@@ -955,7 +956,7 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         vl.addWidget(main_split, 1)
 
         # Status bar
-        self.statusBar().showMessage("Ready — open a CIT .sam file, a MagIC directory, or use demo data.")
+        self.statusBar().showMessage("Open a CIT specimen, a sample index, or a MagIC directory.")
         self.setStyleSheet(
             "QFrame#viewerCard { background: #ffffff; border: 1px solid #d9dde3; border-radius: 12px; }"
             "QListWidget, QTableWidget, QComboBox, QTextBrowser { background: #ffffff; }"
@@ -966,13 +967,14 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         mb = self.menuBar()
         fm = mb.addMenu("&File")
         fm.addAction("&Open File…", self._open_file)
+        fm.addAction("Open CIT &Specimen…", self._open_cit_specimen)
         fm.addAction("Open &MagIC Directory…", self._open_directory)
         fm.addAction("Load &Demo Dataset", self._load_demo)
         fm.addSeparator()
         fm.addAction("E&xit", QtWidgets.QApplication.quit)
 
         hm = mb.addMenu("&Help")
-        hm.addAction("CSV &Format Help", self._show_format_help)
+        hm.addAction("Data &Format Help", self._show_format_help)
 
     # ── Actions ────────────────────────────────────────────────────────────
     def _load_demo(self) -> None:
@@ -983,29 +985,28 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
     def _open_file(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
-            "Open CIT SAM or demag CSV",
+            "Open CIT specimen, SAM index, or demagnetization CSV",
             "",
-            "Supported files (*.sam *.csv);;SAM files (*.sam);;CSV files (*.csv);;All files (*)",
+            "Data files (*);;SAM indexes (*.sam);;CSV files (*.csv)",
         )
-        if not path:
-            return
-        try:
-            source_path = Path(path)
-            self._apply_dataset(load_input(source_path), dataset_name=source_path.name, load_request=("input", source_path))
-            self.statusBar().showMessage(f"Loaded dataset from {Path(path).name}")
-        except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, "Load Error", str(exc))
+        self._open_source(path, load_input)
+
+    def _open_cit_specimen(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open CIT specimen", "", "Specimen files (*)")
+        self._open_source(path, load_cit_specimen)
 
     def _open_directory(self) -> None:
         path = QtWidgets.QFileDialog.getExistingDirectory(self, "Open MagIC directory or RAPID archive", "")
+        self._open_source(path, load_magic_directory)
+
+    def _open_source(self, path: str, load: Callable[[Path], ViewerDataset]) -> None:
         if not path:
             return
         try:
             source_path = Path(path)
-            dataset = load_magic_directory(source_path)
-            self._apply_dataset(dataset, dataset_name=source_path.name, load_request=("magic_dir", source_path))
-            kind = "measurement archive" if dataset.source_kind == "measurement_archive" else "MagIC directory"
-            self.statusBar().showMessage(f"Loaded {kind} from {source_path.name}")
+            dataset = load(source_path)
+            self._apply_dataset(dataset, dataset_name=source_path.name, load_request=(load, source_path))
+            self.statusBar().showMessage(f"Loaded {source_path.name}")
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "Load Error", str(exc))
 
@@ -1013,7 +1014,7 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         self,
         dataset: ViewerDataset,
         dataset_name: str,
-        load_request: tuple[str, Path] | None,
+        load_request: tuple[Callable[[Path], ViewerDataset], Path] | None,
         preferred_specimen: str | None = None,
         preferred_fit_labels: tuple[str | None, str | None] | None = None,
     ) -> None:
@@ -1141,14 +1142,14 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
     def _reload_watched_source(self) -> None:
         if self._load_request is None:
             return
-        mode, source_path = self._load_request
+        load, source_path = self._load_request
         specimen_name, fit_labels = self._capture_view_state()
         try:
-            dataset = load_magic_directory(source_path) if mode == "magic_dir" else load_input(source_path)
+            dataset = load(source_path)
             self._apply_dataset(
                 dataset,
                 dataset_name=self._loaded_dataset_name or source_path.name,
-                load_request=(mode, source_path),
+                load_request=(load, source_path),
                 preferred_specimen=specimen_name,
                 preferred_fit_labels=fit_labels,
             )
@@ -1199,8 +1200,8 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
             self,
             "Supported Inputs",
             "Open one of the following:\n\n"
-            "  1. CIT-format .sam file\n"
-            "     The viewer reads the listed specimen files next to the .sam file.\n\n"
+            "  1. CIT specimen file or .sam index\n"
+            "     Open the specimen file directly or browse the files listed in its .sam index.\n\n"
             "  2. MagIC directory\n"
             "     The directory must contain measurements.txt. Specimens are grouped automatically.\n\n"
             "  3. Legacy CSV\n"

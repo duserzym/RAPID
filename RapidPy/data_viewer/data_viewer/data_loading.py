@@ -84,7 +84,7 @@ def load_input(path: str | Path) -> ViewerDataset:
         return load_cit_sam(source)
     if suffix == ".csv":
         return load_csv_dataset(source)
-    raise ValueError(f"Unsupported input: {source}")
+    return load_cit_specimen(source)
 
 
 def _susceptibility_points(records: Iterable[RmgRecord]) -> list[SusceptibilityPoint]:
@@ -121,24 +121,34 @@ def _load_rmg_sidecar(root: Path, specimen: ViewerSpecimen) -> None:
         return
 
 
+def _cit_specimen(source: Path, data_path: Path, name: str, *, indexed: bool) -> ViewerSpecimen:
+    meta, steps = read_specimen(data_path, name, validate_format=not indexed)
+    specimen = ViewerSpecimen(
+        name=name,
+        meta=meta,
+        steps=steps,
+        experiment_type=detect_experiment_type(steps),
+        source_kind="cit_sam" if indexed else "cit_specimen",
+        source_path=source,
+        data_path=data_path,
+        paleointensity_points=build_paleointensity_points(steps),
+    )
+    _load_rmg_sidecar(source.parent, specimen)
+    return specimen
+
+
+def load_cit_specimen(path: str | Path) -> ViewerDataset:
+    source = Path(path)
+    specimen = _cit_specimen(source, source, source.name, indexed=False)
+    return ViewerDataset("cit_specimen", source, [specimen])
+
+
 def load_cit_sam(path: str | Path) -> ViewerDataset:
     sam_path = Path(path)
-    specimens: list[ViewerSpecimen] = []
-    for name in read_sam(sam_path):
-        specimen_file = specimen_path(sam_path, name)
-        meta, steps = read_specimen(specimen_file, name)
-        specimen = ViewerSpecimen(
-            name=name,
-            meta=meta,
-            steps=steps,
-            experiment_type=detect_experiment_type(steps),
-            source_kind="cit_sam",
-            source_path=sam_path,
-            data_path=specimen_file,
-            paleointensity_points=build_paleointensity_points(steps),
-        )
-        _load_rmg_sidecar(sam_path.parent, specimen)
-        specimens.append(specimen)
+    specimens = [
+        _cit_specimen(sam_path, specimen_path(sam_path, name), name, indexed=True)
+        for name in read_sam(sam_path)
+    ]
     if not specimens:
         raise ValueError(f"No specimen files were found from {sam_path.name}.")
     return ViewerDataset("cit_sam", sam_path, specimens)
@@ -268,6 +278,8 @@ def watch_paths_for_dataset(dataset: ViewerDataset) -> list[Path]:
         paths.append(Path(dataset.source_path))
         if dataset.source_kind == "measurement_archive":
             paths.append(Path(dataset.source_path) / ARCHIVE_MANIFEST)
+        elif dataset.source_kind == "cit_specimen":
+            paths.append(Path(dataset.source_path).parent)
     for specimen in dataset.specimens:
         if specimen.data_path is not None:
             paths.append(Path(specimen.data_path))

@@ -6,7 +6,7 @@ RapidPy DataViewer is intended to stay lightweight. The goal is not to recreate 
 
 This module now supports:
 
-- opening a CIT-format `.sam` file and browsing its linked specimen files
+- opening an individual CIT specimen file or browsing the specimens listed in a CIT-format `.sam` index
 - opening a MagIC project directory that contains `measurements.txt`
 - fallback loading of the older `label,n,e,u` CSV format for quick ad hoc inspection
 - auto-detecting the experiment type for each specimen as `AF`, `Thermal`, `AF + thermal`, or `IZZI Thellier`

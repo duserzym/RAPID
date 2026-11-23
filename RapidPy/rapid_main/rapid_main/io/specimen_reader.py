@@ -17,6 +17,7 @@ Specimen file layout (from VB6 Sample.cls ReadSpec / ReadUpMeasurements):
 """
 from __future__ import annotations
 
+import math
 import re
 from datetime import datetime
 from pathlib import Path
@@ -108,6 +109,8 @@ def _parse_step_line(line: str) -> Optional[MeasurementStep]:
 def read_specimen(
     path: str | Path,
     specimen_name: Optional[str] = None,
+    *,
+    validate_format: bool = False,
 ) -> tuple[SpecimenMeta, list[MeasurementStep]]:
     """
     Read a VB6 specimen file and return (SpecimenMeta, [MeasurementStep, ...]).
@@ -118,6 +121,8 @@ def read_specimen(
         Full path to the specimen file (no extension).
     specimen_name:
         Override for the specimen name; defaults to ``path.name``.
+    validate_format:
+        Require identifiable CIT content when opening an arbitrary file.
     """
     path = Path(path)
     name = specimen_name or path.name
@@ -142,6 +147,19 @@ def read_specimen(
             continue
         step = _parse_step_line(stripped)
         if step is not None:
+            if validate_format and not all(math.isfinite(value) for value in (
+                step.gdec, step.ginc, step.sdec, step.sinc, step.crdec,
+                step.crinc, step.moment, step.error_angle,
+            )):
+                raise ValueError(f"{path.name} contains a nonfinite CIT measurement.")
             steps.append(step)
 
+    if validate_format and not steps:
+        # A new specimen can have a valid header before the first reading.
+        try:
+            volume = float(lines[1][32:37].strip())
+        except (IndexError, ValueError):
+            volume = 0.0
+        if not math.isfinite(volume) or volume <= 0 or any(line.strip() for line in lines[2:]):
+            raise ValueError(f"{path.name} has no readable CIT specimen header or measurements.")
     return meta, steps

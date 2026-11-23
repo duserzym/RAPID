@@ -107,7 +107,7 @@ def _check_webcam_decode(window, app, root):
 
 
 def _check_measurement_archive(root):
-    from data_viewer.data_loading import load_magic_directory
+    from data_viewer.data_loading import load_input, load_magic_directory
     from rapid_main.data_model import MeasurementStep, SpecimenMeta
     from rapid_main.io.measurement_bundle import MeasurementBundleWriter
     from rapid_main.io.rmg_writer import describe_rmg_treatment
@@ -125,9 +125,13 @@ def _check_measurement_archive(root):
     archive = output / provenance["previous_publication"]["relative_path"]
     previous = load_magic_directory(archive.parent)
     current = load_magic_directory(output)
+    direct = load_input(output / specimen.name)
     return (previous.source_kind == "measurement_archive"
             and [item.demag_label for item in previous.specimens[0].steps] == ["NRM"]
             and [item.demag_label for item in current.specimens[0].steps] == ["AF20"]
+            and direct.source_kind == "cit_specimen"
+            and [item.demag_label for item in direct.specimens[0].steps] == ["AF20"]
+            and direct.specimens[0].susceptibility_points == current.specimens[0].susceptibility_points
             and [item.susceptibility for item in previous.specimens[0].susceptibility_points] == [0.001]
             and [(item.level, item.susceptibility) for item in current.specimens[0].susceptibility_points]
             == [(200.0, -0.002)])

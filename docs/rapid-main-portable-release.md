@@ -67,6 +67,8 @@ The preview and snapshot button become active on receipt of a usable frame.
 5. Watch Live Measure/Step Monitor. Use Pause/Halt and inspect the safe-return
    result before touching the instrument.
 6. Review results in Plots/Data Review. Simulation output stays in `SIMULATED`.
+   Use **Open File** in **Data Review** to open a CIT specimen directly or to
+   browse the specimens listed in a `.sam` index.
    Run bundles retain scientific outputs, provenance, workflow summaries,
    communication evidence, and a hashed artifact index.
    For specimens with orientation headers, use **Core**, **Geographic**, or

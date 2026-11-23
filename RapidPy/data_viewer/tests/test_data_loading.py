@@ -23,6 +23,8 @@ from data_viewer.data_loading import (
     build_paleointensity_points,
     detect_experiment_type,
     load_cit_sam,
+    load_cit_specimen,
+    load_input,
     load_magic_directory,
     watch_paths_for_dataset,
 )
@@ -48,6 +50,48 @@ def _step(label: str, x: float = 1.0, y: float = 0.2, z: float = 0.1, error_angl
 
 
 class TestViewerDataLoading(unittest.TestCase):
+    def test_opens_individual_cit_files_and_preserves_the_full_specimen_name(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for name, reader in (("SPEC01", load_input), ("SPEC.02", load_input), ("SPEC.csv", load_cit_specimen)):
+                with self.subTest(name=name):
+                    source = root / name
+                    write_header(source, SpecimenMeta(name=name, volume=3.2, comment="Original specimen"))
+                    append_step(source, _step("AF20"))
+                    rmg_path = root / f"{name}.rmg"
+                    rmg_path.write_text("AF,200,,,,,,,0.002\n", encoding="latin-1")
+                    dataset = reader(source)
+                    specimen, = dataset.specimens
+                    self.assertEqual(dataset.source_kind, "cit_specimen")
+                    self.assertEqual((specimen.name, specimen.meta.comment, specimen.meta.volume),
+                                     (name, "Original specimen", 3.2))
+                    measurement, = specimen.steps
+                    self.assertEqual(measurement.demag_label, "AF20")
+                    self.assertAlmostEqual(measurement.crinc, 30.0)
+                    reading, = specimen.susceptibility_points
+                    self.assertEqual((reading.level, reading.susceptibility), (200, .002))
+                    self.assertEqual(watch_paths_for_dataset(dataset), [source, root, rmg_path])
+
+    def test_opens_an_unmeasured_cit_specimen_but_rejects_unrecognized_content(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "SPEC01"
+            write_header(source, SpecimenMeta(name=source.name, volume=3.4, core_orientation_available=False))
+            specimen, = load_input(source).specimens
+            self.assertEqual(specimen.steps, [])
+            self.assertIn(source.parent, watch_paths_for_dataset(load_input(source)))
+
+            original_header = source.read_text(encoding="latin-1")
+            for content in ("unrelated file\n", original_header + "unreadable record\n"):
+                with self.subTest(content=content):
+                    source.write_text(content, encoding="latin-1")
+                    with self.assertRaisesRegex(ValueError, "no readable CIT"):
+                        load_input(source)
+
+            write_header(source, SpecimenMeta(name=source.name))
+            append_step(source, _step("NRM", x=float("nan")))
+            with self.assertRaisesRegex(ValueError, "nonfinite CIT measurement"):
+                load_input(source)
+
     def test_detects_cit_af_dataset(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "ExampleSet"
