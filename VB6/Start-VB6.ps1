@@ -161,8 +161,7 @@ function Get-UnresolvableComponents {
         if (-not $guid) { continue }
 
         $available = [System.Collections.Generic.List[string]]::new()
-        # Must match the roots Build-VB6Project.ps1 searches, including the
-        # per-user hive: MsraLegacy.tlb is registered there and only there.
+        # Match the machine and per-user library roots used by Build-VB6Project.ps1.
         foreach ($root in @(
             'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Classes\TypeLib',
             'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Classes\WOW6432Node\TypeLib',
