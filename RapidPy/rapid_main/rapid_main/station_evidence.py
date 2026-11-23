@@ -6,6 +6,7 @@ import json
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 
+from rapid_main.io.measurement_bundle import SIMULATED_SUBDIR, SIMULATION_MARKER_FILE
 from rapid_main.specimen_paths import contained_path
 
 
@@ -30,8 +31,11 @@ REQUIRED_CASES = tuple(
     for number in range(1, count + 1)
 )
 _SOFTWARE_CASES = {"discontinuity/D1", "discontinuity/D5", "rockmag/K1", "rockmag/K2"}
+_PORTABLE_REPORT = "rapidpy.portable_verification.v2"
+_PORTABLE_REPORTS = {_PORTABLE_REPORT, "rapidpy.portable_verification.v1"}
+_SIMULATION_NAMES = {SIMULATED_SUBDIR.casefold(), SIMULATION_MARKER_FILE.casefold()}
 _OFFLINE_SCHEMAS = {
-    "rapidpy.portable_verification.v2", "rapidpy.release_smoke.v1", "rapidpy.startup_environment.v1",
+    *_PORTABLE_REPORTS, "rapidpy.release_smoke.v1", "rapidpy.startup_environment.v1",
     "rapidpy.display_check.v1", "rapidpy.performance_check.v1",
 }
 
@@ -59,26 +63,57 @@ def _software_case(case: str) -> bool:
     return case.startswith("preconditions/") or case in _SOFTWARE_CASES
 
 
-def _check_version(version: object, candidate: str) -> None:
-    if isinstance(version, str):
-        suffix = version.rpartition("+")[2].lower()
-        if _REVISION.fullmatch(suffix) and suffix != candidate:
+def _check_version(version: object, candidate: str, *, required: bool = False) -> None:
+    revision = version.rpartition("+")[2].lower() if isinstance(version, str) else ""
+    if _REVISION.fullmatch(revision):
+        if revision != candidate:
             raise ValueError("Recorded software version identifies a different candidate revision.")
+    elif required:
+        raise ValueError("The runtime smoke report must identify the full candidate revision.")
+
+
+def _check_portable_report(metadata: dict, candidate: str, filename: str, *, passing: bool) -> None:
+    if metadata.get("schema") != _PORTABLE_REPORT:
+        if passing:
+            raise ValueError(f"Legacy portable verification lacks a candidate file inventory: {filename}")
+        return
+    inventory = metadata.get("inventory")
+    if not isinstance(inventory, dict) or inventory.get("source_revision") != candidate:
+        raise ValueError(f"Portable verification identifies a different candidate: {filename}")
+    if not passing:
+        return
+    if metadata.get("passed") is not True:
+        raise ValueError(f"Portable verification did not pass: {filename}")
+    count = inventory.get("files_checked")
+    manifest_digest = inventory.get("manifest_sha256")
+    if (inventory.get("full_inventory") is not True or type(count) is not int or count < 1
+            or not isinstance(manifest_digest, str) or not _DIGEST.fullmatch(manifest_digest.lower())):
+        raise ValueError(f"Portable verification must include a checked full file inventory: {filename}")
+    smoke = metadata.get("smoke")
+    if (not isinstance(smoke, dict) or smoke.get("schema") != "rapidpy.release_smoke.v1"
+            or smoke.get("ok") is not True):
+        raise ValueError(f"The portable runtime smoke check did not pass: {filename}")
+    try:
+        _check_version(smoke.get("software_version"), candidate, required=True)
+    except ValueError as exc:
+        raise ValueError(f"{filename}: {exc}") from exc
 
 
 def _check_attachments(root: Path, record: dict, candidate: str, *, station_test: bool) -> None:
     artifacts = record.get("artifact_paths")
-    if not isinstance(artifacts, list) or (record["verdict"] == "pass" and not artifacts):
+    passing = record["verdict"] == "pass"
+    if not isinstance(artifacts, list) or (passing and not artifacts):
         raise ValueError("Attach evidence files to a passing case.")
     paths = set()
     for artifact in artifacts:
         if not isinstance(artifact, dict):
             raise ValueError("Each artifact needs an original path, evidence path, and SHA-256.")
-        original = _required_text(artifact, "original_path")
+        original_text = _required_text(artifact, "original_path")
+        original = PureWindowsPath(original_text)
         filename = _required_text(artifact, "evidence_path")
         expected = _required_text(artifact, "sha256").lower()
         relative = PurePosixPath(filename)
-        if not (PureWindowsPath(original).is_absolute() or PurePosixPath(original).is_absolute()):
+        if not (original.is_absolute() or PurePosixPath(original_text).is_absolute()):
             raise ValueError("The original artifact path must be absolute.")
         if (relative.as_posix() != filename or relative.is_absolute() or "\\" in filename
                 or ".." in relative.parts or filename.casefold() in paths or not _DIGEST.fullmatch(expected)):
@@ -87,12 +122,10 @@ def _check_attachments(root: Path, record: dict, candidate: str, *, station_test
         path = contained_path(root, filename, output=True)
         if not path.is_file():
             raise ValueError(f"Evidence attachment is missing: {filename}")
-        if station_test:
-            original_parts = PureWindowsPath(original).parts
-            if any(part.casefold() == "simulated" for part in (*relative.parts, *original_parts)):
-                raise ValueError(f"Simulation evidence cannot qualify a station case: {filename}")
+        if station_test and any(part.casefold() in _SIMULATION_NAMES for part in (*relative.parts, *original.parts)):
+            raise ValueError(f"Simulation evidence cannot qualify a station case: {filename}")
         with path.open("rb") as stream:
-            if path.suffix.lower() == ".json":
+            if ".json" in (relative.suffix.lower(), original.suffix.lower()):
                 data = stream.read()
                 actual = hashlib.sha256(data).hexdigest()
                 try:
@@ -101,15 +134,14 @@ def _check_attachments(root: Path, record: dict, candidate: str, *, station_test
                     raise ValueError(f"Evidence attachment is not valid JSON: {filename}") from exc
                 if isinstance(metadata, dict):
                     provenance = metadata.get("provenance")
+                    schema = str(metadata.get("schema"))
                     if station_test and (metadata.get("simulated") is True
                             or (isinstance(provenance, dict) and provenance.get("simulated") is True)
-                            or str(metadata.get("schema")) in _OFFLINE_SCHEMAS):
+                            or schema in _OFFLINE_SCHEMAS):
                         raise ValueError(f"Offline evidence cannot qualify a station case: {filename}")
                     _check_version(metadata.get("software_version"), candidate)
-                    if metadata.get("schema") == "rapidpy.portable_verification.v2":
-                        inventory = metadata.get("inventory")
-                        if not isinstance(inventory, dict) or inventory.get("source_revision") != candidate:
-                            raise ValueError(f"Portable verification identifies a different candidate: {filename}")
+                    if schema in _PORTABLE_REPORTS:
+                        _check_portable_report(metadata, candidate, filename, passing=passing)
             else:
                 actual = hashlib.file_digest(stream, "sha256").hexdigest()
         if actual != expected:

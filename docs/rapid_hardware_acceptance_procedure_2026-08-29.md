@@ -96,9 +96,12 @@ ambiguous, and missing evidence. Exit code `0` means every case has passing
 records and verified attachments. Exit code `1` accompanies an incomplete or
 failing report. Exit code `2` indicates an unreadable campaign or candidate
 mismatch. The audit checks revision identifiers in attached RAPID JSON and
-flags recognized simulation evidence in station cases. The signed operator
-observations remain the basis for station acceptance. Hosted deployment
-qualification uses separate evidence.
+flags recognized simulation evidence in station cases, including copied
+`SIMULATION.txt` markers and verification reports. A portable verification report
+attached to a passing software case must pass full-inventory verification and
+identify the candidate in both the inventory and the runtime smoke check.
+The signed operator observations remain the basis for station acceptance.
+Hosted deployment qualification uses separate evidence.
 
 ---
 

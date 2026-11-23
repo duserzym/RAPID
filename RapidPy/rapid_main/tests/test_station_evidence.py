@@ -98,6 +98,52 @@ class StationEvidenceTests(unittest.TestCase):
         self.assertEqual(result["cases"]["holder-reference/H4"]["verdict"], "invalid")
         self.assertIn("different candidate revision", result["errors"][0]["error"])
 
+    def test_passing_software_case_requires_a_qualified_portable_report(self):
+        case = "preconditions/P4"
+        smoke = {"schema": "rapidpy.release_smoke.v1", "ok": True, "software_version": f"4.0.0+{COMMIT}"}
+        report = {
+            "schema": "rapidpy.portable_verification.v2",
+            "passed": True,
+            "inventory": {"source_revision": COMMIT, "full_inventory": True, "files_checked": 388,
+                          "manifest_sha256": "2" * 64},
+            "smoke": smoke,
+        }
+        self.attachment.write_text(json.dumps(report), encoding="utf-8-sig")
+        self.assertEqual(self.audit(self.record(case, mode="software"))["cases"][case]["verdict"], "pass")
+
+        for invalid_report, error in (
+            ({**report, "passed": False}, "did not pass"),
+            ({**report, "schema": "rapidpy.portable_verification.v1"}, "lacks a candidate file inventory"),
+            ({**report, "inventory": {**report["inventory"], "full_inventory": False}}, "full file inventory"),
+            ({**report, "smoke": {**smoke, "ok": False}}, "runtime smoke check did not pass"),
+            ({**report, "smoke": {**smoke, "software_version": "4.0.0+" + "3" * 40}}, "different candidate"),
+            ({**report, "smoke": {**smoke, "software_version": "4.0.0"}}, "full candidate revision"),
+        ):
+            with self.subTest(error=error):
+                self.attachment.write_text(json.dumps(invalid_report), encoding="utf-8-sig")
+                result = self.audit(self.record(case, mode="software"))
+                self.assertEqual(result["cases"][case]["verdict"], "invalid")
+                self.assertIn(error, result["errors"][0]["error"])
+        self.attachment.write_text(json.dumps({**report, "passed": False}), encoding="utf-8")
+        result = self.audit(self.record(case, verdict="fail", mode="software"))
+        self.assertEqual(result["cases"][case]["verdict"], "fail")
+
+    def test_copied_offline_evidence_keeps_the_original_file_type_and_marker(self):
+        station_case = "holder-reference/H4"
+        copy = self.attachment.with_suffix(".log")
+        for original_path, evidence, error in (
+            ("D:/reports/verification.json", '{"schema":"rapidpy.portable_verification.v1"}', "Offline evidence"),
+            ("D:/reports/SIMULATION.txt", "SIMULATED RUN", "Simulation evidence"),
+        ):
+            with self.subTest(original_path=original_path):
+                self.attachment.write_text(evidence, encoding="utf-8")
+                copy.write_bytes(self.attachment.read_bytes())
+                record = self.record(station_case)
+                record["artifact_paths"][0].update(original_path=original_path, evidence_path=copy.name)
+                result = self.audit(record)
+                self.assertEqual(result["cases"][station_case]["verdict"], "invalid")
+                self.assertIn(error, result["errors"][0]["error"])
+
     def test_hash_mismatch_and_paths_outside_the_evidence_root_are_invalid(self):
         case = "holder-reference/H4"
         original = self.record(case)
