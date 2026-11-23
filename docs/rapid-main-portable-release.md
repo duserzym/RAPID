@@ -89,7 +89,10 @@ The preview and snapshot button become active on receipt of a usable frame.
    are in the upper hemisphere. New MagIC measurements carry recorded CSD
    in `dir_csd`.
    Data Review fills blank CSD values from matched RMG readings in verified
-   RAPID bundles and archives.
+   RAPID bundles and archives. When opening one of those bundles through
+   **Open MagIC Directory**, Data Review uses verified RMG and CIT records for
+   specimen and tilt-corrected directions, respectively. A standalone MagIC
+   table shows its recorded direction.
    Run bundles retain scientific outputs, provenance, workflow summaries,
    communication evidence, and a hashed artifact index.
    Saved quicklooks fit the recorded specimen directions. **Live Measure →

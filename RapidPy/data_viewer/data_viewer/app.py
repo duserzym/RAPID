@@ -1140,6 +1140,16 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         self._current_specimen = (
             self._dataset.specimens[row] if self._dataset and 0 <= row < len(self._dataset.specimens) else None
         )
+        if self._current_specimen is not None:
+            frames = self._current_specimen.coordinate_frames
+            preferred = self._coord_combo.currentData() if self._coord_combo.count() > 1 else None
+            with QtCore.QSignalBlocker(self._coord_combo):
+                self._coord_combo.clear()
+                for frame in frames:
+                    display = "Recorded" if len(frames) == 1 else frame.capitalize()
+                    self._coord_combo.addItem(display, frame)
+                if preferred in frames:
+                    self._coord_combo.setCurrentIndex(self._coord_combo.findData(preferred))
         self._populate_fit_ranges(fit_bounds)
         self._update_all()
 
@@ -1320,7 +1330,8 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
             "  3. Legacy CSV\n"
             "     Expected columns: label, n, e, u\n\n"
             "The experiment type is auto-detected from the step labels or MagIC treatment fields.\n"
-            "Coordinate views follow the legacy RAPID convention: Specimen, Geographic, and Tilt-corrected.\n"
+            "Coordinate views use available recorded directions. RAPID MagIC folders and archives can recover "
+            "Specimen and Tilt-corrected directions from verified companion files.\n"
             "Turn on Auto-watch to refresh the plots automatically while files are being updated.\n"
             "Use the fit-range controls to inspect quick PCA lines without opening the heavier PmagPy GUIs.",
         )

@@ -19,7 +19,7 @@ try:
     from rapid_main.io.bundle_history import ARCHIVE_MANIFEST, ARCHIVE_PAYLOAD, is_bundle_archive, open_bundle_archive
     from rapid_main.io.rmg_reader import parse_rmg
     from rapid_main.io.sam_reader import read_sam, specimen_path
-    from rapid_main.io.specimen_reader import read_specimen
+    from rapid_main.io.specimen_reader import parse_specimen, read_specimen
     from rapid_main.specimen_paths import contained_path, relative_specimen_path
 except ModuleNotFoundError:
     rapidpy_root = Path(__file__).resolve().parents[2]
@@ -31,7 +31,7 @@ except ModuleNotFoundError:
     from rapid_main.io.bundle_history import ARCHIVE_MANIFEST, ARCHIVE_PAYLOAD, is_bundle_archive, open_bundle_archive
     from rapid_main.io.rmg_reader import parse_rmg
     from rapid_main.io.sam_reader import read_sam, specimen_path
-    from rapid_main.io.specimen_reader import read_specimen
+    from rapid_main.io.specimen_reader import parse_specimen, read_specimen
     from rapid_main.specimen_paths import contained_path, relative_specimen_path
 
 
@@ -65,6 +65,8 @@ class ViewerSpecimen:
     paleointensity_points: list[PaleointensityPoint] = field(default_factory=list)
     susceptibility_points: list[SusceptibilityPoint] = field(default_factory=list)
     rmg_path: Path | None = None
+    coordinate_frames: tuple[str, ...] = ("specimen", "geographic", "tilt-corrected")
+    cit_path: Path | None = None
 
     @property
     def magnitude_label(self) -> str:
@@ -267,6 +269,7 @@ def load_magic_directory(path: str | Path) -> ViewerDataset:
                     source_kind=source_kind,
                     source_path=root,
                     data_path=source_file,
+                    coordinate_frames=("geographic",),
                 )
                 specimens_by_name[specimen_name] = specimen
             specimen.steps.append(_measurement_row_to_step(row, specimen_name))
@@ -287,34 +290,30 @@ def load_magic_directory(path: str | Path) -> ViewerDataset:
                         specimen.susceptibility_points = _susceptibility_points(records)
                         sidecar = data, records
                 except (ValueError, csv.Error):
-                    continue
+                    pass
             else:
                 sidecar = _load_rmg_sidecar(root, specimen)
             evidence = row_evidence.get(specimen.name)
-            if magic_data is None or not (sidecar and evidence and any(not has_csd for _, has_csd in evidence)):
+            if magic_data is None or not evidence:
                 continue
-            rmg_data, records = sidecar
-            if len(records) != len(evidence) or not all(
-                stamp and stamp.replace("T", " ", 1) == record.timestamp
-                for (stamp, _), record in zip(evidence, records)
-            ):
-                continue
-            rmg_name = relative_specimen_path(specimen.name + ".rmg").as_posix()
+            legacy_archive = False
             if archive is not None and "artifact_index.json" not in members:
                 # Older snapshots can authenticate their members through the archive manifest.
                 provenance = _bundle_metadata(root, "provenance.json", archive)
-                verified = (len(specimens_by_name) == 1 and isinstance(provenance, dict)
-                            and provenance.get("schema") == "rapidpy.measurement.provenance.v1"
-                            and provenance.get("specimen") == specimen.name
-                            and provenance.get("labels") == [step.demag_label for step in specimen.steps])
-            else:
-                verified = _matches_publication_index(
-                    index, specimen.name, {"measurements.txt": magic_data, rmg_name: rmg_data},
-                )
-            if verified:
-                for step, record, (_, has_csd) in zip(specimen.steps, records, evidence):
-                    if not has_csd and record.csd is not None and 0 < record.csd < 180:
-                        step.error_angle = record.csd
+                legacy_archive = (len(specimens_by_name) == 1 and isinstance(provenance, dict)
+                                  and provenance.get("schema") == "rapidpy.measurement.provenance.v1"
+                                  and provenance.get("specimen") == specimen.name
+                                  and provenance.get("labels") == [step.demag_label for step in specimen.steps])
+            try:
+                name = relative_specimen_path(specimen.name).as_posix()
+            except ValueError:
+                continue
+            if not (legacy_archive or _matches_publication_index(index, specimen.name, {"measurements.txt": magic_data})):
+                continue
+            _restore_cit_frames(root, archive, index, specimen, name, evidence, legacy_archive)
+            rmg_name = name + ".rmg"
+            if sidecar and (legacy_archive or _matches_publication_index(index, specimen.name, {rmg_name: sidecar[0]})):
+                _restore_rmg_directions(specimen, sidecar[1], evidence)
 
     specimens = sorted(specimens_by_name.values(), key=lambda specimen: specimen.name)
     if not specimens:
@@ -333,9 +332,50 @@ def _bundle_metadata(root: Path, name: str, archive: ZipFile | None) -> object:
         return None
 
 
+def _restore_cit_frames(root, archive, index, specimen, name, evidence, legacy_archive):
+    try:
+        path = contained_path(root, name) if archive is None else None
+        data = path.read_bytes() if path is not None else archive.read(name)
+        specimen.cit_path = path
+        if not (legacy_archive or _matches_publication_index(index, specimen.name, {name: data})):
+            return
+        _, original = parse_specimen(data, specimen.name, validate_format=True)
+    except (KeyError, OSError, ValueError):
+        return
+    if len(original) != len(evidence) or any(
+        saved.demag_label != step.demag_label or not stamp
+        or stamp.replace("T", " ", 1) != saved.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        for saved, step, (stamp, _) in zip(original, specimen.steps, evidence)
+    ):
+        return
+    for saved, step in zip(original, specimen.steps):
+        step.crdec, step.crinc = saved.crdec, saved.crinc
+        step.sdec, step.sinc = saved.sdec, saved.sinc
+    specimen.coordinate_frames = ("specimen", "geographic", "tilt-corrected")
+
+
+def _restore_rmg_directions(specimen, records, evidence):
+    if len(records) != len(evidence) or any(
+        not stamp or stamp.replace("T", " ", 1) != record.timestamp
+        for (stamp, _), record in zip(evidence, records)
+    ):
+        return
+    for step, record, (_, has_csd) in zip(specimen.steps, records, evidence):
+        if not has_csd and record.csd is not None and 0 < record.csd < 180:
+            step.error_angle = record.csd
+    # RMG preserves greater precision than the legacy specimen text.
+    if any(record.core_dec is None or record.core_inc is None for record in records):
+        return
+    for step, record in zip(specimen.steps, records):
+        step.crdec, step.crinc = record.core_dec, record.core_inc
+    if "specimen" not in specimen.coordinate_frames:
+        specimen.coordinate_frames = ("specimen", "geographic")
+
+
 def _matches_publication_index(index: object, specimen: str, sources: dict[str, bytes]) -> bool:
     if (not isinstance(index, dict) or index.get("schema") != "rapidpy.measurement.artifact_index.v1"
             or index.get("aborted") is not False or index.get("sample") != specimen
+            or index.get("diagnostics_pending") is True
             or not isinstance(index.get("artifacts"), list)):
         return False
     for name, data in sources.items():
@@ -360,6 +400,8 @@ def watch_paths_for_dataset(dataset: ViewerDataset) -> list[Path]:
             paths.append(Path(specimen.data_path))
         if specimen.rmg_path is not None:
             paths.append(specimen.rmg_path)
+        if specimen.cit_path is not None:
+            paths.append(specimen.cit_path)
 
     unique: list[Path] = []
     seen: set[str] = set()

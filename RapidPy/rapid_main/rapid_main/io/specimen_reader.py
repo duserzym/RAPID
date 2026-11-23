@@ -85,10 +85,11 @@ def _parse_step_line(line: str) -> Optional[MeasurementStep]:
         crinc    = float(parts[base + 7])
         cart = angular3d_to_viewer_cartesian3d(Angular3D(dec=sdec, inc=sinc, mag=moment))
         sdx, sdy, sdz = cart.x, cart.y, cart.z
-        operator = parts[base + 11] if len(parts) > base + 11 else ""
-        ts_str   = " ".join(parts[base + 12:base + 14]) if len(parts) > base + 13 else ""
+        trailing = parts[base + 11:]
+        operator = trailing[0] if trailing else ""
         try:
-            ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+            ts = datetime.strptime(" ".join(trailing[-2:]), "%Y-%m-%d %H:%M:%S")
+            operator = " ".join(trailing[:-2])
         except ValueError:
             ts = datetime.now()
         return MeasurementStep(
@@ -126,7 +127,12 @@ def read_specimen(
     """
     path = Path(path)
     name = specimen_name or path.name
-    lines = path.read_text(encoding="latin-1", errors="replace").splitlines()
+    return parse_specimen(path.read_bytes(), name, validate_format=validate_format)
+
+
+def parse_specimen(data: bytes, name: str, *, validate_format: bool = False) -> tuple[SpecimenMeta, list[MeasurementStep]]:
+    """Parse the same CIT bytes from an open file or a verified archive member."""
+    lines = data.decode("latin-1").splitlines()
 
     comment = lines[0].strip() if len(lines) > 0 else ""
 
@@ -151,7 +157,7 @@ def read_specimen(
                 step.gdec, step.ginc, step.sdec, step.sinc, step.crdec,
                 step.crinc, step.moment, step.error_angle,
             )):
-                raise ValueError(f"{path.name} contains a nonfinite CIT measurement.")
+                raise ValueError(f"{name} contains a nonfinite CIT measurement.")
             steps.append(step)
 
     if validate_format and not steps:
@@ -161,5 +167,5 @@ def read_specimen(
         except (IndexError, ValueError):
             volume = 0.0
         if not math.isfinite(volume) or volume <= 0 or any(line.strip() for line in lines[2:]):
-            raise ValueError(f"{path.name} has no readable CIT specimen header or measurements.")
+            raise ValueError(f"{name} has no readable CIT specimen header or measurements.")
     return meta, steps

@@ -114,7 +114,7 @@ def _check_measurement_archive(root):
     from rapid_main.io.rmg_writer import describe_rmg_treatment
 
     specimen = SpecimenMeta("offline-specimen")
-    step = MeasurementStep(demag_label="NRM", gdec=10.0, ginc=30.0, sdec=10.0, sinc=30.0,
+    step = MeasurementStep(demag_label="NRM", gdec=80.0, ginc=40.0, sdec=65.0, sinc=22.0,
                            moment=1e-6, error_angle=2.0, crdec=10.0, crinc=30.0,
                            sdx=0.0, sdy=0.0, sdz=0.0)
     for measurement, susceptibility in ((step, 0.001), (replace(step, demag_label="AF20"), -0.002)):
@@ -135,11 +135,15 @@ def _check_measurement_archive(root):
     return (previous.source_kind == "measurement_archive"
             and [item.demag_label for item in previous.specimens[0].steps] == ["NRM"]
             and previous.specimens[0].steps[0].error_angle == 2.0
+            and previous.specimens[0].coordinate_frames == ("specimen", "geographic", "tilt-corrected")
+            and previous.specimens[0].steps[0].crinc == 30.0
+            and previous.specimens[0].steps[0].sinc == 22.0
             and [item.demag_label for item in current.specimens[0].steps] == ["AF20"]
             and direct.source_kind == "cit_specimen"
             and [item.demag_label for item in direct.specimens[0].steps] == ["AF20"]
             and current.specimens[0].steps[0].error_angle == direct.specimens[0].steps[0].error_angle == 2.0
-            and current.specimens[0].steps[0].crinc == direct.specimens[0].steps[0].crinc == 30.0
+            and current.specimens[0].coordinate_frames == ("geographic",)
+            and current.specimens[0].steps[0].ginc == direct.specimens[0].steps[0].ginc == 40.0
             and direct.specimens[0].susceptibility_points == current.specimens[0].susceptibility_points
             and [item.susceptibility for item in previous.specimens[0].susceptibility_points] == [0.001]
             and [(item.level, item.susceptibility) for item in current.specimens[0].susceptibility_points]
@@ -224,6 +228,8 @@ def _check_measurement_backup(app, root):
 
 
 def _check_measurement_checkpoint(root):
+    from data_viewer.analysis import principal_component_fit
+    from data_viewer.data_loading import load_magic_directory
     from rapid_main.data_model import SpecimenMeta
     from rapid_main.hardware_contracts import NoCommBackend
     from rapid_main.measurement_checkpoint import pending_checkpoint
@@ -233,19 +239,28 @@ def _check_measurement_checkpoint(root):
     with tempfile.TemporaryDirectory(prefix='checkpoint-', dir=absolute_io_path(root)) as directory:
         output = Path(directory)
         plan = ['NRM', 'AF10']
-        first = MeasurementWorker(SpecimenMeta('offline'), plan, output, NoCommBackend(),
+        meta = SpecimenMeta('offline', core_plate_strike=42., core_plate_dip=17., bedding_dip=23.)
+        first = MeasurementWorker(meta, plan, output, NoCommBackend(),
                                   run_id='offline-checkpoint', checkpoint_profile='offline')
         first.request_checkpoint()
         first.run()
         saved = pending_checkpoint(first._pair_directory)
         if not first.checkpoint_saved or saved is None or (first._pair_directory / 'measurements.txt').exists():
             return False
-        resumed = MeasurementWorker(SpecimenMeta('offline'), plan, output, NoCommBackend(),
+        resumed = MeasurementWorker(meta, plan, output, NoCommBackend(),
                                     checkpoint_profile='offline', continue_from=saved)
         resumed.run()
-        return (resumed._pending_run_result is False and resumed._restored_count == 1
-                and pending_checkpoint(resumed._pair_directory) is None
-                and [step['label'] for step in resumed._progress.accepted_steps()] == plan)
+        if (resumed._pending_run_result is not False or resumed._restored_count != 1
+                or pending_checkpoint(resumed._pair_directory) is not None
+                or [step['label'] for step in resumed._progress.accepted_steps()] != plan):
+            return False
+        reviewed, = load_magic_directory(resumed._pair_directory).specimens
+        quicklook = json.loads((resumed._pair_directory / 'quicklook.json').read_bytes())
+        fit = principal_component_fit(reviewed.steps)
+        original = quicklook['analysis']['principal_axis']
+        return (reviewed.coordinate_frames == ('specimen', 'geographic', 'tilt-corrected')
+                and fit is not None and math.isclose(fit.dec, original['declination_deg'], abs_tol=1e-3)
+                and math.isclose(fit.inc, original['inclination_deg'], abs_tol=1e-3))
 
 
 def _check_manual_interruption(root):

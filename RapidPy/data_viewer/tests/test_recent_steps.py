@@ -17,6 +17,7 @@ from PySide6 import QtCore, QtTest, QtWidgets
 
 from data_viewer.app import ZijderveldWindow
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
+from rapid_main.io.magic_writer import write_measurements
 from rapid_main.io.specimen_writer import append_step, write_header
 
 
@@ -24,6 +25,29 @@ class TestRecentTreatmentSteps(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def test_plain_magic_only_offers_its_recorded_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            meta = SpecimenMeta("TEST")
+            step = MeasurementStep("NRM", 80, 35, 100, -23, 7e-9, 2, 30, 12, 0, 0, 0)
+            write_measurements(root / "measurements.txt", meta, [step])
+            write_header(root / meta.name, meta)
+            append_step(root / meta.name, step)
+            window = ZijderveldWindow()
+            try:
+                with patch.object(QtWidgets.QFileDialog, "getExistingDirectory", return_value=directory):
+                    window._open_directory()
+                self.assertEqual(window._coord_combo.count(), 1)
+                self.assertEqual(window._coord_combo.currentText(), "Recorded")
+                with patch.object(QtWidgets.QFileDialog, "getOpenFileName", return_value=(str(root / meta.name), "")):
+                    window._open_file()
+                self.assertEqual(window._coord_combo.count(), 3)
+                self.assertEqual(window._coord_combo.currentText(), "Specimen")
+            finally:
+                window.close()
+                window.deleteLater()
+                self.app.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
 
     def test_recent_window_follows_auto_watch_and_preserves_repeated_fit_bound(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

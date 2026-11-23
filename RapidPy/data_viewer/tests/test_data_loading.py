@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta
 import hashlib
 from pathlib import Path
@@ -50,8 +51,8 @@ def _step(label: str, x: float = 1.0, y: float = 0.2, z: float = 0.1, error_angl
     )
 
 
-def _write_review_index(root: Path, specimen: str) -> None:
-    files = ("measurements.txt", f"{specimen}.rmg")
+def _write_review_index(root: Path, specimen: str, *additional_files: str) -> None:
+    files = ("measurements.txt", f"{specimen}.rmg", *additional_files)
     (root / "artifact_index.json").write_text(json.dumps({
         "schema": "rapidpy.measurement.artifact_index.v1",
         "sample": specimen,
@@ -64,6 +65,42 @@ def _write_review_index(root: Path, specimen: str) -> None:
 
 
 class TestViewerDataLoading(unittest.TestCase):
+    def test_loads_verified_frames_from_live_and_archived_rapid_bundles(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            meta = SpecimenMeta("A", core_orientation_available=True, bedding_dip=20)
+            steps = [replace(_step(label), crdec=315.123456 - i, crinc=-21.234567 + i,
+                             sdec=40.0 + i, sinc=42.0 + i, operator="", moment=3.0 - i)
+                     for i, label in enumerate(("NRM", "AF10", "AF10"))]
+            with MeasurementBundleWriter(root, meta) as writer:
+                for step in steps:
+                    writer.append_step(step, retain_repeats=True)
+            _write_review_index(root, "A", "A")
+
+            def assert_specimen_frames(path):
+                specimen, = load_magic_directory(path).specimens
+                for actual, saved in zip(specimen.steps, steps, strict=True):
+                    self.assertEqual(actual.demag_label, saved.demag_label)
+                    self.assertEqual((actual.crdec, actual.crinc), (saved.crdec, saved.crinc))
+                    self.assertEqual((actual.sdec, actual.sinc), (saved.sdec, saved.sinc))
+                    self.assertEqual((actual.gdec, actual.ginc), (saved.gdec, saved.ginc))
+                    self.assertAlmostEqual(actual.moment, saved.magn_moment_Am2(), places=8)
+                self.assertEqual(specimen.coordinate_frames, ("specimen", "geographic", "tilt-corrected"))
+
+            assert_specimen_frames(root)
+            cit = root / "A"
+            original_cit = cit.read_bytes()
+            cit.write_bytes(original_cit + b"\r\n")
+            specimen, = load_magic_directory(root).specimens
+            self.assertEqual(specimen.coordinate_frames, ("specimen", "geographic"))
+            cit.write_bytes(original_cit)
+
+            with MeasurementBundleWriter(root, meta) as writer:
+                writer.append_step(_step("NRM"))
+            provenance = json.loads((root / "provenance.json").read_bytes())
+            archive = (root / provenance["previous_publication"]["relative_path"]).parent
+            assert_specimen_frames(archive)
+
     def test_recovers_only_missing_csd_from_the_matching_indexed_rmg(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
