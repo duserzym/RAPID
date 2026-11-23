@@ -74,6 +74,11 @@ The preview and snapshot button become active on receipt of a usable frame.
    is plotted below zero in both views.
    Use **View → Step labels** to show endpoints, label every measured
    treatment step, or hide labels on the directional plots.
+   Use **View → Recent steps** to review the latest measurements in the
+   directional plots, intensity decay plot, measurement table, and fit range.
+   Enter `0` to show all steps, the default. With Auto-watch on, both edges
+   of the fit range follow the displayed window unless you select an interior
+   step. Susceptibility and Arai plots show their full recorded data.
    Fit angles are independent of the moment scale. A free fit reports the
    direction of the remanence removed between the selected endpoints. An
    origin-anchored fit points from the origin toward the selected readings.

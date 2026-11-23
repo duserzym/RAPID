@@ -9,6 +9,7 @@ This module is intentionally smaller than pmag_gui / demag_gui. It focuses on:
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from html import escape
 import math
 import sys
@@ -33,6 +34,8 @@ from data_viewer.data_loading import (
 )
 from rapidpy_common.ui import apply_liquid_glass_theme, apply_window_bounds_guard, set_app_icon
 from rapidpy_common.resources import asset_directory
+
+FitBounds = tuple[tuple[str, int] | None, tuple[str, int] | None]
 
 
 # ── Demo data ────────────────────────────────────────────────────────────────
@@ -549,14 +552,14 @@ class IntensityWidget(QtWidgets.QWidget):
             lbl.setAlignment(QtCore.Qt.AlignCenter)
             vl.addWidget(lbl)
 
-    def set_specimen(self, specimen: ViewerSpecimen | None) -> None:
+    def set_specimen(self, specimen: ViewerSpecimen | None, first_step: int = 0) -> None:
         if not _HAS_PG:
             return
         self._plot.getAxis("left").setLabel(specimen.magnitude_label if specimen else "Recorded magnitude")
         if not specimen:
             self._curve.setData([], [])
             return
-        xs = list(range(len(specimen.steps)))
+        xs = list(range(first_step, first_step + len(specimen.steps)))
         ys = [step.moment for step in specimen.steps]
         self._curve.setData(xs, ys)
 
@@ -778,6 +781,7 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         self.setMinimumSize(980, 620)
         self._dataset: ViewerDataset | None = None
         self._current_specimen: ViewerSpecimen | None = None
+        self._recent_step_count = 0
         self._load_request: tuple[Callable[[Path], ViewerDataset], Path] | None = None
         self._loaded_dataset_name = ""
         self._watcher = QtCore.QFileSystemWatcher(self)
@@ -1019,7 +1023,9 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         fm.addSeparator()
         fm.addAction("E&xit", QtWidgets.QApplication.quit)
 
-        labels = mb.addMenu("&View").addMenu("Step &labels")
+        view = mb.addMenu("&View")
+        view.addAction("&Recent steps…", self._change_recent_steps)
+        labels = view.addMenu("Step &labels")
         modes = QtGui.QActionGroup(self)
         for text, mode in (("&Endpoints", "endpoints"), ("&All steps", "all"), ("&Hidden", "hidden")):
             action = labels.addAction(text)
@@ -1037,6 +1043,16 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         self._zij.set_label_mode(mode)
         self._stereo.set_label_mode(mode)
         self._vector3d.set_label_mode(mode)
+
+    def _change_recent_steps(self) -> None:
+        count, accepted = QtWidgets.QInputDialog.getInt(
+            self, "Recent treatment steps", "Latest recorded steps (0 shows all)", self._recent_step_count, 0,
+        )
+        if accepted and count != self._recent_step_count:
+            fit_bounds = self._capture_fit_bounds()
+            self._recent_step_count = count
+            self._populate_fit_ranges(fit_bounds)
+            self._update_all()
 
     # ── Actions ────────────────────────────────────────────────────────────
     def _load_demo(self) -> None:
@@ -1078,54 +1094,66 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         dataset_name: str,
         load_request: tuple[Callable[[Path], ViewerDataset], Path] | None,
         preferred_specimen: str | None = None,
-        preferred_fit_labels: tuple[str | None, str | None] | None = None,
+        preferred_fit_bounds: FitBounds = (None, None),
     ) -> None:
         self._dataset = dataset
         self._load_request = load_request
         self._loaded_dataset_name = dataset_name
         self._dataset_lbl.setText(dataset_name)
         self._source_lbl.setText(f"Source: {dataset_name}\nKind: {dataset.source_kind.replace('_', ' ')}")
-        self._specimen_list.blockSignals(True)
-        self._specimen_list.clear()
-        for specimen in dataset.specimens:
-            self._specimen_list.addItem(specimen.name)
-        self._specimen_list.blockSignals(False)
-        if dataset.specimens:
-            row = 0
+        row = -1
+        with QtCore.QSignalBlocker(self._specimen_list):
+            self._specimen_list.clear()
+            self._specimen_list.addItems(dataset.specimen_names)
+            if dataset.specimens:
+                row = 0
             if preferred_specimen:
                 for index, specimen in enumerate(dataset.specimens):
                     if specimen.name == preferred_specimen:
                         row = index
                         break
+                else:
+                    preferred_fit_bounds = (None, None)
             self._specimen_list.setCurrentRow(row)
-            self._change_specimen(row)
-            if preferred_fit_labels is not None:
-                self._restore_fit_range(*preferred_fit_labels)
+        self._change_specimen(row, preferred_fit_bounds)
         self._refresh_watch_paths()
 
-    def _change_specimen(self, row: int) -> None:
-        if not self._dataset or row < 0 or row >= len(self._dataset.specimens):
-            self._current_specimen = None
-            self._update_all()
-            return
-        self._current_specimen = self._dataset.specimens[row]
-        self._populate_fit_ranges()
+    def _change_specimen(self, row: int, fit_bounds: FitBounds = (None, None)) -> None:
+        self._current_specimen = (
+            self._dataset.specimens[row] if self._dataset and 0 <= row < len(self._dataset.specimens) else None
+        )
+        self._populate_fit_ranges(fit_bounds)
         self._update_all()
 
-    def _populate_fit_ranges(self) -> None:
-        self._fit_start.blockSignals(True)
-        self._fit_end.blockSignals(True)
-        self._fit_start.clear()
-        self._fit_end.clear()
-        if self._current_specimen:
-            for index, step in enumerate(self._current_specimen.steps):
+    def _first_visible_step(self) -> int:
+        if self._current_specimen and self._recent_step_count:
+            return max(0, len(self._current_specimen.steps) - self._recent_step_count)
+        return 0
+
+    def _populate_fit_ranges(self, fit_bounds: FitBounds) -> None:
+        steps = self._current_specimen.steps if self._current_specimen else []
+        first = self._first_visible_step()
+        with QtCore.QSignalBlocker(self._fit_start), QtCore.QSignalBlocker(self._fit_end):
+            self._fit_start.clear()
+            self._fit_end.clear()
+            for index in range(first, len(steps)):
+                step = steps[index]
                 label = f"{index + 1}. {step.demag_label}"
                 self._fit_start.addItem(label, index)
                 self._fit_end.addItem(label, index)
-            self._fit_start.setCurrentIndex(0)
-            self._fit_end.setCurrentIndex(len(self._current_specimen.steps) - 1)
-        self._fit_start.blockSignals(False)
-        self._fit_end.blockSignals(False)
+            if steps:
+                last = len(steps) - 1
+                for combo, bound, edge in zip((self._fit_start, self._fit_end), fit_bounds, (first, last)):
+                    index = edge
+                    if bound is not None:
+                        label, occurrence = bound
+                        matches = [row for row, step in enumerate(steps) if step.demag_label == label]
+                        if occurrence < len(matches):
+                            index = max(first, matches[occurrence])
+                    combo.setCurrentIndex(index - first)
+                if self._fit_start.currentIndex() > self._fit_end.currentIndex():
+                    self._fit_start.setCurrentIndex(0)
+                    self._fit_end.setCurrentIndex(last - first)
 
     def _handle_fit_range_change(self) -> None:
         if self._fit_start.currentIndex() > self._fit_end.currentIndex():
@@ -1150,31 +1178,25 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         start = self._fit_start.currentData()
         end = self._fit_end.currentData()
         if start is None or end is None:
-            return self._current_specimen.steps
-        lo, hi = sorted((int(start), int(end)))
-        return self._current_specimen.steps[lo : hi + 1]
+            return self._current_specimen.steps[self._first_visible_step():]
+        return self._current_specimen.steps[start : end + 1]
 
-    def _capture_view_state(self) -> tuple[str | None, tuple[str | None, str | None]]:
-        specimen_name = self._current_specimen.name if self._current_specimen else None
-        return specimen_name, (self._current_fit_label(self._fit_start), self._current_fit_label(self._fit_end))
+    def _capture_fit_bounds(self) -> FitBounds:
+        # Endpoints at the edges move with the displayed window. Interior
+        # endpoints keep their occurrence of a treatment label after reloading.
+        return (
+            self._capture_fit_bound(self._fit_start, 0),
+            self._capture_fit_bound(self._fit_end, self._fit_end.count() - 1),
+        )
 
-    def _current_fit_label(self, combo: QtWidgets.QComboBox) -> str | None:
-        text = combo.currentText().strip()
-        if not text:
+    def _capture_fit_bound(self, combo: QtWidgets.QComboBox, edge: int) -> tuple[str, int] | None:
+        index = combo.currentData()
+        if self._current_specimen is None or index is None or combo.currentIndex() == edge:
             return None
-        return text.split(". ", 1)[-1]
-
-    def _restore_fit_range(self, start_label: str | None, end_label: str | None) -> None:
-        if start_label is not None:
-            self._set_fit_combo_to_label(self._fit_start, start_label)
-        if end_label is not None:
-            self._set_fit_combo_to_label(self._fit_end, end_label)
-
-    def _set_fit_combo_to_label(self, combo: QtWidgets.QComboBox, target_label: str) -> None:
-        for index in range(combo.count()):
-            if combo.itemText(index).split(". ", 1)[-1] == target_label:
-                combo.setCurrentIndex(index)
-                return
+        steps = self._current_specimen.steps
+        label = steps[index].demag_label
+        occurrence = sum(step.demag_label == label for step in steps[:index])
+        return label, occurrence
 
     def _refresh_watch_paths(self) -> None:
         existing = self._watcher.files() + self._watcher.directories()
@@ -1205,7 +1227,8 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         if self._load_request is None:
             return
         load, source_path = self._load_request
-        specimen_name, fit_labels = self._capture_view_state()
+        specimen_name = self._current_specimen.name if self._current_specimen else None
+        fit_bounds = self._capture_fit_bounds()
         try:
             dataset = load(source_path)
             self._apply_dataset(
@@ -1213,7 +1236,7 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
                 dataset_name=self._loaded_dataset_name or source_path.name,
                 load_request=(load, source_path),
                 preferred_specimen=specimen_name,
-                preferred_fit_labels=fit_labels,
+                preferred_fit_bounds=fit_bounds,
             )
             stamp = QtCore.QTime.currentTime().toString("HH:mm:ss")
             self._watch_lbl.setText(f"Reloaded {stamp}")
@@ -1227,12 +1250,16 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         fit_steps = self._current_fit_steps()
         scale_by_csd = self._scale_csd.isChecked()
         include_origin = self._include_origin.isChecked()
-        self._zij.set_specimen(self._current_specimen, coordinate_system, scale_by_csd, fit_steps, include_origin)
-        self._vector3d.set_specimen(self._current_specimen, coordinate_system, scale_by_csd, fit_steps, include_origin)
-        self._stereo.set_specimen(self._current_specimen, coordinate_system, scale_by_csd)
-        self._int_widget.set_specimen(self._current_specimen)
+        first = self._first_visible_step()
+        visible_specimen = self._current_specimen
+        if visible_specimen and first:
+            visible_specimen = replace(visible_specimen, steps=visible_specimen.steps[first:])
+        self._zij.set_specimen(visible_specimen, coordinate_system, scale_by_csd, fit_steps, include_origin)
+        self._vector3d.set_specimen(visible_specimen, coordinate_system, scale_by_csd, fit_steps, include_origin)
+        self._stereo.set_specimen(visible_specimen, coordinate_system, scale_by_csd)
+        self._int_widget.set_specimen(visible_specimen, first)
         self._pint_widget.set_specimen(self._current_specimen)
-        self._table.set_specimen(self._current_specimen, coordinate_system)
+        self._table.set_specimen(visible_specimen, coordinate_system)
         self._sync_analysis_panels()
 
         if not self._current_specimen:
@@ -1246,7 +1273,9 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         suggestion = next_step_suggestion(self._current_specimen)
         fit = principal_component_fit(fit_steps, coordinate_system=coordinate_system, include_origin=self._include_origin.isChecked()) if fit_steps else None
         self._experiment_lbl.setText(f"Experiment type: {self._current_specimen.experiment_type}")
-        self._step_count_lbl.setText(f"Steps: {len(self._current_specimen.steps)} | Fit window: {len(fit_steps)} steps")
+        total = len(self._current_specimen.steps)
+        shown = f"{total - first} of {total}" if first else str(total)
+        self._step_count_lbl.setText(f"Steps: {shown} | Fit window: {len(fit_steps)} steps")
         self._fit_summary.setText(_format_fit_summary(fit))
         self._suggestion_title.setText(f"{suggestion.title} ({suggestion.confidence} confidence)")
         self._suggestion_text.setHtml(

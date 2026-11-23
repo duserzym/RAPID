@@ -113,7 +113,7 @@ Phase-1 inventory closure.
 | `modStatusCode` | Module | Mapped | `rapid_main/status_codes.py` defines stable operator status/severity codes; `measurement_worker.py` emits structured `status_event` objects alongside existing UI strings; `tests/test_status_codes.py` verifies phase, warning, SQUID-error, and safety-return classification. |
 | `frmSampleQueueMonitor` | Form | Mapped | queue monitor panel scaffolding |
 | `frmVRM` | Form | Software-integrated; hardware-unvalidated | `_launch_vrm` refuses active/conflicting ownership, releases retained main SQUID clients, and holds measurement/SQUID leases for the child lifetime. The logger finalizes an immutable outcome/hash manifest after CSV closure and distinguishes validated handoff from true run association. Physical acquisition remains open. |
-| `frmPlots` | Form | Data Review helper integrated | Open an individual CIT specimen or a `.sam` index from Data Review. The viewer plots directional and susceptibility data and follows additions to the selected specimen and its RMG sidecar. |
+| `frmPlots` | Form | Data Review helper integrated | Open an individual CIT specimen or a `.sam` index from Data Review. The viewer plots directional and susceptibility data and follows additions to the selected specimen and its RMG sidecar. **View → Recent steps** applies a rolling window to the directional plots, intensity decay, measurement table, and fit selection. |
 | `frmWebcam` | Form | Stand-alone implemented | `dialogs.webcam` launch path |
 | `modConfig` | Module | Mapped | `config.py` migration started |
 | `CIniFile` | Class | Mapped | `RapidPy/rapid_main/rapid_main/legacy_ini.py` + Settings import workflow (`Import VB6 INI…`) with mapping notes and validation. |
