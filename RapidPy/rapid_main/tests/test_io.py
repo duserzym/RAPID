@@ -1,11 +1,13 @@
 """Unit tests for rapid_main I/O modules and data model."""
 from __future__ import annotations
 
+import csv
 import sys
 import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -246,6 +248,29 @@ class TestMagicWriter(unittest.TestCase):
             lines = p.read_text(encoding="utf-8").splitlines()
         # 2 header lines + 2 data rows
         self.assertEqual(len(lines), 4)
+
+    def test_append_adds_csd_to_older_rapid_table_without_changing_prior_values(self) -> None:
+        meta = _meta()
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "measurements.txt"
+            write_measurements(path, meta, [_step("NRM")])
+            table, *modern_rows = path.read_text(encoding="utf-8").splitlines()
+            legacy_rows = [row.rsplit("\t", 1)[0] for row in modern_rows]
+            path.write_text("\n".join([table, *legacy_rows]), encoding="utf-8")
+            previous_bytes = path.read_bytes()
+            with patch("rapid_main.io.magic_writer.os.replace", side_effect=OSError("blocked")):
+                with self.assertRaisesRegex(OSError, "blocked"):
+                    append_measurement(path, meta, _step("AF20"))
+            self.assertEqual(path.read_bytes(), previous_bytes)
+            append_measurement(path, meta, _step("AF20"))
+            with path.open(encoding="utf-8", newline="") as stream:
+                self.assertEqual(stream.readline().strip(), table)
+                reader = csv.DictReader(stream, delimiter="\t")
+                original, measured = list(reader)
+            self.assertEqual(list(original.values()), legacy_rows[1].split("\t") + [""])
+            self.assertEqual(measured["dir_csd"], "3.5")
+            self.assertEqual(measured["measurement"], f"{meta.name}-AF20")
+            self.assertEqual(list(path.parent.glob(".magic-*")), [])
 
     def test_unit_conversions(self) -> None:
         """moment in A·m² (×1e-3), AF field in T (×1e-4)."""

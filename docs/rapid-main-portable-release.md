@@ -72,6 +72,10 @@ The preview and snapshot button become active on receipt of a usable frame.
    In the **2D component view**, choose **N–S projection** for east to the
    right or **E–W projection** for north to the right. Positive inclination
    is plotted below zero in both views.
+   On the stereonet, enable **CSD contours** to show the angular scatter
+   around each reading. Solid arcs are in the lower hemisphere. Dashed arcs
+   are in the upper hemisphere. New MagIC measurements carry recorded CSD
+   in `dir_csd`.
    Run bundles retain scientific outputs, provenance, workflow summaries,
    communication evidence, and a hashed artifact index.
    For specimens with orientation headers, use **Core**, **Geographic**, or

@@ -99,6 +99,43 @@ def principal_component_segment(
         fit.center + fit.direction * max(distances),
     )
 
+
+def stereonet_csd_arcs(
+    dec_deg: float, inc_deg: float, csd_deg: float,
+) -> list[tuple[bool, list[tuple[float, float]]]]:
+    """Project the angular CSD boundary in pieces split at the equator.
+
+    Each piece returns its lower-hemisphere flag and equal-area east/north points.
+    """
+    if not (math.isfinite(dec_deg) and -90 <= inc_deg <= 90 and 0 < csd_deg < 180):
+        return []
+
+    dec, inc, angle = map(math.radians, (dec_deg, inc_deg, csd_deg))
+    sin_dec, cos_dec = math.sin(dec), math.cos(dec)
+    sin_inc, cos_inc = math.sin(inc), math.cos(inc)
+    sin_angle, cos_angle = math.sin(angle), math.cos(angle)
+    depth_offset = sin_inc * cos_angle
+    depth_amplitude = cos_inc * sin_angle
+    breaks = [0.0, math.tau]
+    if abs(depth_offset) < depth_amplitude:
+        crossing = math.asin(-depth_offset / depth_amplitude)
+        breaks = sorted({*breaks, crossing % math.tau, (math.pi - crossing) % math.tau})
+
+    arcs = []
+    for begin, end in zip(breaks, breaks[1:]):
+        lower = depth_offset + depth_amplitude * math.sin((begin + end) / 2) >= 0
+        points = []
+        intervals = math.ceil((end - begin) / math.radians(5))
+        for index in range(intervals + 1):
+            phase = begin + (end - begin) * index / intervals
+            along = cos_inc * cos_angle - sin_inc * sin_angle * math.sin(phase)
+            across = math.cos(phase) * sin_angle
+            depth = depth_offset + depth_amplitude * math.sin(phase)
+            scale = 1 / math.sqrt(1 + abs(depth))
+            points.append(((sin_dec * along + cos_dec * across) * scale,
+                           (cos_dec * along - sin_dec * across) * scale))
+        arcs.append((lower, points))
+    return arcs
 def summarize_paleointensity(points: Iterable[PaleointensityPoint]) -> PaleointensitySummary:
     series = [point for point in points if point.step_kind in {"ZF", "IF"}]
     if len(series) < 2:

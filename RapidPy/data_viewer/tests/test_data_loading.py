@@ -129,6 +129,7 @@ class TestViewerDataLoading(unittest.TestCase):
         self.assertEqual(dataset.specimens[0].name, "THERM01")
         self.assertEqual(dataset.specimens[0].experiment_type, "Thermal")
         self.assertEqual(dataset.specimens[0].meta.site, "SITE1")
+        self.assertEqual(dataset.specimens[0].steps[0].error_angle, 2.0)
         self.assertEqual(dataset.specimens[0].magnitude_label, "Moment (A·m²)")
         self.assertAlmostEqual(dataset.specimens[0].steps[0].moment, steps[0].magn_moment_Am2(), places=8)
         watched = watch_paths_for_dataset(dataset)

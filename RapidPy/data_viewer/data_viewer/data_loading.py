@@ -385,7 +385,9 @@ def _measurement_row_to_step(row: dict[str, str], specimen_name: str) -> Measure
 
     geographic_dec = _to_float(_first_present(row, "dir_dec", "measurement_dec", default=str(dec)))
     geographic_inc = _to_float(_first_present(row, "dir_inc", "measurement_inc", default=str(inc)))
-    error_angle = _to_float(_first_present(row, "dir_csd", "meas_csd", "error_angle", default="0"))
+    error_angle = _to_float(_first_present(
+        row, "dir_csd", "measurement_csd", "meas_csd", "error_angle", default="0",
+    ))
     timestamp = _parse_timestamp(row.get("timestamp", ""))
 
     return MeasurementStep(

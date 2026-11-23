@@ -24,7 +24,8 @@ except ImportError:
     _HAS_PG = False
 
 from data_viewer.analysis import (
-    next_step_suggestion, principal_component_fit, principal_component_segment, summarize_paleointensity, vector_for_step,
+    next_step_suggestion, principal_component_fit, principal_component_segment, stereonet_csd_arcs,
+    summarize_paleointensity, vector_for_step,
 )
 from data_viewer.data_loading import (
     MeasurementStep, SpecimenMeta, SusceptibilityPoint, ViewerDataset, ViewerSpecimen,
@@ -117,15 +118,20 @@ class StereonetWidget(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumSize(300, 300)
+        self.setMinimumSize(160, 160)
         self._specimen: ViewerSpecimen | None = None
         self._coordinate_system = "specimen"
         self._scale_by_csd = False
+        self._show_csd = False
 
     def set_specimen(self, specimen: ViewerSpecimen | None, coordinate_system: str, scale_by_csd: bool) -> None:
         self._specimen = specimen
         self._coordinate_system = coordinate_system
         self._scale_by_csd = scale_by_csd
+        self.update()
+
+    def set_show_csd(self, enabled: bool) -> None:
+        self._show_csd = enabled
         self.update()
 
     def paintEvent(self, _e: QtGui.QPaintEvent) -> None:
@@ -167,11 +173,10 @@ class StereonetWidget(QtWidgets.QWidget):
             return
 
         # Plot path line
-        pts_lower: list[tuple[QtCore.QPointF, MeasurementStep]] = []
-        pts_upper: list[tuple[QtCore.QPointF, MeasurementStep]] = []
+        points = []
         steps = self._specimen.steps
 
-        for i, step in enumerate(steps):
+        for step in steps:
             vector = vector_for_step(step, self._coordinate_system)
             inc, dec = _cart_to_inc_dec(vector)
             x, y = _equal_area(inc, dec)
@@ -179,41 +184,38 @@ class StereonetWidget(QtWidgets.QWidget):
             py = cy - y * r
             pt = QtCore.QPointF(px, py)
 
-            if inc >= 0:
-                pts_lower.append((pt, step))
-            else:
-                pts_upper.append((pt, step))
+            points.append((pt, step, inc >= 0))
 
-            # Label first and last
-            is_first = i == 0
-            is_last = i == len(steps) - 1
-            if is_first or is_last:
-                font2 = p.font()
-                font2.setPointSize(7)
-                font2.setBold(False)
-                p.setFont(font2)
-                p.setPen(QtGui.QPen(QtGui.QColor("#4b5563")))
-                p.drawText(pt + QtCore.QPointF(8, -4), step.demag_label)
+            if self._show_csd and np.any(vector):
+                p.setBrush(QtCore.Qt.NoBrush)
+                for lower, arc in stereonet_csd_arcs(dec, inc, step.error_angle):
+                    pen = QtGui.QPen(QtGui.QColor(122, 2, 25, 170), 1.2,
+                                    QtCore.Qt.SolidLine if lower else QtCore.Qt.DashLine)
+                    p.setPen(pen)
+                    p.drawPolyline(QtGui.QPolygonF([QtCore.QPointF(cx + x * r, cy - y * r) for x, y in arc]))
 
         # Draw connecting path
         pen_path = QtGui.QPen(QtGui.QColor(122, 2, 25, 100), 1, QtCore.Qt.DashLine)
         p.setPen(pen_path)
-        all_pts = [pt for pt, _step in pts_lower + pts_upper]
-        for i in range(1, len(all_pts)):
-            p.drawLine(all_pts[i - 1], all_pts[i])
+        for (start, _, start_lower), (end, _, end_lower) in zip(points, points[1:]):
+            if start_lower == end_lower:
+                p.drawLine(start, end)
 
         # Lower hemisphere: filled circles
         p.setPen(QtGui.QPen(QtGui.QColor(122, 2, 25), 1.5))
-        p.setBrush(QtGui.QBrush(QtGui.QColor(122, 2, 25)))
-        for pt, step in pts_lower:
+        filled = QtGui.QBrush(QtGui.QColor(122, 2, 25))
+        for pt, step, lower in points:
+            p.setBrush(filled if lower else QtGui.QBrush(QtCore.Qt.NoBrush))
             dot_r = _dot_radius(step.error_angle, self._scale_by_csd)
             p.drawEllipse(pt, dot_r, dot_r)
 
-        # Upper hemisphere: open circles
-        p.setBrush(QtCore.Qt.NoBrush)
-        for pt, step in pts_upper:
-            dot_r = _dot_radius(step.error_angle, self._scale_by_csd)
-            p.drawEllipse(pt, dot_r, dot_r)
+        label_font = p.font()
+        label_font.setPointSize(7)
+        label_font.setBold(False)
+        p.setFont(label_font)
+        p.setPen(QtGui.QPen(QtGui.QColor("#4b5563")))
+        for pt, step, _ in (points[0], points[-1]) if len(points) > 1 else points:
+            p.drawText(pt + QtCore.QPointF(8, -4), step.demag_label)
 
         # Legend
         font3 = p.font()
@@ -923,12 +925,14 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         self._directional_stack.addWidget(self._susceptibility_widget)
 
         stereo_wrap = QtWidgets.QWidget()
-        sl = QtWidgets.QHBoxLayout(stereo_wrap)
+        sl = QtWidgets.QVBoxLayout(stereo_wrap)
         sl.setContentsMargins(0, 0, 0, 0)
-        sl.setAlignment(QtCore.Qt.AlignCenter)
         self._stereo = StereonetWidget()
-        self._stereo.setMinimumSize(350, 350)
-        sl.addWidget(self._stereo)
+        show_csd = QtWidgets.QCheckBox("CSD contours")
+        show_csd.setToolTip("Show recorded circular standard deviation. Solid is lower hemisphere, dashed is upper.")
+        show_csd.toggled.connect(self._stereo.set_show_csd)
+        sl.addWidget(show_csd, 0, QtCore.Qt.AlignLeft)
+        sl.addWidget(self._stereo, 1)
 
         self._int_widget = IntensityWidget()
         self._pint_widget = PaleointensityWidget()

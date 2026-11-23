@@ -21,7 +21,9 @@ Unit conventions (MagIC v3.0):
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Optional
 
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
@@ -52,6 +54,7 @@ MAGIC_COLUMNS = [
     "meas_n_orient",
     "analysts",
     "timestamp",
+    "dir_csd",           # °, circular standard deviation
 ]
 
 _HEADER_LINE = "tab delimited\tmeasurements"
@@ -99,6 +102,7 @@ def _step_to_row(
         "4",                                  # meas_n_orient (4-position standard)
         step.operator,                        # analysts
         step.timestamp.strftime("%Y-%m-%dT%H:%M:%S"),  # timestamp
+        _fmt(step.error_angle if 0 < step.error_angle < 180 else None),
     ]
 
 
@@ -157,10 +161,47 @@ def append_measurement(
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not path.exists()
+    write_header = not path.exists() or path.stat().st_size == 0
+    columns = MAGIC_COLUMNS if write_header else _columns_for_append(path)
+    row = _step_to_row(step, meta, treatment_temp_k=treatment_temp_k, measurement_name=measurement_name)
+    values = dict(zip(MAGIC_COLUMNS, row))
     with path.open("a", encoding="utf-8", newline="\n") as fh:
         if write_header:
             fh.write(_HEADER_LINE + "\n")
             fh.write("\t".join(MAGIC_COLUMNS) + "\n")
-        row = _step_to_row(step, meta, treatment_temp_k=treatment_temp_k, measurement_name=measurement_name)
-        fh.write("\t".join(row) + "\n")
+        fh.write("\t".join(values.get(column, "") for column in columns) + "\n")
+
+
+def _columns_for_append(path: Path) -> list[str]:
+    previous = MAGIC_COLUMNS[:-1]
+    temporary = None
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as source:
+            table = source.readline().rstrip("\r\n")
+            columns = source.readline().rstrip("\r\n").split("\t")
+            if ("measurements" not in table.lower()
+                    or not {"measurement", "specimen"}.issubset(columns)):
+                raise ValueError(f"{path.name} has no MagIC measurements header.")
+            if columns != previous:
+                return columns
+            # Old RAPID files lack CSD. Keep those measurement values blank.
+            with NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=path.parent,
+                                    prefix=".magic-", delete=False) as target:
+                temporary = Path(target.name)
+                target.write(table + "\n")
+                target.write("\t".join(MAGIC_COLUMNS) + "\n")
+                for line in source:
+                    row = line.rstrip("\r\n")
+                    if row:
+                        missing = len(previous) - len(row.split("\t"))
+                        if missing < 0:
+                            raise ValueError(f"{path.name} contains a row wider than its header.")
+                        row += "\t" * (missing + 1)
+                    target.write(row + "\n")
+                target.flush()
+                os.fsync(target.fileno())
+        os.replace(temporary, path)
+        return MAGIC_COLUMNS
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
