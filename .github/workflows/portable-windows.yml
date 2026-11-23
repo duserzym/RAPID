@@ -23,6 +23,11 @@ jobs:
       - name: Install declared build dependencies
         shell: pwsh
         run: python -m pip install "setuptools>=69" wheel "./RapidPy[build]"
+      - name: Run the Data Review regression suite
+        shell: pwsh
+        run: |
+          python -u tools/test_rapid_main.py --suite data_viewer --verbose --stall-trace > data-review-tests.log 2>&1
+          if ($LASTEXITCODE -ne 0) { Get-Content data-review-tests.log -Tail 120; exit 1 }
       - name: Run the main-app regression suite
         shell: pwsh
         run: |
@@ -33,7 +38,9 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: rapidpy-windows-regression
-          path: rapidpy-tests.log
+          path: |
+            rapidpy-tests.log
+            data-review-tests.log
           if-no-files-found: ignore
           retention-days: 14
       - name: Build the portable release

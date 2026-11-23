@@ -358,15 +358,16 @@ and PyInstaller. The default build interpreter is the repository `.venv`:
 ```powershell
 .\installer\build_rapid_main.ps1
 .\.venv\Scripts\python.exe tools\test_rapid_main.py
+.\.venv\Scripts\python.exe tools\test_rapid_main.py --suite data_viewer
 ```
 
 The build packages a newly staged installation wheel, including metadata,
 icons, common assets, helpers, and GPL licensing. Tests use isolated
 configuration and Qt preferences. The manually triggered **Qualify the
-portable Windows bundle** workflow runs the regression suite, then verifies the
-transferred package in a separate Windows runner. Its qualification artifact
-contains the report for that candidate commit. Physical station, vendor
-driver, and display checks use the lab's acceptance procedure.
+portable Windows bundle** workflow runs the RAPID Main and Data Review suites,
+then verifies the transferred package on a separate Windows runner. The
+qualification artifact contains the report for that candidate commit. Physical
+station, vendor driver, and display checks use the lab's acceptance procedure.
 
 ### Measure workstation performance
 

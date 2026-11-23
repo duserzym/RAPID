@@ -1,4 +1,4 @@
-"""Run the main-app suite without changing operator settings or registry state."""
+"""Run a RAPID regression suite with isolated operator settings and registry state."""
 from pathlib import Path
 import argparse
 import os
@@ -33,6 +33,8 @@ class DiagnosticResult(unittest.TextTestResult):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--suite', choices=('rapid_main', 'data_viewer'), default='rapid_main',
+                        help='Test suite to run (default: rapid_main)')
     parser.add_argument('--pattern', default='test*.py', help='Unittest discovery filename pattern')
     parser.add_argument('--verbose', action='store_true', help='Print each test name for diagnosing stalled runs')
     parser.add_argument('--stall-trace', action='store_true', help='Dump thread stacks after a minute without suite completion')
@@ -64,7 +66,11 @@ def run_suite(args) -> int:
                 else:
                     super().__init__(*args, **kwargs)
         QtCore.QSettings = IsolatedSettings
-        suite = unittest.defaultTestLoader.discover(str(ROOT / "RapidPy" / "rapid_main" / "tests"), pattern=args.pattern)
+        test_root = ROOT / "RapidPy" / args.suite / "tests"
+        suite = unittest.defaultTestLoader.discover(str(test_root), pattern=args.pattern)
+        if not suite.countTestCases():
+            print(f"No tests matched {args.pattern!r} in the {args.suite} suite.", file=sys.stderr)
+            return 2
         result = unittest.TextTestRunner(verbosity=2 if args.verbose else 1,
             resultclass=DiagnosticResult if args.stall_trace else unittest.TextTestResult).run(suite)
         # Dispose the offscreen Qt application while Python and diagnostics are
