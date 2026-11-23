@@ -72,6 +72,8 @@ The preview and snapshot button become active on receipt of a usable frame.
    In the **2D component view**, choose **N–S projection** for east to the
    right or **E–W projection** for north to the right. Positive inclination
    is plotted below zero in both views.
+   Use **View → Step labels** to show endpoints, label every measured
+   treatment step, or hide labels on the directional plots.
    On the stereonet, enable **CSD contours** to show the angular scatter
    around each reading. Solid arcs are in the lower hemisphere. Dashed arcs
    are in the upper hemisphere. New MagIC measurements carry recorded CSD

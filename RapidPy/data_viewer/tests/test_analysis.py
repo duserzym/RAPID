@@ -16,7 +16,7 @@ sys.path.insert(0, str(VIEWER_ROOT))
 sys.path.insert(0, str(RAPID_MAIN_ROOT))
 
 from rapid_main.data_model import MeasurementStep, SpecimenMeta
-from data_viewer.app import _has_paleointensity_data, _orthogonal_projection_components
+from data_viewer.app import _has_paleointensity_data, _orthogonal_projection_components, _step_label_indices
 from data_viewer.analysis import (
     next_step_suggestion, principal_component_fit, principal_component_segment, stereonet_csd_arcs,
     summarize_paleointensity, vector_for_step,
@@ -106,6 +106,13 @@ class TestViewerAnalysis(unittest.TestCase):
         vector = np.array([1.5, 0.25, -0.75], dtype=float)
         self.assertEqual(_orthogonal_projection_components(vector), (0.25, 1.5, -0.75))
         self.assertEqual(_orthogonal_projection_components(vector, "ew"), (1.5, -0.25, -0.75))
+
+    def test_step_label_modes_include_single_endpoint_once(self) -> None:
+        self.assertEqual(_step_label_indices(0, "endpoints"), ())
+        self.assertEqual(_step_label_indices(1, "endpoints"), (0,))
+        self.assertEqual(_step_label_indices(4, "endpoints"), (0, 3))
+        self.assertEqual(tuple(_step_label_indices(4, "all")), (0, 1, 2, 3))
+        self.assertEqual(_step_label_indices(4, "hidden"), ())
 
     def test_fit_segment_spans_selected_readings_at_their_own_magnitude(self) -> None:
         steps = [_step("NRM", 8e-10, 0, 0), _step("AF20", 3e-10, 0, 0)]

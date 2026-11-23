@@ -112,6 +112,14 @@ def _has_paleointensity_data(specimen: ViewerSpecimen | None) -> bool:
     return bool(specimen and specimen.paleointensity_points)
 
 
+def _step_label_indices(count: int, mode: str) -> range | tuple[int, ...]:
+    if mode == "all":
+        return range(count)
+    if mode == "endpoints" and count:
+        return (0,) if count == 1 else (0, count - 1)
+    return ()
+
+
 # ── Stereonet widget ──────────────────────────────────────────────────────────
 class StereonetWidget(QtWidgets.QWidget):
     """Lambert equal-area stereonet drawn with QPainter."""
@@ -123,6 +131,7 @@ class StereonetWidget(QtWidgets.QWidget):
         self._coordinate_system = "specimen"
         self._scale_by_csd = False
         self._show_csd = False
+        self._label_mode = "endpoints"
 
     def set_specimen(self, specimen: ViewerSpecimen | None, coordinate_system: str, scale_by_csd: bool) -> None:
         self._specimen = specimen
@@ -132,6 +141,10 @@ class StereonetWidget(QtWidgets.QWidget):
 
     def set_show_csd(self, enabled: bool) -> None:
         self._show_csd = enabled
+        self.update()
+
+    def set_label_mode(self, mode: str) -> None:
+        self._label_mode = mode
         self.update()
 
     def paintEvent(self, _e: QtGui.QPaintEvent) -> None:
@@ -214,7 +227,8 @@ class StereonetWidget(QtWidgets.QWidget):
         label_font.setBold(False)
         p.setFont(label_font)
         p.setPen(QtGui.QPen(QtGui.QColor("#4b5563")))
-        for pt, step, _ in (points[0], points[-1]) if len(points) > 1 else points:
+        for index in _step_label_indices(len(points), self._label_mode):
+            pt, step, _ = points[index]
             p.drawText(pt + QtCore.QPointF(8, -4), step.demag_label)
 
         # Legend
@@ -243,6 +257,7 @@ class ZijderveldWidget(QtWidgets.QWidget):
         self._scale_by_csd = False
         self._fit_steps: list[MeasurementStep] = []
         self._include_origin = False
+        self._label_mode = "endpoints"
         self._label_items: list[pg.TextItem] = [] if _HAS_PG else []
 
         if _HAS_PG:
@@ -308,6 +323,10 @@ class ZijderveldWidget(QtWidgets.QWidget):
         self._include_origin = include_origin
         self._update_plot()
 
+    def set_label_mode(self, mode: str) -> None:
+        self._label_mode = mode
+        self._update_plot()
+
     def _update_plot(self) -> None:
         if not _HAS_PG:
             return
@@ -348,11 +367,17 @@ class ZijderveldWidget(QtWidgets.QWidget):
             start, end = (_orthogonal_projection_components(point, projection) for point in segment)
             self._fit_line.setData([start[0], end[0]], [start[1], end[1]])
 
-        for index, step in enumerate(self._specimen.steps):
-            if index in (0, len(self._specimen.steps) - 1):
-                label = pg.TextItem(text=step.demag_label, color="#5b544f", anchor=(0, 1))
-                label.setPos(abscissa[index], horizontal[index])
-                self._plot.addItem(label)
+        steps = self._specimen.steps
+        midpoint_x = (min(abscissa) + max(abscissa)) / 2 if abscissa else 0
+        for index in _step_label_indices(len(steps), self._label_mode):
+            side = int(abscissa[index] > midpoint_x)
+            projections = [(horizontal[index], (side, 1))]
+            if self._label_mode == "all" and vertical[index] != horizontal[index]:
+                projections.append((vertical[index], (side, 0)))
+            for ordinate, anchor in projections:
+                label = pg.TextItem(text=steps[index].demag_label, color="#5b544f", anchor=anchor)
+                label.setPos(abscissa[index], ordinate)
+                self._plot.addItem(label, ignoreBounds=True)
                 self._label_items.append(label)
 
 
@@ -365,6 +390,7 @@ class Vector3DWidget(QtWidgets.QWidget):
         self._fit_steps: list[MeasurementStep] = []
         self._scale_by_csd = False
         self._include_origin = False
+        self._label_mode = "endpoints"
         self._yaw = -35.0
         self._pitch = 22.0
         self._last_mouse_pos: QtCore.QPoint | None = None
@@ -382,6 +408,10 @@ class Vector3DWidget(QtWidgets.QWidget):
         self._scale_by_csd = scale_by_csd
         self._fit_steps = fit_steps
         self._include_origin = include_origin
+        self.update()
+
+    def set_label_mode(self, mode: str) -> None:
+        self._label_mode = mode
         self.update()
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
@@ -460,11 +490,14 @@ class Vector3DWidget(QtWidgets.QWidget):
                 p.setPen(QtGui.QPen(QtGui.QColor("#111111"), 1.4))
                 p.setBrush(QtGui.QBrush(QtGui.QColor("#111111")))
                 p.drawEllipse(point, radius_px, radius_px)
-                p.drawText(point + QtCore.QPointF(8, -6), step.demag_label)
             else:
                 p.setPen(QtGui.QPen(QtGui.QColor("#5c6470"), 1.2))
                 p.setBrush(QtGui.QBrush(QtGui.QColor(255, 255, 255, 180)))
                 p.drawEllipse(point, radius_px, radius_px)
+
+        p.setPen(QtGui.QColor("#111111"))
+        for index in _step_label_indices(len(points), self._label_mode):
+            p.drawText(points[index] + QtCore.QPointF(8, -6), self._specimen.steps[index].demag_label)
 
         p.setPen(QtGui.QColor("#6b7280"))
         p.drawText(self.rect().adjusted(16, 12, -16, -12), QtCore.Qt.AlignTop | QtCore.Qt.AlignRight, "Drag to rotate")
@@ -986,8 +1019,24 @@ class ZijderveldWindow(QtWidgets.QMainWindow):
         fm.addSeparator()
         fm.addAction("E&xit", QtWidgets.QApplication.quit)
 
+        labels = mb.addMenu("&View").addMenu("Step &labels")
+        modes = QtGui.QActionGroup(self)
+        for text, mode in (("&Endpoints", "endpoints"), ("&All steps", "all"), ("&Hidden", "hidden")):
+            action = labels.addAction(text)
+            modes.addAction(action)
+            action.setData(mode)
+            action.setCheckable(True)
+            action.setChecked(mode == "endpoints")
+        modes.triggered.connect(self._change_step_labels)
+
         hm = mb.addMenu("&Help")
         hm.addAction("Data &Format Help", self._show_format_help)
+
+    def _change_step_labels(self, action: QtGui.QAction) -> None:
+        mode = action.data()
+        self._zij.set_label_mode(mode)
+        self._stereo.set_label_mode(mode)
+        self._vector3d.set_label_mode(mode)
 
     # ── Actions ────────────────────────────────────────────────────────────
     def _load_demo(self) -> None:

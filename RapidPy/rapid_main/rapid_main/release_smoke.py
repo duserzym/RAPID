@@ -155,12 +155,17 @@ def _check_data_review_projection(root):
     plot = ZijderveldWidget()
     try:
         plot.set_specimen(specimen, "specimen", False, [], False)
+        labels_ok = len(plot._label_items) == 1
+        plot.set_label_mode("all")
+        labels_ok = labels_ok and len(plot._label_items) == 2
+        plot.set_label_mode("hidden")
+        labels_ok = labels_ok and not plot._label_items
         x_ns, y_ns = plot._horiz_line.getData()
         _, z_ns = plot._vert_line.getData()
         plot._projection.setCurrentIndex(plot._projection.findData("ew"))
         x_ew, y_ew = plot._horiz_line.getData()
         _, z_ew = plot._vert_line.getData()
-        return (len(x_ns) == len(x_ew) == 1 and z_ns[0] < 0
+        return (labels_ok and len(x_ns) == len(x_ew) == 1 and z_ns[0] < 0
                 and math.isclose(x_ns[0], -y_ew[0]) and math.isclose(y_ns[0], x_ew[0])
                 and math.isclose(z_ns[0], z_ew[0]))
     finally:
