@@ -33,13 +33,13 @@ class DiagnosticResult(unittest.TextTestResult):
 
 
 class RegressionLoader(unittest.TestLoader):
-    def __init__(self, excluded_pattern: str | None) -> None:
+    def __init__(self, excluded_patterns: list[str]) -> None:
         super().__init__()
-        self.excluded_pattern = excluded_pattern
+        self.excluded_patterns = excluded_patterns
 
     def loadTestsFromModule(self, module, *args, **kwargs):
         source = getattr(module, "__file__", None)
-        if self.excluded_pattern and source and fnmatchcase(Path(source).name, self.excluded_pattern):
+        if source and any(fnmatchcase(Path(source).name, pattern) for pattern in self.excluded_patterns):
             return self.suiteClass()
         return super().loadTestsFromModule(module, *args, **kwargs)
 
@@ -49,7 +49,8 @@ def main() -> int:
     parser.add_argument('--suite', choices=('rapid_main', 'data_viewer'), default='rapid_main',
                         help='Test suite to run (default: rapid_main)')
     parser.add_argument('--pattern', default='test*.py', help='Unittest discovery filename pattern')
-    parser.add_argument('--exclude-pattern', help='Exclude test files matching this filename pattern')
+    parser.add_argument('--exclude-pattern', action='append', default=[],
+                        help='Exclude test files matching this filename pattern (repeatable)')
     parser.add_argument('--verbose', action='store_true', help='Print each test name for diagnosing stalled runs')
     parser.add_argument('--stall-trace', action='store_true', help='Dump thread stacks after a minute without suite completion')
     args = parser.parse_args()

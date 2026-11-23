@@ -28,11 +28,26 @@ jobs:
         run: |
           python -u tools/test_rapid_main.py --suite data_viewer --verbose --stall-trace > data-review-tests.log 2>&1
           if ($LASTEXITCODE -ne 0) { Get-Content data-review-tests.log -Tail 120; exit 1 }
-      - name: Run the main-app regression suite
+      - name: Run the main-app regression suite in separate processes
         shell: pwsh
         run: |
-          python -u tools/test_rapid_main.py --exclude-pattern test_sequence_ui_smoke.py --verbose --stall-trace > rapidpy-tests.log 2>&1
-          if ($LASTEXITCODE -ne 0) { Get-Content rapidpy-tests.log -Tail 120; exit 1 }
+          $groups = @(
+            @{ Name = 'a-l'; Pattern = 'test_[a-l]*.py' },
+            @{ Name = 'm-p'; Pattern = 'test_[m-p]*.py' },
+            @{ Name = 'q'; Pattern = 'test_q*.py' },
+            @{ Name = 'remaining'; Pattern = 'test*.py'; Exclude = @(
+                'test_[a-l]*.py', 'test_[m-p]*.py', 'test_q*.py', 'test_sequence_ui_smoke.py'
+            ) }
+          )
+          foreach ($group in $groups) {
+            $testArguments = @('--pattern', $group.Pattern, '--verbose', '--stall-trace')
+            foreach ($pattern in $group.Exclude) {
+              $testArguments += @('--exclude-pattern', $pattern)
+            }
+            $log = "rapidpy-main-$($group.Name).log"
+            python -u tools/test_rapid_main.py @testArguments > $log 2>&1
+            if ($LASTEXITCODE -ne 0) { Get-Content $log -Tail 120; exit 1 }
+          }
       - name: Run the Sequence layout checks on a desktop work area
         shell: pwsh
         env:
@@ -46,7 +61,7 @@ jobs:
         with:
           name: rapidpy-windows-regression
           path: |
-            rapidpy-tests.log
+            rapidpy-main-*.log
             data-review-tests.log
             sequence-layout-tests.log
           if-no-files-found: ignore
