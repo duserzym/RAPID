@@ -24,6 +24,7 @@ from rapidpy_common.ui import (
 )
 
 from . import software_version
+from .companion import CompanionBridge
 from .config import AppConfig
 from .data_model import SampleIndexRegistration, SampleIndexRegistrations
 from .specimen_metadata import restore_specimen_metadata, validate_specimen_provenance
@@ -552,6 +553,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._current_step = "—"
         self._current_treatment = "—"
         self._status_override_active = False
+        self._companion: CompanionBridge | None = None
+        self._companion_run_epoch = 0
+        self._companion_diagnostics: list[dict[str, str]] = []
 
         # Live countdown timer (1 Hz, used when a run is active)
         self._run_start_time: "datetime | None" = None
@@ -1325,6 +1329,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return False
 
         self._queue_active = True
+        self._companion_run_epoch += 1
         self._queue_pos = 0
         self._queue_last_warnings = []
         self._queue_current_sample = None
@@ -1455,6 +1460,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 empty_rod_confirmed=True, **startup_options)
             self._queue_native_startup, self._queue_native_session = startup, startup.session
             self._queue_active = True
+            self._companion_run_epoch += 1
             self._queue_loaded_command = None
             self._queue_meas_pending_start = False
             self._save_queue_state()
@@ -2397,6 +2403,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def start_run(self, labels: list[str] | None = None) -> None:
         """Begin a measurement run — start the live countdown timer."""
+        self._companion_run_epoch += 1
         self._run_sequence_labels = list(labels if labels is not None else self._sequence_labels)
         self._run_current_idx = 0
         self._run_start_time = datetime.now()
@@ -2441,6 +2448,14 @@ class MainWindow(QtWidgets.QMainWindow):
         fm.addAction("&Load Sample Index…", self._load_sample_from_index)
         fm.addAction("&Log Out", self._launch_login)
         fm.addAction("Email &Notifications…", self._launch_notifications)
+        companion_menu = fm.addMenu("Mobile &Companion")
+        companion_menu.addAction("Start sharing / Show pairing key…", self._start_companion_sharing)
+        self._companion_control_action = companion_menu.addAction("Allow remote workflow control")
+        self._companion_control_action.setCheckable(True)
+        self._companion_control_action.setEnabled(False)
+        self._companion_control_action.toggled.connect(self._set_companion_control)
+        self._companion_stop_action = companion_menu.addAction("Stop sharing", self._stop_companion_sharing)
+        self._companion_stop_action.setEnabled(False)
         fm.addSeparator()
         fm.addAction("E&xit", self._request_shutdown)
 
@@ -2673,6 +2688,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.set_status(reason)
             return
         self.config.general.nocomm = bool(on)
+        self._stop_companion_sharing()
         self.config.save()
         self._rebuild_diagnostic_backends(nocomm=bool(on))
         self._measurement_backend = build_measurement_backend(
@@ -3359,6 +3375,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
             self._shutdown_cleanup_requested = True
 
+        self._stop_companion_sharing()
         for resource, dialog in list(self._owned_dialogs.items()):
             if resource not in self._shutdown_requested_dialogs:
                 self._shutdown_requested_dialogs.add(resource)
@@ -3689,6 +3706,7 @@ class MainWindow(QtWidgets.QMainWindow):
             != QtWidgets.QMessageBox.StandardButton.Yes
         ):
             return
+        self._stop_companion_sharing()
         self.cancel_queue_run("New session started.")
         self._sample_queue._clear_table()
         self._sequence.clear_for_new_session()
@@ -3842,6 +3860,92 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         lines = self._diagnostic_status_lines()
         self._dashboard.update_diagnostics(lines)
+        self._companion_diagnostics = [
+            {"name": line.name, "state": self._companion_instrument_state(line)}
+            for line in lines
+        ]
+
+    @staticmethod
+    def _companion_instrument_state(line) -> str:
+        if line.fault:
+            return "fault"
+        if line.simulated:
+            return "simulated"
+        return "connected" if line.connected else "disconnected"
+
+    def _start_companion_sharing(self) -> None:
+        if self._companion is None:
+            bridge = CompanionBridge(self._companion_state, self._dispatch_companion_command, self)
+            try:
+                bridge.start()
+            except OSError as exc:
+                bridge.deleteLater()
+                QtWidgets.QMessageBox.warning(self, "Mobile Companion", f"Unable to start sharing. {exc}")
+                return
+            self._companion = bridge
+            self._companion_control_action.setEnabled(True)
+            self._companion_stop_action.setEnabled(True)
+            self.log_event("Mobile Companion status sharing started.")
+
+        QtWidgets.QInputDialog.getText(
+            self,
+            "Mobile Companion",
+            "Copy this pairing key into RAPID Companion.\n"
+            "Connect through the station's private TLS proxy at wss://<station-host>/rapid/v1.\n"
+            f"Local bridge port {self._companion.port}. Closing this dialog keeps sharing active.",
+            text=self._companion.token,
+            flags=QtCore.Qt.WindowType.Dialog,
+            inputMethodHints=QtCore.Qt.InputMethodHint.ImhNoPredictiveText,
+        )
+
+    def _stop_companion_sharing(self) -> None:
+        bridge = getattr(self, "_companion", None)
+        if bridge is None:
+            return
+        self._companion = None
+        bridge.stop()
+        bridge.deleteLater()
+        self._companion_control_action.setChecked(False)
+        self._companion_control_action.setEnabled(False)
+        self._companion_stop_action.setEnabled(False)
+        self.log_event("Mobile Companion sharing stopped.")
+
+    def _set_companion_control(self, enabled: bool) -> None:
+        if self._companion is not None:
+            self._companion.control_enabled = enabled
+            self._companion.publish()
+            self.log_event(f"Mobile Companion workflow control {'enabled' if enabled else 'disabled'}.")
+
+    def _companion_state(self) -> tuple[int, dict]:
+        active = self._queue_active or self._measurement.is_active()
+        paused = self._queue_paused or self._measurement_is_paused()
+        available = (
+            active
+            and not self._shutdown_cleanup_requested
+            and self._queue_pending_finalize is None
+            and self._workflow_state not in {"halted", "error", "complete"}
+            and QtWidgets.QApplication.activeModalWidget() is None
+        )
+        return self._companion_run_epoch, {
+            "station": str(self.config.general.lab_name)[:120],
+            "mode": "simulation" if self.config.general.nocomm else "hardware",
+            "phase": "paused" if paused and available else self._workflow_state,
+            "sample": self._current_sample[:120] if self._current_sample != "UNKNOWN" else "",
+            "step": self._current_step[:120] if self._current_step != "—" else "",
+            "treatment": self._current_treatment[:120] if self._current_treatment != "—" else "",
+            "elapsed": self._elapsed_run_text(),
+            "allowed_commands": (["resume" if paused else "pause", "halt"] if available else []),
+            "diagnostics": self._companion_diagnostics,
+        }
+
+    def _dispatch_companion_command(self, action: str) -> None:
+        handlers = {
+            "pause": self._flow_pause_requested,
+            "resume": self._flow_resume_requested,
+            "halt": self._flow_halt_requested,
+        }
+        handlers[action]()
+        self.log_event(f"Mobile Companion requested workflow {action}.")
 
     def _launch_step_monitor(self) -> None:
         docked = self._stack.spec("tool:step")

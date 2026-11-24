@@ -2954,3 +2954,24 @@ can record launch time, idle CPU, Windows memory samples, and Qt event-loop
 intervals through a simulated queue. The workload starts from the Sample
 Queue button and verifies the published MagIC files. The report identifies
 the candidate revision. The oldest supported station still needs its own run.
+
+**Mobile companion bridge checkpoint (2026-11-24).** File → Mobile Companion
+starts an opt-in loopback WebSocket bridge (`127.0.0.1:8765`, `/rapid/v1`) for
+the RAPID Mobile iPhone/iPad app through the station's private TLS proxy. Each
+sharing session gets a fresh pairing key. Sharing starts read-only. With
+**Allow remote workflow control** checked, paired devices may request pause,
+resume or halt through the desktop's existing workflow handlers. Requests are
+refused during shutdown cleanup, finalization, modal dialogs, or terminal
+phases, and when their revision or run epoch is stale. Stop sharing, operating
+mode changes, a new session and shutdown revoke all connections.
+`tools/export_companion_fixtures.py` records real bridge messages; the
+rapidmobile repository's `swift test` job decodes them on macOS, so protocol
+drift between the two repositories fails CI.
+
+The three companion cases pass on their own. The full suite passed 1,569 tests
+in 1,269.159 seconds with exit 0 and clean Qt/watchdog shutdown. An earlier
+full run on a loaded machine hit the 75-second subprocess limit in the offline
+performance check; that test passes on its own (3 tests, 48.017 seconds). That
+run is not counted as clean. The rapidmobile contract job passed 10 XCTest cases
+on macOS 15, and the iPhone and iPad simulator launch passed. A physical-device
+connection through a real station TLS proxy remains unverified.

@@ -65,3 +65,16 @@ python -m pip install --no-deps --target clean-install dist\berkeley_rapidpy-*.w
 Install normally (without `--no-deps`) for an operator machine. The
 `--no-deps` form is intended only for verification in an environment where the
 declared dependencies are already present.
+
+## iPhone and iPad companion
+
+Open **File → Mobile Companion → Start sharing / Show pairing key** to share
+the current workflow, sample, step, elapsed time, and instrument status.
+Sharing starts read-only. **Allow remote workflow control** lets paired devices
+request pause, resume, or halt through the same workflow handlers as the desktop.
+
+The desktop bridge listens on `127.0.0.1:8765`. Forward `/rapid/v1` through
+the station's private WebSocket-capable TLS proxy and enter that secure
+endpoint and the displayed key on the mobile device. **Stop sharing** revokes
+all connections and retires the key. Restarting sharing creates a fresh key.
+See the [RAPID Mobile setup guide](https://duserzym.github.io/rapidmobile/guide/).
