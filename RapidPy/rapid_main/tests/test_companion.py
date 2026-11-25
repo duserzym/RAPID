@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 from uuid import uuid4
 
 from PySide6 import QtCore, QtNetwork, QtTest, QtWebSockets, QtWidgets
 
 from rapid_main.app import MainWindow
-from rapid_main.companion import PATH, CompanionBridge
+from rapid_main.companion import (
+    PATH, CompanionBridge, load_station_address, normalize_endpoint, pairing_link, save_station_address,
+)
 from rapid_main.config import AppConfig
 
 
@@ -120,8 +125,11 @@ class CompanionBridgeTests(unittest.TestCase):
         self._until(lambda: first_client.state() == QtNetwork.QAbstractSocket.SocketState.UnconnectedState)
         self._until(lambda: second_client.state() == QtNetwork.QAbstractSocket.SocketState.UnconnectedState)
 
-    def test_desktop_menu_starts_read_only_and_uses_workflow_handlers(self):
+    def test_desktop_pairing_dialog_starts_read_only_and_uses_workflow_handlers(self):
         self.bridge.stop()
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        settings = Path(folder.name) / "companion.json"
         config = AppConfig()
         config.general.nocomm = True
         with (
@@ -132,39 +140,108 @@ class CompanionBridgeTests(unittest.TestCase):
             window = MainWindow()
         self.addCleanup(window.deleteLater)
         self.addCleanup(window._stop_companion_sharing)
-        dialogs = []
-        def record_dialog(*args, **kwargs):
-            dialogs.append((args, kwargs))
-            return '', False
         start_on_port = CompanionBridge.start
         with (
-            patch.object(QtWidgets.QInputDialog, "getText", record_dialog),
+            patch.object(MainWindow, "_companion_settings_path", staticmethod(lambda: settings)),
             patch.object(CompanionBridge, "start", lambda bridge: start_on_port(bridge, 0)),
         ):
             window._start_companion_sharing()
-        bridge = window._companion
-        self.assertIsNotNone(bridge)
-        self.assertEqual(len(dialogs), 1)
-        self.assertEqual(dialogs[0][1]["text"], bridge.token)
-        self.assertFalse(bridge.control_enabled)
+            bridge = window._companion
+            dialog = window._companion_dialog
+            self.assertIsNotNone(bridge)
+            self.assertTrue(dialog.isVisible())
+            self.assertFalse(dialog.isModal())
+            self.assertIsNone(QtWidgets.QApplication.activeModalWidget())
+            self.assertEqual(dialog.key.text(), bridge.token)
+            self.assertFalse(bridge.control_enabled)
+            self.assertFalse(dialog.control.isChecked())
+            self.assertTrue(dialog.code.pixmap().isNull())
+
+            dialog.address.setText("ws://station.example.org")
+            self.assertTrue(dialog.code.pixmap().isNull())
+            self.assertIn("wss://", dialog.code.text())
+            dialog.address.setText("station.example.org")
+            self.assertFalse(dialog.code.pixmap().isNull())
+            dialog.address.editingFinished.emit()
+            self.assertEqual(load_station_address(settings), "wss://station.example.org/rapid/v1")
+
+            dialog.copy_key.click()
+            self.assertEqual(QtWidgets.QApplication.clipboard().text(), bridge.token)
+
+            window._start_companion_sharing()
+            self.assertIs(window._companion_dialog, dialog, "Reopening shows the existing dialog")
 
         window._queue_active = True
         window.set_flow_state("running")
         window.set_sample("DEMO-01")
         window.set_step("AF 20 mT")
-        window._companion_control_action.setChecked(True)
+        dialog.control.setChecked(True)
+        self.assertTrue(window._companion_control_action.isChecked())
+        self.assertTrue(bridge.control_enabled)
         self.bridge = bridge
         client, messages = self._authenticate()
+        self.assertEqual(bridge.client_count, 1)
+        dialog._refresh_status()
+        self.assertIn("1 device connected; remote control allowed", dialog.status.text())
         initial = messages[-1]["snapshot"]
         self.assertEqual(initial["mode"], "simulation")
         self.assertEqual(initial["sample"], "DEMO-01")
         self.assertEqual(initial["step"], "AF 20 mT")
+        self.assertEqual(initial["allowed_commands"], ["pause", "halt"],
+                         "An open pairing dialog must not block remote commands")
         response = self._command(client, messages, "pause", initial["revision"])
         self.assertTrue(response["accepted"])
         self.assertTrue(window._queue_paused)
         self.assertEqual(window._dashboard._run_flow.text(), "Paused")
 
+        window._companion_control_action.setChecked(False)
+        self.assertFalse(dialog.control.isChecked())
+
         window._queue_active = False
-        window._stop_companion_sharing()
+        dialog.stop.click()
         self.assertIsNone(window._companion)
+        self.assertIsNone(window._companion_dialog)
+        self.assertFalse(dialog.isVisible())
         self.assertFalse(window._companion_control_action.isEnabled())
+        self._until(lambda: client.state() == QtNetwork.QAbstractSocket.SocketState.UnconnectedState)
+
+
+class PairingLinkTests(unittest.TestCase):
+    def test_station_addresses_follow_the_mobile_app_rules(self):
+        for text, expected in [
+            ("station.example.org", "wss://station.example.org/rapid/v1"),
+            ("  wss://Station.Example.org/  ", "wss://station.example.org/rapid/v1"),
+            ("WSS://station.example.org:8443/rapid/v1", "wss://station.example.org:8443/rapid/v1"),
+            ("wss://[fd00::5]:9443", "wss://[fd00::5]:9443/rapid/v1"),
+        ]:
+            self.assertEqual(normalize_endpoint(text), expected, text)
+        for text in [
+            "", "ws://station.example.org", "https://station.example.org/rapid/v1", "wss:///rapid/v1",
+            "wss://user:secret@station.example.org", "wss://station.example.org/rapid/v1?key=1",
+            "wss://station.example.org/rapid/v1#frag", "wss://station.example.org/other",
+            "wss://station.example.org:0", "wss://station.example.org:99999",
+        ]:
+            with self.assertRaises(ValueError, msg=text):
+                normalize_endpoint(text)
+
+    def test_pairing_link_carries_version_address_and_key(self):
+        link = pairing_link("station.example.org:8443", "k3y-_Value")
+        parts = urlsplit(link)
+        self.assertEqual((parts.scheme, parts.netloc, parts.path), ("rapid-companion", "pair", ""))
+        self.assertEqual(parse_qs(parts.query, strict_parsing=True), {
+            "v": ["1"], "url": ["wss://station.example.org:8443/rapid/v1"], "key": ["k3y-_Value"],
+        })
+
+    def test_station_address_round_trips_and_ignores_bad_files(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        folder = Path(temporary.name)
+        path = folder / "companion.json"
+        self.assertEqual(load_station_address(path), "")
+        save_station_address(path, "wss://station.example.org/rapid/v1")
+        self.assertEqual(load_station_address(path), "wss://station.example.org/rapid/v1")
+        self.assertEqual(list(folder.iterdir()), [path])
+        path.write_text('{"station_address": "ws://insecure"}', encoding="utf-8")
+        self.assertEqual(load_station_address(path), "")
+        path.write_text("[]", encoding="utf-8")
+        self.assertEqual(load_station_address(path), "")

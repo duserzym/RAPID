@@ -2975,3 +2975,26 @@ performance check; that test passes on its own (3 tests, 48.017 seconds). That
 run is not counted as clean. The rapidmobile contract job passed 10 XCTest cases
 on macOS 15, and the iPhone and iPad simulator launch passed. A physical-device
 connection through a real station TLS proxy remains unverified.
+
+**Mobile companion QR pairing checkpoint (2026-11-25).** **Start sharing / Pair
+device** now opens a non-modal pairing window in place of the key text box. The
+operator enters the proxy address phones use (a bare host name is accepted)
+once. RAPID normalizes it with the same rules as the app and keeps it in
+`companion.json` beside the settings, outside the guarded settings file. The
+window shows a QR code for `rapid-companion://pair?v=1&url=…&key=…`, a Copy Key
+button, a device count, and a control checkbox kept in sync with the menu.
+Because it is non-modal, remote commands stay available while it is open;
+Stop Sharing closes it. QR rendering uses the new pure-Python `segno`
+dependency. Without it, the window falls back to manual entry.
+
+Verification: six companion tests passed; the dialog test runs inside the real
+MainWindow and covers bad addresses, persistence, the clipboard, and pausing
+from a paired client with the window open. An independent decoder (zxing-cpp,
+used only for this check) read back the exact link from rendered codes for
+host, host:port and IPv6 addresses. The full suite passed 1,572 tests in
+1,228.632 seconds with exit 0 and clean Qt/watchdog shutdown. In rapidmobile,
+13 contract tests passed on macOS, including a link recorded from the desktop.
+The simulator build registered the URL scheme and the camera usage text, and a
+pairing link filled the connection form on iPhone and iPad simulators. The
+camera scanner, a physical device, a real TLS proxy and a rebuilt portable
+bundle with `segno` remain unverified.

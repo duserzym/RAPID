@@ -68,13 +68,19 @@ declared dependencies are already present.
 
 ## iPhone and iPad companion
 
-Open **File → Mobile Companion → Start sharing / Show pairing key** to share
-the current workflow, sample, step, elapsed time, and instrument status.
-Sharing starts read-only. **Allow remote workflow control** lets paired devices
-request pause, resume, or halt through the same workflow handlers as the desktop.
+Open **File → Mobile Companion → Start sharing / Pair device** to share the
+current workflow, sample, step, elapsed time, and instrument status. Sharing
+starts read-only. **Allow remote workflow control** lets paired devices request
+pause, resume, or halt through the same workflow handlers as the desktop.
 
 The desktop bridge listens on `127.0.0.1:8765`. Forward `/rapid/v1` through
-the station's private WebSocket-capable TLS proxy and enter that secure
-endpoint and the displayed key on the mobile device. **Stop sharing** revokes
-all connections and retires the key. Restarting sharing creates a fresh key.
+the station's private WebSocket-capable TLS proxy. Enter the address phones use
+to reach that proxy (for example `station.example.org`) once in the pairing
+window; RAPID remembers it in `companion.json` beside its settings and shows a
+QR code. Scan it with the device camera or **Scan Pairing Code** in the app,
+then confirm **Connect** on the device. The key can still be typed by hand.
+
+The pairing window can stay open during a run without blocking remote
+commands. **Stop sharing** revokes all connections and retires the key.
+Restarting sharing creates a fresh key and QR code.
 See the [RAPID Mobile setup guide](https://duserzym.github.io/rapidmobile/guide/).

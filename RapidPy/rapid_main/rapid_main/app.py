@@ -24,7 +24,7 @@ from rapidpy_common.ui import (
 )
 
 from . import software_version
-from .companion import CompanionBridge
+from .companion import CompanionBridge, load_station_address, save_station_address
 from .config import AppConfig
 from .data_model import SampleIndexRegistration, SampleIndexRegistrations
 from .specimen_metadata import restore_specimen_metadata, validate_specimen_provenance
@@ -554,6 +554,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._current_treatment = "—"
         self._status_override_active = False
         self._companion: CompanionBridge | None = None
+        self._companion_dialog = None
         self._companion_run_epoch = 0
         self._companion_diagnostics: list[dict[str, str]] = []
 
@@ -2449,7 +2450,7 @@ class MainWindow(QtWidgets.QMainWindow):
         fm.addAction("&Log Out", self._launch_login)
         fm.addAction("Email &Notifications…", self._launch_notifications)
         companion_menu = fm.addMenu("Mobile &Companion")
-        companion_menu.addAction("Start sharing / Show pairing key…", self._start_companion_sharing)
+        companion_menu.addAction("Start sharing / Pair device…", self._start_companion_sharing)
         self._companion_control_action = companion_menu.addAction("Allow remote workflow control")
         self._companion_control_action.setCheckable(True)
         self._companion_control_action.setEnabled(False)
@@ -3887,22 +3888,49 @@ class MainWindow(QtWidgets.QMainWindow):
             self._companion_stop_action.setEnabled(True)
             self.log_event("Mobile Companion status sharing started.")
 
-        QtWidgets.QInputDialog.getText(
-            self,
-            "Mobile Companion",
-            "Copy this pairing key into RAPID Companion.\n"
-            "Connect through the station's private TLS proxy at wss://<station-host>/rapid/v1.\n"
-            f"Local bridge port {self._companion.port}. Closing this dialog keeps sharing active.",
-            text=self._companion.token,
-            flags=QtCore.Qt.WindowType.Dialog,
-            inputMethodHints=QtCore.Qt.InputMethodHint.ImhNoPredictiveText,
-        )
+        dialog = self._companion_dialog
+        if dialog is None:
+            from .dialogs.companion_pairing import CompanionPairingDialog
+
+            dialog = CompanionPairingDialog(
+                self,
+                self._companion,
+                address=load_station_address(self._companion_settings_path()),
+                save_address=self._save_companion_address,
+                control_action=self._companion_control_action,
+                stop_sharing=self._stop_companion_sharing,
+            )
+            dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
+            dialog.destroyed.connect(self._forget_companion_dialog)
+            self._companion_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    @staticmethod
+    def _companion_settings_path() -> Path:
+        return AppConfig.default_path().with_name("companion.json")
+
+    def _save_companion_address(self, address: str) -> None:
+        try:
+            save_station_address(self._companion_settings_path(), address)
+        except OSError as exc:
+            self.set_status(f"Mobile Companion address not saved: {exc}")
+            return
+        self.log_event(f"Mobile Companion phone address set to {address}.")
+
+    def _forget_companion_dialog(self, *_args) -> None:
+        self._companion_dialog = None
 
     def _stop_companion_sharing(self) -> None:
         bridge = getattr(self, "_companion", None)
         if bridge is None:
             return
         self._companion = None
+        dialog = self._companion_dialog
+        if dialog is not None:
+            self._companion_dialog = None
+            dialog.close()
         bridge.stop()
         bridge.deleteLater()
         self._companion_control_action.setChecked(False)

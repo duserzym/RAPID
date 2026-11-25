@@ -1,8 +1,8 @@
 """Record real RAPID Companion protocol messages for the RAPID Mobile contract tests.
 
 Drives the desktop ``CompanionBridge`` over a loopback WebSocket with a scripted
-workflow and writes each server message verbatim, one JSON file per case, so the
-iPhone/iPad decoder is tested against exactly what the desktop sends.
+workflow and writes each server message verbatim, one JSON file per case, plus the
+QR pairing link, so the iPhone/iPad app is tested against exactly what the desktop sends.
 
     .venv\\Scripts\\python.exe tools\\export_companion_fixtures.py <output-dir>
 """
@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / "RapidPy"))
 
 from PySide6 import QtCore, QtNetwork, QtTest, QtWebSockets  # noqa: E402
 
-from rapid_main.companion import PATH, CompanionBridge  # noqa: E402
+from rapid_main.companion import PATH, CompanionBridge, pairing_link  # noqa: E402
 
 
 class _Station:
@@ -96,6 +96,7 @@ def record(output: Path) -> list[Path]:
     cases["ack-accepted"] = command("pause", revision)
     cases["ack-stale-revision"] = command("halt", revision)
 
+    link = pairing_link("rapid-station.example.org:8443", bridge.token)
     socket.abort()
     bridge.stop()
     output.mkdir(parents=True, exist_ok=True)
@@ -104,6 +105,9 @@ def record(output: Path) -> list[Path]:
         path = output / f"{name}.json"
         path.write_text(text + "\n", encoding="utf-8")
         written.append(path)
+    path = output / "pairing-link.txt"
+    path.write_text(link + "\n", encoding="utf-8")
+    written.append(path)
     return written
 
 

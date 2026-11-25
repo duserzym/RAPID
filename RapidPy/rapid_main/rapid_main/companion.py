@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
 import time
 from collections.abc import Callable
 from functools import partial
+from pathlib import Path
+from urllib.parse import urlencode, urlsplit
 from uuid import UUID
 
 from PySide6 import QtCore, QtNetwork, QtWebSockets
@@ -15,9 +18,61 @@ from PySide6 import QtCore, QtNetwork, QtWebSockets
 PORT = 8765
 PATH = "/rapid/v1"
 VERSION = 1
+PAIRING_SCHEME = "rapid-companion"
 _MAX_CLIENTS = 8
 _MAX_MESSAGE = 4096
 _log = logging.getLogger(__name__)
+
+
+def normalize_endpoint(text: str) -> str:
+    """Return the phone-facing ``wss://host[:port]/rapid/v1`` address for the station.
+
+    Accepts a bare host name for convenience and applies the same rules as the
+    RAPID Companion app, so a pairing code never carries an address it refuses.
+    """
+    address = str(text or "").strip()
+    if address and "://" not in address:
+        address = f"wss://{address}"
+    try:
+        parts = urlsplit(address)
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError("Enter a valid secure station address.") from exc
+    if parts.scheme.lower() != "wss":
+        raise ValueError("Phones connect through the station's TLS proxy, so the address must start with wss://.")
+    if not parts.hostname or parts.username is not None or parts.password is not None:
+        raise ValueError("Enter the station host name, without a user name or password.")
+    if parts.query or parts.fragment or "#" in address or "?" in address:
+        raise ValueError("Remove the query or fragment from the station address.")
+    if parts.path not in ("", "/", PATH):
+        raise ValueError(f"The station address path must be {PATH}.")
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError("Enter a port between 1 and 65535.")
+    host = parts.hostname if ":" not in parts.hostname else f"[{parts.hostname}]"
+    return f"wss://{host}{f':{port}' if port is not None else ''}{PATH}"
+
+
+def pairing_link(endpoint: str, token: str) -> str:
+    """Encode the station address and pairing key for a QR code or the system camera."""
+    return f"{PAIRING_SCHEME}://pair?" + urlencode(
+        {"v": VERSION, "url": normalize_endpoint(endpoint), "key": token}
+    )
+
+
+def load_station_address(path: Path) -> str:
+    try:
+        stored = json.loads(Path(path).read_text(encoding="utf-8")).get("station_address", "")
+        return normalize_endpoint(stored) if stored else ""
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def save_station_address(path: Path, address: str) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(json.dumps({"station_address": address}, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
 
 
 class CompanionBridge(QtCore.QObject):
@@ -55,6 +110,11 @@ class CompanionBridge(QtCore.QObject):
     @property
     def port(self) -> int:
         return self._server.serverPort()
+
+    @property
+    def client_count(self) -> int:
+        """Devices that presented the current pairing key."""
+        return sum(deadline is None for deadline in self._peers.values())
 
     def stop(self) -> None:
         self._timer.stop()
